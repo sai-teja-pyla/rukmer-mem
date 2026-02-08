@@ -169,7 +169,7 @@ export default function Dashboard({ user, onLogout }) {
       
       const genAI = new GoogleGenerativeAI(apiKey);
       const model = genAI.getGenerativeModel({ 
-        model: "gemini-2.0-flash", 
+        model: "gemini-2.5-flash", 
         systemInstruction: "You are a Senior Construction Manager. Analyze site photos, videos, and PDFs. Return ONLY valid JSON.",
         generationConfig: { responseMimeType: "application/json" } 
       });
@@ -215,7 +215,7 @@ export default function Dashboard({ user, onLogout }) {
       saveReportToDB(reportData);
 
       // 3. Initialize Chat
-      const chatModel = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
+      const chatModel = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
       chatSessionRef.current = chatModel.startChat({
         history: [
           { role: "user", parts: [{ text: "Context:" }, ...mediaParts] },
