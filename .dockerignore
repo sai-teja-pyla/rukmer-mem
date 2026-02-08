@@ -1,0 +1,26 @@
+# Dependency directories (We install these fresh inside Docker)
+node_modules
+npm-debug.log
+
+# Build outputs (We build fresh inside Docker)
+dist
+build
+
+# Version control (Keep history out of the container)
+.git
+.gitignore
+
+# Environment variables (Security risk! We use build args instead)
+.env
+.env.local
+.env.*
+
+# OS generated files
+.DS_Store
+Thumbs.db
+
+# Docker files (Optional, but keeps context clean)
+Dockerfile
+.dockerignore
+cloudbuild.yaml
+nginx.conf

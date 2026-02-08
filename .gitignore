@@ -1,0 +1,29 @@
+# 1. Dependencies (Massive folder, install fresh instead)
+node_modules/
+package-lock.json   # Optional: keep this if you want exact versions, otherwise ignore
+yarn.lock           # Optional: same as above
+
+# 2. Build Outputs (These are generated code, not source code)
+dist/
+build/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# 3. Security & Environment (CRITICAL: Never upload keys)
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+*.pem
+
+# 4. OS & IDE Files (Junk files from your computer)
+.DS_Store          # Mac
+Thumbs.db          # Windows
+.vscode/           # VS Code settings (optional, usually good to ignore)
+.idea/             # IntelliJ settings
+
+# 5. Firebase Cache
+.firebase/
+firebase-debug.log
