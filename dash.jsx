@@ -1,23 +1,20 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import { 
-  Upload, Loader2, X, Sparkles, MessageCircle, Send, 
-  FileVideo, FileText, Moon, Sun, CheckCircle2, AlertTriangle, 
-  SquarePen, LayoutGrid, Hexagon, Plus, FileStack
+  Upload, Loader2, X, Sparkles, MessageCircle, Send, RotateCcw, 
+  LogOut, FileVideo, FileText, Moon, Sun, CheckCircle2, AlertTriangle, ArrowRight, Settings, 
+  User as UserIcon, HelpCircle, ChevronDown, CreditCard, SquarePen, LayoutGrid, Hexagon, Plus, FileStack
 } from 'lucide-react';
 import jsPDF from 'jspdf';
 import 'jspdf-autotable';
-
-// IMPORT YOUR NEW DROPDOWN
 import UserDropdown from '../components/UserDropdown';
-import { useUserSettings } from '../hooks/useUserSettings';
 
 // FIREBASE IMPORTS
 import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
 import { collection, addDoc, getDocs, query, where, orderBy, serverTimestamp } from "firebase/firestore";
 import { storage, db } from "../firebase";
 
-export default function Dashboard({ user }) {
+export default function Dashboard({ user, onLogout }) {
   // --- 1. STATE ---
   const [mediaItems, setMediaItems] = useState([]);
   const [analyzing, setAnalyzing] = useState(false);
@@ -33,11 +30,14 @@ export default function Dashboard({ user }) {
   const [chatMessages, setChatMessages] = useState([]);
   const [chatInput, setChatInput] = useState('');
   const [chatLoading, setChatLoading] = useState(false);
-
+  
   // UI State
-  const { settings, updateSettings } = useUserSettings();
-  const darkMode = settings?.theme === 'dark';
+  const [darkMode, setDarkMode] = useState(false);
 
+  // --- NEW STATE FOR PROFILE MENU ---
+  const [isProfileOpen, setIsProfileOpen] = useState(false);
+  const profileMenuRef = useRef(null);
+  
   // Refs
   const fileInputRef = useRef(null);
   const chatEndRef = useRef(null);
@@ -47,6 +47,18 @@ export default function Dashboard({ user }) {
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [chatMessages]);
+
+  // Close menu when clicking outside
+  useEffect(() => {
+    function handleClickOutside(event) {
+      if (profileMenuRef.current && !profileMenuRef.current.contains(event.target)) {
+        setIsProfileOpen(false);
+      }
+    }
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
+
 
   // --- 2. DATABASE FUNCTIONS ---
 
@@ -60,6 +72,7 @@ export default function Dashboard({ user }) {
         projectName: projectName || "Untitled Project",
         date: reportDate,
         createdAt: serverTimestamp(),
+        // Save the AI Summary
         status: aiResult.summary.status, 
         accomplishments: aiResult.summary.accomplishments,
         concerns: aiResult.summary.concerns,
@@ -67,7 +80,7 @@ export default function Dashboard({ user }) {
       });
       
       console.log("💾 Report saved to Firestore!");
-      fetchReports(); 
+      fetchReports(); // Refresh the list immediately
     } catch (error) {
       console.error("❌ Error saving report:", error);
     }
@@ -104,6 +117,7 @@ export default function Dashboard({ user }) {
     if (!e.target.files) return;
     const files = Array.from(e.target.files);
 
+    // A. Immediate UI Update
     const newItems = files.map(file => {
         if (file.size > 50 * 1024 * 1024) {
              alert(`File ${file.name} is too large!`);
@@ -121,7 +135,7 @@ export default function Dashboard({ user }) {
 
     setMediaItems(prev => [...prev, ...newItems]);
 
-    // Background Upload
+    // B. Background Upload
     newItems.forEach(async (item) => {
         try {
             const cleanProject = (projectName || "Uncategorized").replace(/\s+/g, '_');
@@ -156,11 +170,12 @@ export default function Dashboard({ user }) {
       
       const genAI = new GoogleGenerativeAI(apiKey);
       const model = genAI.getGenerativeModel({ 
-        model: "gemini-2.0-flash", 
+        model: "gemini-2.5-flash", 
         systemInstruction: "You are a Senior Construction Manager. Analyze site photos, videos, and PDFs. Return ONLY valid JSON.",
         generationConfig: { responseMimeType: "application/json" } 
       });
 
+      // Prepare Files
       const mediaPromises = mediaItems.map(async (item) => {
         return new Promise((resolve, reject) => {
           const reader = new FileReader();
@@ -190,16 +205,18 @@ export default function Dashboard({ user }) {
       const result = await model.generateContent([prompt, ...mediaParts]);
       const reportData = JSON.parse(result.response.text());
 
+      // 1. Set Local State
       setReport({
         projectName: reportData.projectName,
         date: reportDate,
         summary: reportData.summary
       });
 
+      // 2. Save to Firestore 
       saveReportToDB(reportData);
 
-      // Initialize Chat
-      const chatModel = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
+      // 3. Initialize Chat
+      const chatModel = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
       chatSessionRef.current = chatModel.startChat({
         history: [
           { role: "user", parts: [{ text: "Context:" }, ...mediaParts] },
@@ -223,6 +240,7 @@ export default function Dashboard({ user }) {
     const msg = manualMsg || chatInput;
     if (!msg.trim() || chatLoading) return;
     
+    // If no session exists (e.g., loaded from history), create a basic one
     if (!chatSessionRef.current) {
         const apiKey = import.meta.env.VITE_GEMINI_API_KEY;
         const genAI = new GoogleGenerativeAI(apiKey);
@@ -273,7 +291,7 @@ export default function Dashboard({ user }) {
     setReport(null);
     setChatMessages([]);
     chatSessionRef.current = null;
-    setShowHistory(false); 
+    setShowHistory(false); // Reset history view
   };
 
   // --- 4. THEME & RENDER ---
@@ -296,7 +314,7 @@ export default function Dashboard({ user }) {
       {/* HEADER */}
       <header className={`${theme.header} border-b px-6 py-3 flex justify-between items-center sticky top-0 z-50`}>
         
-        {/* Logo */}
+        {/* Logo Section */}
         <div className="flex items-center gap-2">
           {darkMode && <div className="w-2.5 h-2.5 rounded-full bg-[#22c55e] animate-pulse"></div>}
           <h1 className="text-xl font-bold tracking-tight">RUKMER <span className="text-[#7c3aed]">AI</span></h1>
@@ -307,27 +325,100 @@ export default function Dashboard({ user }) {
             
             {/* Theme Toggle */}
             <button 
-                onClick={() => updateSettings({ theme: darkMode ? 'light' : 'dark' })}
+                onClick={() => setDarkMode(!darkMode)}
                 className={`p-2 rounded-full transition-colors ${darkMode ? 'bg-[#222] text-white' : 'bg-gray-100 text-slate-600'}`}
             >
                 {darkMode ? <Sun size={18} className="text-yellow-400"/> : <Moon size={18}/>}
             </button>
 
-            {/* NEW: THE USER DROPDOWN (Replaces old manual code) */}
-            <UserDropdown />
+            {/* PROFILE DROPDOWN */}
+            <div className="relative" ref={profileMenuRef}>
+                
+                {/* Trigger Button */}
+                <button 
+                    onClick={() => setIsProfileOpen(!isProfileOpen)}
+                    className={`flex items-center gap-3 pl-2 pr-3 py-1.5 rounded-lg border transition-all ${
+                        darkMode ? 'border-[#333] hover:bg-[#222]' : 'border-gray-200 hover:bg-gray-50'
+                    }`}
+                >
+                    {/* Avatar */}
+                    <div className="w-8 h-8 rounded-full bg-gradient-to-tr from-[#7c3aed] to-[#a78bfa] flex items-center justify-center text-white font-bold text-xs shadow-md">
+                        {(() => {
+                            if (!user?.name) return "GU";
+                            const names = user.name.trim().split(' ');
+                            if (names.length === 1) return names[0].substring(0, 2).toUpperCase();
+                            return (names[0][0] + names[names.length - 1][0]).toUpperCase();
+                        })()}
+                    </div>
+                    
+                    {/* Text Info */}
+                    <div className="hidden sm:block text-left">
+                        <p className={`text-xs font-bold ${darkMode ? 'text-gray-200' : 'text-gray-800'}`}>
+                            {user?.name || "Guest User"}
+                        </p>
+                        <p className="text-[10px] text-gray-500 font-medium">Free Plan</p>
+                    </div>
 
+                    <ChevronDown size={14} className={`text-gray-400 transition-transform duration-200 ${isProfileOpen ? 'rotate-180' : ''}`} />
+                </button>
+
+                {/* Dropdown Menu */}
+                {isProfileOpen && (
+                    <div className={`absolute right-0 mt-2 w-64 rounded-xl border shadow-2xl overflow-hidden animate-in fade-in slide-in-from-top-2 z-50 ${
+                        darkMode ? 'bg-[#1a1a1a] border-[#333] text-gray-200' : 'bg-white border-gray-100 text-gray-800'
+                    }`}>
+                        <div className={`p-4 border-b ${darkMode ? 'border-[#333]' : 'border-gray-100'}`}>
+                            <p className="font-bold text-sm">{user?.name || "Guest"}</p>
+                            <p className="text-xs text-gray-500">@{user?.email?.split('@')[0] || "user"}</p>
+                        </div>
+
+                        <div className="p-2 space-y-1">
+                            <button className={`w-full text-left flex items-center gap-3 p-2.5 rounded-lg text-sm transition ${darkMode ? 'hover:bg-[#222]' : 'hover:bg-gray-50'}`}>
+                                <Sparkles size={16} className="text-yellow-500" /> 
+                                <span>Upgrade plan</span>
+                            </button>
+                            <button className={`w-full text-left flex items-center gap-3 p-2.5 rounded-lg text-sm transition ${darkMode ? 'hover:bg-[#222]' : 'hover:bg-gray-50'}`}>
+                                <UserIcon size={16} className="text-blue-500" /> 
+                                <span>Personalization</span>
+                            </button>
+                            <button className={`w-full text-left flex items-center gap-3 p-2.5 rounded-lg text-sm transition ${darkMode ? 'hover:bg-[#222]' : 'hover:bg-gray-50'}`}>
+                                <Settings size={16} className="text-gray-400" /> 
+                                <span>Settings</span>
+                            </button>
+                        </div>
+                        <div className={`h-px mx-2 ${darkMode ? 'bg-[#333]' : 'bg-gray-100'}`}></div>
+                        <div className="p-2 space-y-1">
+                            <button className={`w-full text-left flex items-center gap-3 p-2.5 rounded-lg text-sm transition ${darkMode ? 'hover:bg-[#222]' : 'hover:bg-gray-50'}`}>
+                                <HelpCircle size={16} className="text-gray-400" /> 
+                                <span>Help</span>
+                            </button>
+                            <button 
+                                onClick={onLogout}
+                                className={`w-full text-left flex items-center gap-3 p-2.5 rounded-lg text-sm transition text-red-500 ${darkMode ? 'hover:bg-red-900/20' : 'hover:bg-red-50'}`}
+                            >
+                                <LogOut size={16} /> 
+                                <span>Log out</span>
+                            </button>
+                        </div>
+                    </div>
+                )}
+            </div>
         </div>
       </header>
 
-      {/* REST OF DASHBOARD (UNCHANGED) */}
       <div className="max-w-7xl mx-auto p-4 lg:p-8 grid lg:grid-cols-12 gap-6 h-[calc(100vh-80px)]">
         
-        {/* LEFT PANEL */}
+        {/* LEFT PANEL: NAVIGATION & WORKSPACE */}
         <div className="lg:col-span-5 flex flex-col h-full overflow-y-auto pr-2 custom-scrollbar">
             
+            {/* NAVIGATION MENU */}
             <div className="mb-6 space-y-1">
+                {/* 1. New Chat */}
                 <button 
-                    onClick={() => { setShowHistory(false); if (report) resetApp(); }}
+                    onClick={() => {
+                        setShowHistory(false);
+                        if (report) resetApp(); 
+                    }}
                     className={`w-full flex items-center justify-between p-3.5 rounded-xl transition-all group ${
                         !showHistory && !report ? (darkMode ? 'bg-[#222] text-white' : 'bg-white shadow-sm border border-gray-200 text-gray-900') : 'text-gray-500 hover:bg-gray-100 dark:hover:bg-[#222]'
                     }`}
@@ -340,14 +431,13 @@ export default function Dashboard({ user }) {
                 </button>
 
                 {/* 2. Community Agents */}
-                                <button className="w-full flex items-center gap-3 p-3.5 rounded-xl text-gray-500 hover:bg-gray-100 dark:hover:bg-[#222] transition-all font-semibold opacity-60 cursor-not-allowed">
-                                    <LayoutGrid size={20} />
-                                    <span>More Models</span>
-                                    <span className="ml-auto text-[10px] bg-gray-100 dark:bg-[#333] px-2 py-0.5 rounded-full">SOON</span>
-                                </button>
+                <button className="w-full flex items-center gap-3 p-3.5 rounded-xl text-gray-500 hover:bg-gray-100 dark:hover:bg-[#222] transition-all font-semibold opacity-60 cursor-not-allowed">
+                    <LayoutGrid size={20} />
+                    <span>More Models</span>
+                    <span className="ml-auto text-[10px] bg-gray-100 dark:bg-[#333] px-2 py-0.5 rounded-full">SOON</span>
+                </button>
 
-                                
-
+                {/* 3. Asset Reports */}
                 <button 
                     onClick={() => setShowHistory(true)}
                     className={`w-full flex items-center gap-3 p-3.5 rounded-xl transition-all font-semibold ${
@@ -359,8 +449,10 @@ export default function Dashboard({ user }) {
                 </button>
             </div>
 
+            {/* DYNAMIC CONTENT AREA */}
             <div className="flex-1">
                 {showHistory ? (
+                    // --- HISTORY VIEW ---
                     <div className="space-y-3 animate-in fade-in slide-in-from-bottom-2">
                         <h3 className="text-sm font-bold text-gray-400 uppercase tracking-wider mb-2 px-1">Recent Reports</h3>
                         {pastReports.length === 0 && (
@@ -404,6 +496,7 @@ export default function Dashboard({ user }) {
                         ))}
                     </div>
                 ) : (
+                    // --- UPLOAD / REPORT VIEW ---
                     <>
                     {!report ? (
                         <div className={`${theme.card} p-8 rounded-2xl shadow-sm border text-center transition-all duration-300 animate-in fade-in`}>
@@ -441,6 +534,9 @@ export default function Dashboard({ user }) {
                                                 <button onClick={() => removeMedia(item.id)} className="absolute top-1 right-1 bg-red-500 p-1 rounded-full text-white opacity-0 group-hover:opacity-100 transition"><X size={10} /></button>
                                             </div>
                                         ))}
+                                        <button onClick={() => fileInputRef.current?.click()} className={`border-2 border-dashed rounded-lg flex items-center justify-center ${theme.border}`}>
+                                            <Upload size={16} className={theme.subText} />
+                                        </button>
                                     </div>
                                     <button onClick={analyzeSite} disabled={analyzing} className="w-full bg-[#7c3aed] hover:bg-[#6d28d9] text-white py-3.5 rounded-xl font-bold transition flex justify-center items-center gap-2 shadow-lg shadow-purple-500/20">
                                         {analyzing ? <Loader2 className="animate-spin" /> : <><Sparkles size={18}/> Generate Report</>}
@@ -449,6 +545,7 @@ export default function Dashboard({ user }) {
                             )}
                         </div>
                     ) : (
+                        // --- ACTIVE REPORT CARD ---
                         <div className={`${theme.card} p-6 rounded-2xl shadow-sm border animate-in fade-in slide-in-from-bottom-4`}>
                             <div className="flex justify-between items-center mb-6">
                                 <div><h2 className="text-xl font-bold">{report.projectName}</h2><p className={`text-sm ${theme.subText}`}>{report.date}</p></div>
@@ -478,10 +575,11 @@ export default function Dashboard({ user }) {
             </div>
         </div>
 
-        {/* RIGHT PANEL */}
+        {/* RIGHT PANEL: CHAT INTERFACE */}
         <div className="lg:col-span-7 h-full flex flex-col">
             <div className={`${theme.card} flex-1 rounded-2xl border overflow-hidden flex flex-col ${theme.glow}`}>
                 
+                {/* Chat Header */}
                 <div className={`p-4 border-b ${theme.border} ${darkMode ? 'bg-[#111]' : 'bg-[#7c3aed] text-white'} flex items-center justify-between`}>
                     <div className="flex items-center gap-3">
                         <div className={`p-2 rounded-lg ${darkMode ? 'bg-[#222]' : 'bg-white/20'}`}>
@@ -497,6 +595,7 @@ export default function Dashboard({ user }) {
                     {darkMode && <button onClick={resetApp} className="text-xs text-gray-500 hover:text-white transition">Reset</button>}
                 </div>
 
+                {/* Chat Area */}
                 <div className={`flex-1 overflow-y-auto p-6 space-y-6 ${darkMode ? 'bg-black' : 'bg-slate-50'}`}>
                     {chatMessages.length === 0 ? (
                         <div className="h-full flex flex-col items-center justify-center text-center opacity-60">
@@ -517,6 +616,7 @@ export default function Dashboard({ user }) {
                     <div ref={chatEndRef} />
                 </div>
 
+                {/* Input Area */}
                 <div className={`p-4 border-t ${theme.border} ${darkMode ? 'bg-[#111]' : 'bg-white'}`}>
                     <div className="relative flex items-center">
                         <input 
