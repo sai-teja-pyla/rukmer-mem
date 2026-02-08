@@ -26,8 +26,11 @@ steps:
       - 'us-central1'
       - '--platform'
       - 'managed'
-      - '--allow-unauthenticated'
+      - '--allow-unauthenticated' # Make the service public
 
 # This helps us see the build logs
 options:
   logging: CLOUD_LOGGING_ONLY
+
+substitutions:
+    _VITE_GEMINI_API_KEY: ''
