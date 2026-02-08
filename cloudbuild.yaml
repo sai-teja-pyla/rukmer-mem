@@ -1,0 +1,33 @@
+steps:
+  # 1. Build the Container Image
+  - name: 'gcr.io/cloud-builders/docker'
+    args: 
+      - 'build'
+      - '--build-arg'
+      - 'VITE_GEMINI_API_KEY=$_VITE_GEMINI_API_KEY' # Injects key safely
+      - '-t'
+      - 'gcr.io/$PROJECT_ID/rukmer-saas'
+      - '.'
+
+  # 2. Push the Image to Google Container Registry
+  - name: 'gcr.io/cloud-builders/docker'
+    args: ['push', 'gcr.io/$PROJECT_ID/rukmer-saas']
+
+  # 3. Deploy to Cloud Run
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: gcloud
+    args:
+      - 'run'
+      - 'deploy'
+      - 'rukmer-saas-service'
+      - '--image'
+      - 'gcr.io/$PROJECT_ID/rukmer-saas'
+      - '--region'
+      - 'us-central1'
+      - '--platform'
+      - 'managed'
+      - '--allow-unauthenticated'
+
+# This helps us see the build logs
+options:
+  logging: CLOUD_LOGGING_ONLY

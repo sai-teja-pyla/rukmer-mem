@@ -1,0 +1,24 @@
+import('https://www.gstatic.com/firebasejs/9.6.1/firebase-app.js').then(async (firebase) => {
+  const { getStorage, ref, uploadString } = await import('https://www.gstatic.com/firebasejs/9.6.1/firebase-storage.js');
+  
+  // 1. Config (Using your project details)
+  const app = firebase.initializeApp({
+    storageBucket: "rukmer-saas-data" // <--- Your Bucket Name
+  }, "DiagnoseApp" + Date.now());
+
+  // 2. Try Upload
+  const storage = getStorage(app);
+  const testRef = ref(storage, "diagnostic_test.txt");
+  
+  console.log("⚠️ Attempting upload...");
+  
+  try {
+    await uploadString(testRef, "Test Payload");
+    console.log("✅ SUCCESS! The bucket is working.");
+  } catch (error) {
+    console.error("❌ FAILURE DETAILS:");
+    console.error("Code:", error.code);
+    console.error("Message:", error.message);
+    if (error.serverResponse) console.error("Server Response:", error.serverResponse);
+  }
+});
