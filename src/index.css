@@ -2,3 +2,22 @@
 @tailwind components;
 @tailwind utilities;
 @import "tailwindcss";
+
+/* Add this to smooth out the background color change */
+body {
+  transition: background-color 0.3s ease-in-out, color 0.3s ease-in-out;
+  margin: 0;
+  padding: 0;
+}
+
+/* Force dark mode background on the body itself */
+body.dark-mode {
+  background-color: #0f0f0f; /* Matches your dashboard dark bg */
+  color: #e5e7eb;
+}
+
+/* Force light mode background */
+body.light-mode {
+  background-color: #f8fafc; /* Matches your dashboard light bg */
+  color: #0f172a;
+}

@@ -27,3 +27,6 @@ Thumbs.db          # Windows
 # 5. Firebase Cache
 .firebase/
 firebase-debug.log
+
+App1.jsx
+dash.jsx

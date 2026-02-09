@@ -1,68 +1,80 @@
 import { useState, useEffect } from 'react';
-import { doc, getDoc, setDoc, updateDoc } from 'firebase/firestore';
-import { auth, db } from '../firebase'; // <--- Ensure this path is correct for your project
-import { useAuthState } from 'react-firebase-hooks/auth';
+import { auth, db } from '../firebase';
+import { doc, setDoc, onSnapshot } from 'firebase/firestore';
 
 export function useUserSettings() {
-  const [user] = useAuthState(auth);
-  const [settings, setSettings] = useState(null);
+  // 1. INSTANT LOAD: Initialize state from LocalStorage to prevent flashing
+  const [settings, setSettings] = useState(() => {
+    const savedTheme = localStorage.getItem('appTheme');
+    return { theme: savedTheme || 'light' }; // Default if nothing saved
+  });
+  
   const [loading, setLoading] = useState(true);
 
-  // 1. Fetch settings when user logs in
   useEffect(() => {
-    async function fetchSettings() {
-      if (!user) {
-        setLoading(false);
-        return;
-      }
-
-      try {
+    // Listen for Auth Changes
+    const unsubscribeAuth = auth.onAuthStateChanged(async (user) => {
+      if (user) {
         const userRef = doc(db, "users", user.uid);
-        const docSnap = await getDoc(userRef);
+        
+        // 2. REAL-TIME DATABASE LISTENER
+        const unsubscribeSnapshot = onSnapshot(userRef, (docSnap) => {
+          if (docSnap.exists()) {
+            const data = docSnap.data();
+            setSettings(data);
+            
+            // Sync DB theme to LocalStorage
+            if (data.theme) {
+              localStorage.setItem('appTheme', data.theme);
+            }
+          } else {
+            // Create default profile if it doesn't exist
+            const defaults = { 
+                displayName: user.displayName || "New User", 
+                email: user.email, 
+                theme: 'light',
+                aiCreativity: 0.7,
+                notifications: true,
+                plan: "free",
+                createdAt: new Date()
+            };
+            setDoc(userRef, defaults);
+            setSettings(defaults);
+            localStorage.setItem('appTheme', 'light');
+          }
+          setLoading(false);
+        });
 
-        if (docSnap.exists()) {
-          // User exists -> Load data
-          setSettings(docSnap.data());
-        } else {
-          // New User -> Create default profile
-          const defaults = {
-            displayName: user.displayName || "New User",
-            email: user.email,
-            photoURL: user.photoURL || "",
-            theme: "dark",          // Default to dark mode
-            aiCreativity: 0.7,      // Default AI creativity
-            notifications: true,
-            plan: "free",
-            createdAt: new Date()
-          };
-          await setDoc(userRef, defaults);
-          setSettings(defaults);
-        }
-      } catch (error) {
-        console.error("Error fetching user settings:", error);
-      } finally {
+        return () => unsubscribeSnapshot();
+      } else {
+        setSettings(null);
         setLoading(false);
       }
-    }
+    });
 
-    fetchSettings();
-  }, [user]);
+    return () => unsubscribeAuth();
+  }, []);
 
-  // 2. Function to update settings
+  // 3. UPDATE FUNCTION
   const updateSettings = async (newSettings) => {
-    if (!user) return;
-
-    // Optimistic Update: Update UI instantly
-    setSettings((prev) => ({ ...prev, ...newSettings }));
+    if (!auth.currentUser) return;
+    
+    // Optimistic Update: Update UI & LocalStorage instantly
+    setSettings(prev => {
+        const updated = { ...prev, ...newSettings };
+        if (newSettings.theme) {
+            localStorage.setItem('appTheme', newSettings.theme);
+        }
+        return updated;
+    });
 
     try {
-      const userRef = doc(db, "users", user.uid);
-      await updateDoc(userRef, newSettings);
+        const userRef = doc(db, "users", auth.currentUser.uid);
+        await setDoc(userRef, newSettings, { merge: true });
     } catch (error) {
-      console.error("Error saving settings:", error);
-      // Optional: Add toast notification for error here
+        console.error("Error updating settings:", error);
     }
   };
 
-  return { settings, updateSettings, loading, user };
+  return { settings, updateSettings, loading };
 }

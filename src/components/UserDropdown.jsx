@@ -8,12 +8,15 @@ import {
   LogOut, 
   HelpCircle, 
   Zap,
-  ChevronDown 
-} from 'lucide-react'; 
+  ChevronDown,
+  MessageSquare // Added icon import
+} from 'lucide-react';
+import FeedbackModal from './FeedbackModal';
 
-export default function UserDropdown() {
+export default function UserDropdown({ user }) {
   const { settings } = useUserSettings(); 
   const [isOpen, setIsOpen] = useState(false);
+  const [isFeedbackOpen, setIsFeedbackOpen] = useState(false); // New state for feedback
   const dropdownRef = useRef(null);
   const navigate = useNavigate();
 
@@ -62,7 +65,6 @@ export default function UserDropdown() {
           className={`h-8 w-8 rounded-full flex items-center justify-center text-white font-bold shadow-sm ${
             isDark ? 'border border-gray-700' : 'border-2 border-white ring-1 ring-gray-200'
           }`}
-          // We force the gradient style inline to ensure it never disappears
           style={{ background: 'linear-gradient(135deg, #7c3aed, #2563eb)' }} 
         >
           {initial}
@@ -94,15 +96,6 @@ export default function UserDropdown() {
               <span>Upgrade plan</span>
             </button>
 
-            {/* 1. Personalization */}
-            {/*<button 
-              onClick={() => { setIsOpen(false); navigate('/settings'); }} 
-              className={`w-full text-left px-4 py-2.5 flex items-center gap-3 transition ${theme.hover} ${theme.text}`}
-            >
-              <User size={16} className="text-blue-500"/>
-              <span>Personalization</span>
-            </button>*/ }
-
             <button 
               onClick={() => { setIsOpen(false); navigate('/settings'); }}
               className={`w-full text-left px-4 py-2.5 flex items-center gap-3 transition ${theme.hover} ${theme.text}`}
@@ -125,6 +118,18 @@ export default function UserDropdown() {
               <span>Help</span>
             </button>
 
+            {/* NEW: Feedback Trigger */}
+            <button 
+              onClick={() => { 
+                setIsOpen(false); 
+                setIsFeedbackOpen(true); // 2. This triggers the modal
+              }}
+              className={`w-full text-left px-4 py-2.5 flex items-center gap-3 transition ${theme.hover} ${theme.text}`}
+            >
+              <MessageSquare size={16} className="text-[#7c3aed]"/>
+              <span>Give Feedback</span>
+            </button>
+
             <button 
               onClick={handleLogout}
               className={`w-full text-left px-4 py-2.5 flex items-center gap-3 transition text-red-500 ${theme.hover}`}
@@ -133,9 +138,16 @@ export default function UserDropdown() {
               <span>Log out</span>
             </button>
           </div>
-
         </div>
       )}
+
+      {/* 3. Feedback Modal - Positioned outside the dropdown relative container */}
+      <FeedbackModal 
+        user={user} 
+        darkMode={settings?.theme === 'dark'} 
+        isOpen={isFeedbackOpen} 
+        onClose={() => setIsFeedbackOpen(false)} 
+      />
     </div>
   );
 }

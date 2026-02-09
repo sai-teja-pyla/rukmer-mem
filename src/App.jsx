@@ -1,21 +1,48 @@
-import { useState, useEffect } from 'react';
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'; // <--- NEW IMPORTS
+import { useState, useEffect, useLayoutEffect } from 'react';
+import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'; 
+import { auth } from './firebase'; 
+import { onAuthStateChanged } from 'firebase/auth';
+
+// Page Imports
 import LandingPage from './components/LandingPage';
 import Dashboard from './components/Dashboard';
-import SettingsPage from './pages/SettingsPage'; // <--- Import Settings
-import { auth } from './firebase';
-import { onAuthStateChanged } from 'firebase/auth';
+import SettingsPage from './pages/SettingsPage'; 
 import HelpPage from './pages/HelpPage';
 import DocsPage from './pages/DocsPage';
 import LoginPage from './pages/LoginPage';
 import SignupPage from './pages/SignupPage';
 import PrivacyPage from './pages/PrivacyPage';
+import TermsPage from './pages/TermsPage'; 
+
+// Hook Import
+import { useUserSettings } from './hooks/useUserSettings';
 
 export default function App() {
   const [user, setUser] = useState(null);
-  const [loading, setLoading] = useState(true);
+  const [authLoading, setAuthLoading] = useState(true);
+  
+  // 1. Get User Settings
+  const { settings } = useUserSettings(); 
 
-  // 1. Auth Listener
+  // 2. THEME SYNC: useLayoutEffect prevents the "White Flash"
+  useLayoutEffect(() => {
+    // Priority: 1. DB Setting -> 2. LocalStorage Cache -> 3. Default Light
+    const targetTheme = settings?.theme || localStorage.getItem('appTheme') || 'light';
+
+    if (targetTheme === 'dark') {
+      document.body.classList.add('dark-mode');
+      document.body.classList.remove('light-mode');
+      // Force instant background color paint
+      document.body.style.backgroundColor = '#0f0f0f'; 
+    } else {
+      document.body.classList.add('light-mode');
+      document.body.classList.remove('dark-mode');
+      // Force instant background color paint
+      document.body.style.backgroundColor = '#f8fafc'; 
+    }
+  }, [settings?.theme]);
+
+  // 3. Auth Listener (Standard useEffect is fine here)
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
       if (currentUser) {
@@ -28,67 +55,67 @@ export default function App() {
       } else {
         setUser(null);
       }
-      setLoading(false);
+      setAuthLoading(false);
     });
     return () => unsubscribe();
   }, []);
 
-  // 2. Loading Screen
-  if (loading) {
+  // 4. Loading Screen
+  if (authLoading) {
+    // We check local storage here to ensure the loading screen matches the theme too
+    const isDark = localStorage.getItem('appTheme') === 'dark';
     return (
-      <div className="min-h-screen flex items-center justify-center bg-slate-50">
+      <div className={`min-h-screen flex items-center justify-center ${isDark ? 'bg-[#0f0f0f]' : 'bg-slate-50'}`}>
         <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600"></div>
       </div>
     );
   }
 
-  // 3. The Router (Replaces the if/else logic)
+  // 5. The Router
   return (
     <BrowserRouter>
       <Routes>
         
-        {/* Route 1: Landing Page (Public) */}
+        {/* --- Public Routes --- */}
         <Route 
           path="/" 
           element={!user ? <LandingPage /> : <Navigate to="/dashboard" />} 
         />
-
-        {/* Route 2: Dashboard (Protected) */}
-        <Route 
-          path="/dashboard" 
-          element={user ? <Dashboard user={user} /> : <Navigate to="/" />} 
-        />
-
-        {/* Route 3: Settings (Protected) */}
-        <Route 
-          path="/settings" 
-          element={user ? <SettingsPage /> : <Navigate to="/" />} 
-        />
-        {/* Route 4: Help (Protected) */}
-        <Route 
-          path="/help" 
-          element={user ? <HelpPage /> : <Navigate to="/" />} 
-        />
-        {/* Route 5: Docs (Protected) */}
-        <Route 
-          path="/docs" 
-          element={user ? <DocsPage /> : <Navigate to="/" />} 
-        />
-        {/* Route 6: Login (Public) */}
         <Route 
           path="/login" 
           element={!user ? <LoginPage /> : <Navigate to="/dashboard" />} 
         />
-        {/* Route 7: Signup (Public) */}
         <Route 
           path="/signup" 
           element={!user ? <SignupPage /> : <Navigate to="/dashboard" />} 
         />
-        {/* Route 8: Privacy Policy (Public) */}
         <Route 
           path="/privacy" 
           element={<PrivacyPage />} 
         />
+        <Route 
+          path="/terms" 
+          element={<TermsPage />} 
+        />
+
+        {/* --- Protected Routes --- */}
+        <Route 
+          path="/dashboard" 
+          element={user ? <Dashboard user={user} /> : <Navigate to="/" />} 
+        />
+        <Route 
+          path="/settings" 
+          element={user ? <SettingsPage /> : <Navigate to="/" />} 
+        />
+        <Route 
+          path="/help" 
+          element={user ? <HelpPage /> : <Navigate to="/" />} 
+        />
+        <Route 
+          path="/docs" 
+          element={user ? <DocsPage /> : <Navigate to="/" />} 
+        />
+
       </Routes>
     </BrowserRouter>
   );
