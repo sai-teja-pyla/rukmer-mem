@@ -1,3 +1,4 @@
+// src/components/UserDropdown.jsx
 import React, { useState, useRef, useEffect } from 'react';
 import { useUserSettings } from '../hooks/useUserSettings';
 import { auth } from '../firebase';
@@ -9,21 +10,21 @@ import {
   HelpCircle, 
   Zap,
   ChevronDown,
-  MessageSquare // Added icon import
+  MessageSquare,
+  CreditCard // Added for Subscription management
 } from 'lucide-react';
 import FeedbackModal from './FeedbackModal';
 
-export default function UserDropdown({ user }) {
+// ADDED: isPro prop to conditionally show upgrade/manage options
+export default function UserDropdown({ user, onUpgradeClick, isPro }) {
   const { settings } = useUserSettings(); 
   const [isOpen, setIsOpen] = useState(false);
-  const [isFeedbackOpen, setIsFeedbackOpen] = useState(false); // New state for feedback
+  const [isFeedbackOpen, setIsFeedbackOpen] = useState(false); 
   const dropdownRef = useRef(null);
   const navigate = useNavigate();
 
-  // 1. Detect Theme (Default to Dark if loading)
   const isDark = settings?.theme === 'dark';
 
-  // 2. Define Dynamic Styles
   const theme = {
     menuBg: isDark ? 'bg-[#1a1a1a] border-gray-800' : 'bg-white border-gray-200',
     text: isDark ? 'text-gray-200' : 'text-gray-700',
@@ -31,10 +32,9 @@ export default function UserDropdown({ user }) {
     hover: isDark ? 'hover:bg-[#2a2a2a]' : 'hover:bg-gray-100',
     headerBg: isDark ? 'bg-[#202020]' : 'bg-gray-50',
     divider: isDark ? 'border-gray-800' : 'border-gray-100',
-    iconColor: isDark ? 'text-gray-400' : 'text-gray-400' // Icons stay neutral
+    iconColor: isDark ? 'text-gray-400' : 'text-gray-400'
   };
 
-  // Close dropdown if clicking outside
   useEffect(() => {
     function handleClickOutside(event) {
       if (dropdownRef.current && !dropdownRef.current.contains(event.target)) {
@@ -55,12 +55,10 @@ export default function UserDropdown({ user }) {
   return (
     <div className="relative" ref={dropdownRef}>
       
-      {/* 1. The Trigger Button (Theme Aware) */}
       <button 
         onClick={() => setIsOpen(!isOpen)}
         className={`flex items-center gap-2 p-1.5 rounded-full transition-all ${theme.hover}`}
       >
-        {/* Avatar Circle */}
         <div 
           className={`h-8 w-8 rounded-full flex items-center justify-center text-white font-bold shadow-sm ${
             isDark ? 'border border-gray-700' : 'border-2 border-white ring-1 ring-gray-200'
@@ -70,15 +68,12 @@ export default function UserDropdown({ user }) {
           {initial}
         </div>
         
-        {/* Chevron Icon */}
         <ChevronDown size={14} className={isDark ? "text-gray-400" : "text-gray-600"} />
       </button>
 
-      {/* 2. The Dropdown Menu */}
       {isOpen && (
         <div className={`absolute right-0 mt-2 w-64 rounded-xl border shadow-2xl z-50 overflow-hidden animate-in fade-in zoom-in-95 duration-100 origin-top-right ${theme.menuBg}`}>
           
-          {/* User Info Header */}
           <div className={`px-4 py-4 border-b ${theme.divider} ${theme.headerBg}`}>
             <p className={`font-semibold truncate ${theme.text}`}>
               {settings?.displayName || "User"}
@@ -88,13 +83,30 @@ export default function UserDropdown({ user }) {
             </p>
           </div>
 
-          {/* Menu Items */}
           <div className="py-2">
             
-            <button className={`w-full text-left px-4 py-2.5 flex items-center gap-3 transition font-medium text-yellow-500 ${theme.hover}`}>
-              <Zap size={16} />
-              <span>Upgrade plan</span>
+            {/* 1. MANAGE SUBSCRIPTION: Always visible to let users see their current status */}
+            <button 
+              onClick={() => { setIsOpen(false); navigate('/subscription'); }}
+              className={`w-full text-left px-4 py-2.5 flex items-center gap-3 transition ${theme.hover} ${theme.text}`}
+            >
+              <CreditCard size={16} className={theme.iconColor}/>
+              <span>Manage Subscription</span>
             </button>
+
+            {/* 2. UPGRADE PLAN: Only shows if user is not already Pro */}
+            {!isPro && (
+              <button
+                onClick={() => {
+                  setIsOpen(false); 
+                  onUpgradeClick(); 
+                }}
+                className={`w-full text-left px-4 py-2.5 flex items-center gap-3 transition font-medium text-yellow-500 ${theme.hover}`}
+              >
+                <Zap size={16} fill="currentColor" />
+                <span>Upgrade plan</span>
+              </button>
+            )}
 
             <button 
               onClick={() => { setIsOpen(false); navigate('/settings'); }}
@@ -105,10 +117,8 @@ export default function UserDropdown({ user }) {
             </button>
           </div>
 
-          {/* Divider */}
           <div className={`border-t mx-2 ${theme.divider}`}></div>
 
-          {/* Footer Items */}
           <div className="py-2">
             <button 
               onClick={() => { setIsOpen(false); navigate('/help'); }}
@@ -118,11 +128,10 @@ export default function UserDropdown({ user }) {
               <span>Help</span>
             </button>
 
-            {/* NEW: Feedback Trigger */}
             <button 
               onClick={() => { 
                 setIsOpen(false); 
-                setIsFeedbackOpen(true); // 2. This triggers the modal
+                setIsFeedbackOpen(true); 
               }}
               className={`w-full text-left px-4 py-2.5 flex items-center gap-3 transition ${theme.hover} ${theme.text}`}
             >
@@ -141,7 +150,6 @@ export default function UserDropdown({ user }) {
         </div>
       )}
 
-      {/* 3. Feedback Modal - Positioned outside the dropdown relative container */}
       <FeedbackModal 
         user={user} 
         darkMode={settings?.theme === 'dark'} 

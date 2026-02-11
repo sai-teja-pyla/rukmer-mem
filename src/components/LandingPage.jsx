@@ -55,10 +55,10 @@ export default function LandingPage({ onLoginSuccess }) {
         {/* ... (Keep your existing background code) ... */}
         <div className="relative z-10 max-w-lg">
           <h1 className="text-6xl font-bold text-white leading-tight mb-6">
-            The Unified <br /> Gateway for <br /> Visual AI
+            Your <br /> Dark Data <br /> is Costing You Decisions
           </h1>
           <p className="text-slate-400 text-lg leading-relaxed">
-            Confidently integrate visual AI into your apps with our simple, unified API.
+            Turn your images, videos and documents into actionable insights.
           </p>
         </div>
       </div>
@@ -129,13 +129,15 @@ export default function LandingPage({ onLoginSuccess }) {
             </button>
 
             {/* Google Button (Using Firebase now) */}
+            <div style={{ colorScheme: "dark" }}>
             <button 
               onClick={handleGoogleSignIn}
-              className="w-full flex items-center justify-center gap-3 py-3 border border-slate-200 rounded-lg hover:bg-slate-50"
+              className="w-full flex items-center justify-center gap-3 py-3 border border-slate-700 rounded-lg hover:bg-slate-800 bg-slate-900 text-white"
             >
                {/* ... (Keep your Google Icon SVG) ... */}
                <span>Continue with Google</span>
             </button>
+            </div>
 
             <div className="text-center mt-6">
                <button onClick={() => setIsSignUp(!isSignUp)} className="text-blue-600 font-semibold hover:underline">

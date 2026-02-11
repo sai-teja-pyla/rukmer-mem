@@ -1,7 +1,9 @@
 import React, { useState } from 'react';
 import { useUserSettings } from '../hooks/useUserSettings';
 import { useNavigate } from 'react-router-dom'; 
+import { auth } from '../firebase';
 import { ArrowLeft, Search, ChevronDown, ChevronUp, Mail, MessageCircle, FileText } from 'lucide-react'; 
+import FeedbackModal from '../components/FeedbackModal';
 
 export default function HelpPage() {
   const { settings } = useUserSettings();
@@ -9,6 +11,7 @@ export default function HelpPage() {
   
   // State for FAQ accordion
   const [openFaq, setOpenFaq] = useState(null);
+  const [isFeedbackOpen, setIsFeedbackOpen] = useState(false);
 
   // Theme Logic
   const isDark = settings?.theme === 'dark';
@@ -85,6 +88,7 @@ export default function HelpPage() {
           <div className={`p-6 rounded-xl border text-center hover:scale-105 transition cursor-pointer ${theme.card}`}>
             <Mail size={32} className="mx-auto mb-3 text-purple-500" />
             <h3 className="font-bold mb-1">Email Us</h3>
+            <h4 className="font-bold mb-1">tech@rukmer.com</h4>
             <p className={`text-sm ${theme.subtext}`}>Get a response in 24h</p>
           </div>
         </div>
@@ -121,11 +125,17 @@ export default function HelpPage() {
         <div className={`text-center p-8 rounded-2xl border border-dashed ${isDark ? 'border-gray-800' : 'border-gray-300'}`}>
             <h3 className="text-xl font-bold mb-2">Still need help?</h3>
             <p className={`mb-4 ${theme.subtext}`}>Our support team is just a click away.</p>
-            <button className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-2 rounded-lg font-medium transition">
+            <button onClick={() => setIsFeedbackOpen(true)} className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-2 rounded-lg font-medium transition">
                 Contact Support
             </button>
         </div>
 
+        <FeedbackModal
+          user={auth.currentUser}
+          darkMode={isDark}
+          isOpen={isFeedbackOpen}
+          onClose={() => setIsFeedbackOpen(false)}
+        />
       </div>
     </div>
   );

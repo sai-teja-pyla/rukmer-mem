@@ -67,7 +67,15 @@ export default function SignupPage() {
         
         <div className="text-center mb-8">
             <h2 className="text-2xl font-bold text-gray-900">Create Account</h2>
-            <p className="text-sm text-gray-500 mt-1">Join Rukmer AI today</p>
+            <p className="text-xs text-gray-500 mt-2">By signing up, you agree to our{' '}
+              <a href="/privacy.html" target="_blank" rel="noopener noreferrer" className="text-[#5b67e8] hover:underline font-semibold">
+                Terms of Service
+              </a>
+              {' '}and{' '}
+              <a href="/privacy.html" target="_blank" rel="noopener noreferrer" className="text-[#5b67e8] hover:underline font-semibold">
+                Privacy Policy
+              </a>
+            </p>
         </div>
 
         {error && (
@@ -118,17 +126,13 @@ export default function SignupPage() {
           </div>
 
           {/* Sign Up Button */}
-          <p className="text-xs text-gray-500 text-center mt-4 leading-relaxed">
-  By clicking "Sign Up", you agree to our{' '}
-  {/* If you have a Terms page, link it here too */}
-  <Link to="/terms" className="underline hover:text-gray-800 transition-colors">
-    Terms of Service
-  </Link>
-  {' '}and{' '}
-  <Link to="/privacy" className="underline hover:text-gray-800 transition-colors">
-    Privacy Policy
-  </Link>.
-</p>
+          <button
+            type="submit"
+            disabled={loading}
+            className="w-full bg-[#5b67e8] hover:bg-[#4a55d9] text-white font-semibold py-3 px-4 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {loading ? 'Creating Account...' : 'Sign Up'}
+          </button>
 
           {/* Google Button */}
           <button
@@ -149,7 +153,6 @@ export default function SignupPage() {
               </Link>
             </p>
           </div>
-
         </form>
 
       </div>

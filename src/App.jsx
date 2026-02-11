@@ -1,7 +1,8 @@
 import { useState, useEffect, useLayoutEffect } from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'; 
-import { auth } from './firebase'; 
+import { auth, db } from './firebase'; // Ensure db is imported
 import { onAuthStateChanged } from 'firebase/auth';
+import { collection, query, where, onSnapshot } from 'firebase/firestore'; // For global Pro check
 
 // Page Imports
 import LandingPage from './components/LandingPage';
@@ -13,6 +14,7 @@ import LoginPage from './pages/LoginPage';
 import SignupPage from './pages/SignupPage';
 import PrivacyPage from './pages/PrivacyPage';
 import TermsPage from './pages/TermsPage'; 
+import SubscriptionPage from './pages/SubscriptionPage';
 
 // Hook Import
 import { useUserSettings } from './hooks/useUserSettings';
@@ -20,31 +22,29 @@ import { useUserSettings } from './hooks/useUserSettings';
 export default function App() {
   const [user, setUser] = useState(null);
   const [authLoading, setAuthLoading] = useState(true);
+  const [isPro, setIsPro] = useState(false); // Global Pro status
   
-  // 1. Get User Settings
   const { settings } = useUserSettings(); 
 
-  // 2. THEME SYNC: useLayoutEffect prevents the "White Flash"
+  // 1. THEME SYNC
   useLayoutEffect(() => {
-    // Priority: 1. DB Setting -> 2. LocalStorage Cache -> 3. Default Light
     const targetTheme = settings?.theme || localStorage.getItem('appTheme') || 'light';
-
     if (targetTheme === 'dark') {
       document.body.classList.add('dark-mode');
       document.body.classList.remove('light-mode');
-      // Force instant background color paint
       document.body.style.backgroundColor = '#0f0f0f'; 
     } else {
       document.body.classList.add('light-mode');
       document.body.classList.remove('dark-mode');
-      // Force instant background color paint
       document.body.style.backgroundColor = '#f8fafc'; 
     }
   }, [settings?.theme]);
 
-  // 3. Auth Listener (Standard useEffect is fine here)
+  // 2. Auth & Subscription Listener
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
+    let unsubscribeSub = () => {};
+
+    const unsubscribeAuth = onAuthStateChanged(auth, (currentUser) => {
       if (currentUser) {
         setUser({
           name: currentUser.displayName || currentUser.email.split('@')[0],
@@ -52,70 +52,69 @@ export default function App() {
           photo: currentUser.photoURL,
           uid: currentUser.uid
         });
+
+        // Start listening to subscription status as soon as we have a user
+        const subRef = collection(db, "customers", currentUser.uid, "subscriptions");
+        const q = query(subRef, where("status", "in", ["active", "trialing"]));
+        
+        unsubscribeSub = onSnapshot(q, (snapshot) => {
+          setIsPro(!snapshot.empty); // Set global Pro state
+        });
+
       } else {
         setUser(null);
+        setIsPro(false);
+        unsubscribeSub();
       }
       setAuthLoading(false);
     });
-    return () => unsubscribe();
+
+    return () => {
+      unsubscribeAuth();
+      unsubscribeSub();
+    };
   }, []);
 
-  // 4. Loading Screen
+  // 3. Loading Screen
   if (authLoading) {
-    // We check local storage here to ensure the loading screen matches the theme too
     const isDark = localStorage.getItem('appTheme') === 'dark';
     return (
       <div className={`min-h-screen flex items-center justify-center ${isDark ? 'bg-[#0f0f0f]' : 'bg-slate-50'}`}>
-        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600"></div>
+        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-[#7c3aed]"></div>
       </div>
     );
   }
 
-  // 5. The Router
   return (
     <BrowserRouter>
       <Routes>
-        
-        {/* --- Public Routes --- */}
-        <Route 
-          path="/" 
-          element={!user ? <LandingPage /> : <Navigate to="/dashboard" />} 
-        />
-        <Route 
-          path="/login" 
-          element={!user ? <LoginPage /> : <Navigate to="/dashboard" />} 
-        />
-        <Route 
-          path="/signup" 
-          element={!user ? <SignupPage /> : <Navigate to="/dashboard" />} 
-        />
-        <Route 
-          path="/privacy" 
-          element={<PrivacyPage />} 
-        />
-        <Route 
-          path="/terms" 
-          element={<TermsPage />} 
-        />
+        {/* Public Routes */}
+        <Route path="/" element={!user ? <LandingPage /> : <Navigate to="/dashboard" replace />} />
+        <Route path="/login" element={!user ? <LoginPage /> : <Navigate to="/dashboard" replace />} />
+        <Route path="/signup" element={!user ? <SignupPage /> : <Navigate to="/dashboard" replace />} />
+        <Route path="/privacy" element={<PrivacyPage />} />
+        <Route path="/terms" element={<TermsPage />} />
 
-        {/* --- Protected Routes --- */}
+        {/* Protected Routes - Passing isPro globally */}
         <Route 
           path="/dashboard" 
-          element={user ? <Dashboard user={user} /> : <Navigate to="/" />} 
+          element={user ? <Dashboard user={user} isPro={isPro} /> : <Navigate to="/" replace />} 
         />
         <Route 
           path="/settings" 
-          element={user ? <SettingsPage /> : <Navigate to="/" />} 
+          element={user ? <SettingsPage user={user} isPro={isPro} /> : <Navigate to="/" replace />} 
         />
+        <Route path="/help" element={user ? <HelpPage /> : <Navigate to="/" replace />} />
+        <Route path="/docs" element={user ? <DocsPage /> : <Navigate to="/" replace />} />
+
+        {/* Subscription Management */}
         <Route 
-          path="/help" 
-          element={user ? <HelpPage /> : <Navigate to="/" />} 
-        />
-        <Route 
-          path="/docs" 
-          element={user ? <DocsPage /> : <Navigate to="/" />} 
+          path="/subscription" 
+          element={user ? <SubscriptionPage user={user} isPro={isPro} /> : <Navigate to="/" replace />} 
         />
 
+        {/* Fallback for undefined routes */}
+        <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </BrowserRouter>
   );

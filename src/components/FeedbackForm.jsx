@@ -1,3 +1,4 @@
+//src/components/FeedbackForm.jsx
 import React, { useState } from 'react';
 import { db } from '../firebase';
 import { collection, addDoc, serverTimestamp } from 'firebase/firestore';
@@ -16,6 +17,16 @@ export default function FeedbackForm({ user, darkMode, onClose }) {
       await addDoc(collection(db, "feedback"), {
         uid: user?.uid || "anonymous",
         email: user?.email || "no-email",
+        to: "saiteja.bm@gmail.com", // Recipient of the feedback
+      message: {
+        subject: `New ${formData.type.toUpperCase()}: ${formData.subject}`, //
+        html: `
+          <h3>New feedback from ${user?.email || "Anonymous"}</h3>
+          <p><strong>Type:</strong> ${formData.type}</p>
+          <p><strong>Subject:</strong> ${formData.subject}</p>
+          <p><strong>Description:</strong> ${formData.description}</p>
+          ` //
+          },
         ...formData,
         timestamp: serverTimestamp(),
         status: 'new'
