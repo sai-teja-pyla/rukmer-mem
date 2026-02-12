@@ -8,13 +8,13 @@ import { getAnalytics } from "firebase/analytics";
 // The Single Config for 'rukmer-saas'
 const firebaseConfig = {
   // ⚠️ PASTE THE KEYS FROM 'rukmer-saas' HERE
-  apiKey: "AIzaSyBTGinN2ztdI9ToL75HGe_2zKssFM-RR7A",
-  authDomain: "rukmer-saas.firebaseapp.com",
-  projectId: "rukmer-saas",
-  storageBucket: "rukmer-saas-data",
-  messagingSenderId: "361739908342",
-  appId: "1:361739908342:web:dca4e1491aa36aca11a8d7",
-  measurementId: "G-1XG5ZEVHB4"
+  apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
+  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
+  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID,
+  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET,
+  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID,
+  appId: import.meta.env.VITE_FIREBASE_APP_ID,
+  measurementId: import.meta.env.VITE_FIREBASE_MEASUREMENT_ID
 };
 
 // Initialize ONE app
