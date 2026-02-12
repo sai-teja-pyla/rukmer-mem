@@ -40,3 +40,37 @@
 .read-the-docs {
   color: #888;
 }
+
+/* 1. Firefox Support (Modern Standard) */
+* {
+  scrollbar-width: thin;
+}
+
+/* 2. Webkit Browsers (Chrome, Edge, Safari) */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* Light Mode Styles (Default) */
+::-webkit-scrollbar-thumb {
+  background-color: #cbd5e1; /* slate-300 */
+  border-radius: 20px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background-color: #94a3b8; /* slate-400 */
+}
+
+/* Dark Mode Specific (Targeting .dark class) */
+.dark ::-webkit-scrollbar-thumb {
+  background-color: #333333; /* Matches your border-[#333] */
+}
+
+.dark ::-webkit-scrollbar-thumb:hover {
+  background-color: #444444;
+}

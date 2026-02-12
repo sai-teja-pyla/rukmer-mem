@@ -21,3 +21,32 @@ body.light-mode {
   background-color: #f8fafc; /* Matches your dashboard light bg */
   color: #0f172a;
 }
+
+/* Force the root to react to your theme */
+:root {
+  color-scheme: light; /* Default */
+}
+
+/* When the .dark class is active on <html> or <body> */
+.dark {
+  color-scheme: dark;
+}
+
+/* Final Scrollbar Override for Webkit (Chrome/Edge/Safari) */
+::-webkit-scrollbar {
+  width: 8px; /* Slightly wider for better interaction */
+}
+
+::-webkit-scrollbar-track {
+  background: transparent !important; /* Forces the background to be invisible */
+}
+
+.dark ::-webkit-scrollbar-thumb {
+  background-color: #333333; /* Matches your Rukmer AI border color */
+  border-radius: 10px;
+  border: 2px solid #111111; /* Adds a "gap" look around the thumb */
+}
+
+.dark ::-webkit-scrollbar-thumb:hover {
+  background-color: #444444;
+}

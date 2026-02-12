@@ -14,7 +14,7 @@ export default function PricingModal({ isOpen, onClose, onCheckout }) {
 
   const features = [
     "Unlimited AI Asset Reports",
-    "Advanced Construction VLM Analysis",
+    "Advanced Enterprise VLM Analysis",
     "Priority Chat Support",
     "500MB+ Large File Uploads",
     "Custom PDF Export Branding"

@@ -27,7 +27,7 @@ export default function DocsPage() {
       icon: <Zap size={24} className="text-yellow-500"/>,
       body: (
         <div className="space-y-6">
-          <p>Welcome to Rukmer AI! This platform helps construction managers analyze site photos and generate reports automatically.</p>
+          <p>Welcome to Rukmer AI! This platform helps construction, real estate and insurance managers analyze site photos and generate reports automatically.</p>
           <div className={`p-4 rounded-lg border-l-4 border-blue-500 ${isDark ? 'bg-blue-900/20' : 'bg-blue-50'}`}>
             <strong>Quick Start:</strong> Upload your first site photo on the Dashboard to see the AI in action.
           </div>
