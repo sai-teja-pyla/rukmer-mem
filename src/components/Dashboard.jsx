@@ -5,10 +5,10 @@ import {
     Upload, Loader2, X, Sparkles, MessageCircle, Send,
     FileVideo, FileText, Moon, Sun, CheckCircle2, AlertTriangle,
     SquarePen, Hexagon, Plus, FileStack, Edit2, Trash2, LayoutGrid,
-    ImageIcon, Zap, ChevronDown, Search // Added Search icon for the new UI
+    ImageIcon, Zap, ChevronDown, Search, Download
 } from 'lucide-react';
-import jsPDF from 'jspdf';
-import 'jspdf-autotable';
+import { jsPDF }from 'jspdf';
+import autoTable from 'jspdf-autotable';
 
 import UserDropdown from '../components/UserDropdown';
 import PricingModal from '../components/PricingModal';
@@ -18,6 +18,9 @@ import { useUserSettings } from '../hooks/useUserSettings';
 import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
 import { collection, addDoc, getDocs, getDoc, query, where, orderBy, serverTimestamp, doc, updateDoc, deleteDoc, onSnapshot } from "firebase/firestore";
 import { storage, db } from "../firebase";
+
+// --- NEW API SERVICE IMPORTS ---
+import { sendChatMessage as saveToDB, fetchChatHistory } from '../services/api';
 
 export default function Dashboard({ user, isPro: globalIsPro }) {
     // --- 1. STATE ---
@@ -116,6 +119,41 @@ export default function Dashboard({ user, isPro: globalIsPro }) {
         }
     };
 
+    // --- REFINED: LOAD CHAT HISTORY WITHOUT CRASHING ---
+    useEffect(() => {
+        const loadCloudHistory = async () => {
+            if (!user) return;
+            try {
+                console.log("📡 Fetching history for user:", user.uid);
+                const history = await fetchChatHistory();
+
+                console.log("📥 Raw history from DB:", history);
+                
+                if (Array.isArray(history) && history.length > 0) {
+                    const formattedHistory = history.flatMap(chat =>[
+                        { 
+                            role: 'user', 
+                            content: chat.user_message || '...' 
+                        },
+                        { 
+                            role: 'assistant', 
+                            content: chat.ai_reply || '...', 
+                            image: chat.image_url || null // Merged correctly to prevent UI crashes
+                        }
+                    ]);
+                    console.log("✅ Setting messages to state:", formattedHistory);
+                    setChatMessages(formattedHistory);
+                } else {
+                console.log("ℹ️ No active history found in DB.");
+            }
+            } catch (err) {
+                console.error("No cloud history found or server offline", err);
+            }
+        };
+
+        loadCloudHistory();
+    }, [user]);
+
     useEffect(() => {
         if (user) {
             runSystemDiagnostic().then(res => {
@@ -182,6 +220,9 @@ export default function Dashboard({ user, isPro: globalIsPro }) {
 
             if (docSnap.exists()) {
                 const data = docSnap.data();
+                
+                let thumbnail = null;
+
 
                 // 1. Restore Report Text Data
                 setReportId(docSnap.id);
@@ -198,7 +239,6 @@ export default function Dashboard({ user, isPro: globalIsPro }) {
                 });
 
                 // 2. Restore Media Items for Display
-                let thumbnail = null; 
                 if (data.images && Array.isArray(data.images)) {
                     const restoredMedia = data.images.map(img => ({
                         id: Math.random().toString(36).substr(2, 9),
@@ -231,19 +271,35 @@ export default function Dashboard({ user, isPro: globalIsPro }) {
                     ]
                 });
 
+                const openNotice = `📂 **Opened Report:** ${data.projectName}`;
+
                 // 4. Add system message WITH IMAGE to chat UI
-                setChatMessages([
-                    {
-                        role: 'assistant',
-                        content: `📂 **Opened Report:** ${data.projectName}`,
-                        image: thumbnail // Correctly passed for rendering
+                setChatMessages(prev => {
+                    const lastMsg = prev[prev.length - 1];
+                    const reportNotice = `📂 **Opened Report:** ${data.projectName}`;
+                    if (lastMsg?.content === reportNotice) {
+                        return prev; // Don't add it again if it's already there
                     }
-                ]);
+                    
+                    return [
+                        ...prev,
+                        {
+                            role: 'assistant',
+                            content: `📂 **Opened Report:** ${data.projectName}`,
+                            image: thumbnail 
+                        }
+                    ];
+                });
+
+                //const openNotice = `📂 **Opened Report:** ${data.projectName}`;
+                //setChatMessages(prev => [...prev, { role: 'assistant', content: openNotice, image: thumbnail }]);
+
+                await saveToDB(`System: Open ${data.projectName}`, openNotice, thumbnail);
 
             } else {
                 console.warn("Report not found, clearing ID");
                 setSearchParams({});
-            }
+            }           
         } catch (error) {
             console.error("Failed to load report:", error);
         }
@@ -449,11 +505,24 @@ export default function Dashboard({ user, isPro: globalIsPro }) {
                 ]
             });
 
-            setChatMessages([{ 
+            setChatMessages(prev => [...prev, { 
                 role: 'assistant', 
                 content: `Analysis Complete! Saved to history.`,
                 image: uploadedImages.length > 0 ? uploadedImages[0].url : null 
             }]);
+
+            try {
+                // Sync analysis to Cloud SQL database
+                const firstThumb = uploadedImages.length > 0 ? uploadedImages[0].url : null;
+                await saveToDB(
+                    `New Analysis: ${data.projectName}`, 
+                    `📂 **Opened Report:** ${data.projectName}`,
+                    thumbnail // Added image support to the save call
+                );
+                console.log("✅ Analysis record synced to Cloud SQL");
+            } catch (dbErr) {
+                console.error("❌ Failed to sync analysis to database:", dbErr);
+            }
 
         } catch (error) {
             if (error.message.includes("429") || error.message.includes("Quota")) {
@@ -478,7 +547,7 @@ export default function Dashboard({ user, isPro: globalIsPro }) {
     };
 
 
-    // --- 7. AI AGENT LOGIC ---
+    // --- 7. AI AGENT LOGIC (WITH CLOUD SQL SYNC) ---
     const sendChatMessage = async () => {
         if (!chatInput.trim() || chatLoading) return;
 
@@ -558,8 +627,8 @@ export default function Dashboard({ user, isPro: globalIsPro }) {
             // 3. STABLE HISTORY: Always leading with 'user'
             let history = chatMessages.slice(-3).map(m => ({
                 role: m.role === 'user' ? 'user' : 'model',
-                parts: [{ text: m.content }]
-            }));
+                parts: [{ text: m.content || '' }]
+            })).filter(h => h.parts[0].text !== '');
 
             if (history.length > 0 && history[0].role !== 'user') {
                 history = history.slice(1);
@@ -569,6 +638,20 @@ export default function Dashboard({ user, isPro: globalIsPro }) {
             const result = await chat.sendMessage(msg);
             const responseText = result.response.text();
 
+            const isLoadCommand = responseText.includes('[[LOAD:');
+
+            // --- SYNC WITH BACKEND (Cloud SQL) ---
+            if (!responseText.includes('[[LOAD:')) {
+                try {
+                    await saveToDB(msg, responseText); 
+                } catch (dbErr) {
+                    console.warn("DB Sync failed but AI responded:", dbErr);
+                }
+
+            } else {
+                console.log("Skipping DB save for Agent Command to prevent crash on refresh.");
+            }
+
             // 4. AGENT COMMAND HANDLER
             const loadMatch = responseText.match(/\[\[LOAD:(.*?)\]\]/);
             if (loadMatch) {
@@ -577,50 +660,97 @@ export default function Dashboard({ user, isPro: globalIsPro }) {
                 if (target) {
                     setChatMessages(prev => [...prev, { role: 'assistant', content: `Accessing data for **${target.projectName}**...` }]);
                     await loadReportById(targetId);
-                    setSearchParams({ id: targetId });
                 }
             } else {
                 setChatMessages(prev => [...prev, { role: 'assistant', content: responseText }]);
             }
 
-            setChatLoading(false);
 
         } catch (error) {
-            console.error("Chat Error:", error);
-
-            let errorMsg = "Sorry, I encountered an error.";
-            if (error.message.includes("429")) {
-                errorMsg = "⚠️ Rate Limit: Rukmer AI is processing a heavy payload. Please wait 30 seconds before your next query.";
-                setChatLoading(true);
-                setTimeout(() => setChatLoading(false), 5000);
-            } else {
-        // For all other errors, reset loading immediately
-        setChatLoading(false);
-            }
-
-            setChatMessages(prev => [...prev, { role: 'assistant', content: errorMsg }]);
-
+            console.error("Chat Logic Error:", error);
+            setChatMessages(prev => [...prev, { role: 'assistant', content: "Rukmer AI encountered a temporary connection issue." }]);
         } finally {
-            if (!error) {
-                setChatLoading(false);
-            }
+            setChatLoading(false);
         }
     };
 
     const downloadPDF = () => {
-        if (!report) return;
+        if (!report || !report.summary) {
+        alert("Please analyze a site or open a report first.");
+        return;
+    }
+
+    try {
         const doc = new jsPDF();
-        doc.text(report.projectName || "Report", 14, 22);
-        doc.autoTable({
-            startY: 40,
-            head: [['Category', 'Details']],
+        
+        // --- Header Section ---
+        doc.setFontSize(22);
+        doc.setTextColor(124, 58, 237); // Rukmer Purple
+        doc.text("RUKMER AI - SITE ANALYSIS", 14, 22);
+        
+        doc.setFontSize(10);
+        doc.setTextColor(100, 116, 139);
+        doc.text(`Project: ${report.projectName || "Untitled"}`, 14, 30);
+        doc.text(`Date: ${report.date || new Date().toLocaleDateString()}`, 14, 35);
+
+        // --- Data Prep (Fixed Variable Names) ---
+        const accList = (report.summary.accomplishments || []).join('\n• ');
+        const conList = (report.summary.concerns || []).join('\n• ');
+        const nxtList = (report.summary.nextSteps || []).join('\n• ');
+
+        // --- MODERN AUTOTABLE CALL ---
+        autoTable(doc, {
+            startY: 45,
+            head: [['SECTION', 'DETAILS']],
             body: [
-                ['Status', report.summary.status],
-                ['Accomplishments', report.summary.accomplishments.join('\n')],
-                ['Concerns', report.summary.concerns.join('\n')]
+                ['STATUS', (report.summary.status || 'N/A').toUpperCase()],
+                ['ACCOMPLISHMENTS', accList ? `• ${accList}` : 'None listed'],
+                ['CONCERNS', conList ? `• ${conList}` : 'None listed'],
+                ['NEXT STEPS', nxtList ? `• ${nxtList}` : 'None listed']
             ],
+            theme: 'grid',
+            headStyles: { fillColor: [124, 58, 237] },
+            styles: { fontSize: 10, cellPadding: 5, overflow: 'linebreak' },
+            columnStyles: {
+                0: { cellWidth: 40, fontStyle: 'bold' },
+                1: { cellWidth: 'auto' }
+            }
         });
-        doc.save(`${report.projectName}.pdf`);
+
+        // Save the file
+        doc.save(`${(report.projectName || 'Report').replace(/\s+/g, '_')}.pdf`);
+        
+    } catch (err) {
+        console.error("PDF GENERATION FAILED:", err);
+        alert(`Error: ${err.message}`);
+    }
+    };
+
+    const handleSoftReset = async () => {
+        // if (!window.confirm("Start a new conversation?")) return;
+
+        setChatMessages([]);
+        if (chatSessionRef.current) chatSessionRef.current = null;
+    
+   // // 2. Reset the AI session so it doesn't remember the previous 
+    //if (chatSessionRef.current) {
+    //    chatSessionRef.current = null;
+   // }
+
+        try {
+        // 2. THE CRITICAL STEP: Call the API to update is_active in PostgreSQL
+        const response = await fetch('http://localhost:5001/api/chat/hide', {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' }
+        });
+
+        if (response.ok) {
+            console.log("✅ Database successfully hid the messages.");
+        }
+    } catch (error) {
+        console.error("❌ Failed to reach backend for reset:", error);
+    }
+
     };
 
     const resetApp = () => {
@@ -850,7 +980,7 @@ export default function Dashboard({ user, isPro: globalIsPro }) {
                                                 <p className={`text-sm ${theme.subText}`}>{report.date}</p>
                                             </div>
                                             <div className="flex gap-2">
-                                                <button onClick={downloadPDF} className={`p-2 rounded-lg border hover:bg-gray-50/10 transition ${theme.border}`}><FileText size={18} /></button>
+                                                <button onClick={downloadPDF} className={`p-2 rounded-lg border hover:bg-gray-50/10 transition ${theme.border}`}><Download size={18} /></button>
                                             </div>
                                         </div>
                                         <div className={`p-3 rounded-lg mb-6 border ${report.summary.status === 'on_track' ? 'bg-green-500/10 text-green-600 border-green-500/20' :
@@ -886,6 +1016,20 @@ export default function Dashboard({ user, isPro: globalIsPro }) {
                                     </p>
                                 </div>
                             </div>
+                            
+                            {/* --- LOCAL RESET BUTTON --- */}
+                            <button
+                                onClick={handleSoftReset}
+                                className={`p-2 rounded-lg transition-colors flex items-center gap-2 text-xs font-bold ${
+                                    darkMode
+                                    ? 'hover:bg-[#222] text-gray-400 hover:text-white'
+                                    : 'hover:bg-white/10 text-white'
+                                }`}
+                                title="Start New Conversation"
+                            >
+                                <Plus size={16} />
+                                <span className="hidden sm:inline">Clear View</span>
+                            </button>
                         </div>
 
                         <div className={`flex-1 overflow-y-auto p-6 space-y-6 ${darkMode ? 'bg-black' : 'bg-slate-50'}`}>
@@ -903,7 +1047,8 @@ export default function Dashboard({ user, isPro: globalIsPro }) {
                                                     <img src={msg.image} alt="Report Content" className="w-full h-auto max-h-48 object-cover" />
                                                 </div>
                                             )}
-                                            {msg.content.split('\n').map((line, idx) => <p key={idx} className="mb-1">{line}</p>)}
+                                            {/* SAFETY: Check for msg.content before splitting to prevent crash */}
+                                            {msg.content && msg.content.toString().split('\n').map((line, idx) => <p key={idx} className="mb-1">{line}</p>)}
                                         </div>
                                     </div>
                                 ))
