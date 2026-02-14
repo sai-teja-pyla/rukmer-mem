@@ -29,7 +29,10 @@ steps:
       '--image', 'gcr.io/$PROJECT_ID/rukmer-saas',
       '--region', 'us-central1',
       '--platform', 'managed',
-      '--allow-unauthenticated'
+      '--allow-unauthenticated',
+      '--add-cloudsql-instances', 'rukmer-saas:us-central1:rukmer-saas-ai',
+      '--update-env-vars',
+      'NODE_ENV=${_NODE_ENV},DB_USER=${_DB_USER},DB_NAME=${_DB_NAME},DB_PASSWORD=${_DB_PASSWORD},INSTANCE_CONNECTION_NAME=rukmer-saas:us-central1:rukmer-saas-ai'
     ]
 
 options:
@@ -44,3 +47,8 @@ substitutions:
     _VITE_FIREBASE_MESSAGING_SENDER_ID: ''
     _VITE_FIREBASE_APP_ID: ''
     _VITE_FIREBASE_MEASUREMENT_ID: ''
+    _NODE_ENV: ''
+    _DB_USER: ''
+    _DB_NAME: ''
+    _DB_PASSWORD: ''
+    _INSTANCE_CONNECTION_NAME: ''
