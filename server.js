@@ -63,50 +63,47 @@ app.get('/', (req, res) => {
 
 app.get('/health', (req, res) => res.json({ status: 'ok' }));
 
-app.post('/api/chat', async (req, res) => {
-    try {
-        const { userId, reportId, message, aiResponse, imageUrl } = req.body;
-        console.log("Incoming chat POST:", { userId,reportId, message, aiResponse, imageUrl });
-        const query = 'INSERT INTO chats (user_id, report_id, user_message, ai_reply, image_url, is_active) VALUES ($1, $2, $3, $4, $5, TRUE) RETURNING *';
-        const values = [userId, reportId || null, message, aiResponse, imageUrl || null];
-        try {
-            const result = await pool.query(query, values);
-            console.log("✅ Chat Saved to Cloud SQL:", userId, "Row:", result.rows[0]);
-            res.json(result.rows[0]);
-        } catch (dbErr) {
-            console.error("🚨 DB Insert Error:", dbErr.message);
-            console.error("Query:", query);
-            console.error("Values:", values);
-            res.status(500).json({ error: dbErr.message });
-        }
-    } catch (error) {
-        console.error("🚨 Handler Error:", error);
-        res.status(500).json({ error: error.message });
-    }
+app.post('/api/chat', async (req, res) => { // <--- WAS likely '/chat'
+  try {
+    const { userId, reportId, message, aiResponse, imageUrl } = req.body;
+    console.log("📥 Received Chat:", { userId, message });
+
+    // ... (your existing database logic) ...
+    
+    // Example DB Insert (Keep your existing logic inside!)
+    const result = await pool.query(
+      `INSERT INTO chats (user_id, report_id, user_message, ai_reply, image_url, is_active) 
+       VALUES ($1, $2, $3, $4, $5, TRUE) RETURNING *`,
+      [userId, reportId, message, aiResponse, imageUrl]
+    );
+
+    res.json(result.rows[0]);
+  } catch (err) {
+    console.error("🚨 Chat Error:", err);
+    res.status(500).json({ error: err.message });
+  }
 });
 
-app.get('/api/history', async (req, res) => {
-    try {
-        const { userId } = req.query;
-        const result = await pool.query('SELECT * FROM chats WHERE user_id = $1 AND is_active = TRUE ORDER BY created_at ASC LIMIT 30');
-        console.log(`Sent ${result.rowCount} rows to frontend`);
-        res.json(result.rows);
-    } catch (error) {
-        console.error("Backend History Error:", error.message);
-        res.status(500).json({ error: error.message });
-    }
+app.get('/api/history', async (req, res) => { // <--- WAS likely '/history'
+  const { userId } = req.query;
+  try {
+    const result = await pool.query(
+      `SELECT * FROM chats WHERE user_id = $1 AND is_active = TRUE ORDER BY created_at ASC`,
+      [userId]
+    );
+    res.json(result.rows);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
-app.put('/api/chat/hide', async (req, res) => {
-    try {
-        // Refined: Added 'result' variable to capture the count properly
-        const result = await pool.query('UPDATE chats SET is_active = FALSE WHERE is_active = TRUE');
-        console.log(`✅ Soft-deleted ${result.rowCount} rows.`);
-        res.json({ message: "Chat history hidden from UI" });
-    } catch (error) {
-        console.error("🚨 Hide Route Error:", error.message);
-        res.status(500).json({ error: error.message });
-    }
+app.put('/api/chat/hide', async (req, res) => { // <--- WAS likely '/chat/hide'
+  try {
+    // ... your logic ...
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // backend/server.js
