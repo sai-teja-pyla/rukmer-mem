@@ -7,7 +7,7 @@ import {
     SquarePen, Hexagon, Plus, FileStack, Edit2, Trash2, LayoutGrid,
     ImageIcon, Zap, ChevronDown, Search, Download
 } from 'lucide-react';
-import { jsPDF }from 'jspdf';
+import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
 
 import UserDropdown from '../components/UserDropdown';
@@ -22,11 +22,15 @@ import { storage, db } from "../firebase";
 // --- NEW API SERVICE IMPORTS ---
 import { sendChatMessage as saveToDB, fetchChatHistory } from '../services/api';
 
+// Constant for the resumable API endpoint
+const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:5001/api';
+
 export default function Dashboard({ user, isPro: globalIsPro }) {
     // --- 1. STATE ---
     const [searchParams, setSearchParams] = useSearchParams();
     const [mediaItems, setMediaItems] = useState([]);
     const [analyzing, setAnalyzing] = useState(false);
+    const [uploadProgress, setUploadProgress] = useState(0); // Tracking 5GB uploads
 
     const [report, setReport] = useState(null);
     const [reportId, setReportId] = useState(null);
@@ -44,6 +48,9 @@ export default function Dashboard({ user, isPro: globalIsPro }) {
     const [chatMessages, setChatMessages] = useState([]);
     const [chatInput, setChatInput] = useState('');
     const [chatLoading, setChatLoading] = useState(false);
+
+    // Media Popup
+    //const [showMediaModal, setShowMediaModal] = useState(false);
 
     const { settings, updateSettings } = useUserSettings();
     const darkMode = settings?.theme === 'dark';
@@ -67,7 +74,6 @@ export default function Dashboard({ user, isPro: globalIsPro }) {
 
     // --- 2. USAGE TRACKING LOGIC ---
     const checkMonthlyUsage = () => {
-        // If the user is Pro, we don't need to calculate or enforce limits
         if (!user || isPro) {
             setMonthlyUsage(0);
             return;
@@ -76,7 +82,6 @@ export default function Dashboard({ user, isPro: globalIsPro }) {
         const now = new Date();
         const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
 
-        // Filter pastReports for those created this month
         const thisMonthReports = pastReports.filter(report => {
             const rDate = report.createdAt?.toDate ? report.createdAt.toDate() : new Date(report.date);
             return rDate >= startOfMonth;
@@ -94,19 +99,16 @@ export default function Dashboard({ user, isPro: globalIsPro }) {
         };
 
         try {
-            // 1. Check AI API Key existence
             if (import.meta.env.VITE_GEMINI_API_KEY) {
                 status.api = { ok: true, msg: 'Connected' };
             } else {
                 throw new Error("API Key Missing");
             }
 
-            // 2. Check Firestore Connection
             if (db) {
                 status.database = { ok: true, msg: 'Cloud Sync Active' };
             }
 
-            // 3. Check Storage Connection
             if (storage) {
                 status.storage = { ok: true, msg: 'Assets Ready' };
             }
@@ -125,7 +127,7 @@ export default function Dashboard({ user, isPro: globalIsPro }) {
             if (!user) return;
             try {
                 console.log("📡 Fetching history for user:", user.uid);
-                const history = await fetchChatHistory();
+                const history = await fetchChatHistory(user.uid);
 
                 console.log("📥 Raw history from DB:", history);
                 
@@ -173,7 +175,6 @@ export default function Dashboard({ user, isPro: globalIsPro }) {
         }
     }, [user]);
 
-    // Recalculate usage whenever reports or pro status changes
     useEffect(() => {
         checkMonthlyUsage();
     }, [pastReports, isPro, user]);
@@ -182,7 +183,6 @@ export default function Dashboard({ user, isPro: globalIsPro }) {
         chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
     }, [chatMessages]);
 
-    // Close engine dropdown when clicking outside
     useEffect(() => {
         function handleClickOutside(event) {
             if (engineDropdownRef.current && !engineDropdownRef.current.contains(event.target)) {
@@ -202,9 +202,8 @@ export default function Dashboard({ user, isPro: globalIsPro }) {
             if (idFromUrl && user) {
                 loadReportById(idFromUrl);
             } else if (shouldUpgrade) {
-                // Open the pricing modal immediately
                 setShowPricing(true);
-                setSearchParams({}); // Clean the URL
+                setSearchParams({}); 
             } else if (searchParams.get('payment') === 'success') {
                 setSearchParams({});
             }
@@ -230,6 +229,7 @@ export default function Dashboard({ user, isPro: globalIsPro }) {
                 setReport({
                     projectName: data.projectName,
                     date: data.date,
+                    images: data.images || [],
                     summary: {
                         status: data.status,
                         accomplishments: data.accomplishments || [],
@@ -242,7 +242,7 @@ export default function Dashboard({ user, isPro: globalIsPro }) {
                 if (data.images && Array.isArray(data.images)) {
                     const restoredMedia = data.images.map(img => ({
                         id: Math.random().toString(36).substr(2, 9),
-                        preview: img.url, // Correctly mapping Firestore 'url' to UI 'preview'
+                        preview: img.url, 
                         type: img.type || 'image',
                         name: img.name || 'restored-asset',
                         uploadStatus: 'done' 
@@ -263,7 +263,6 @@ export default function Dashboard({ user, isPro: globalIsPro }) {
                 const genAI = new GoogleGenerativeAI(apiKey);
                 const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
 
-                // FIX: ENSURE FIRST MESSAGE IS 'user' ROLE
                 chatSessionRef.current = model.startChat({
                     history: [
                         { role: "user", parts: [{ text: `I am loading the report for "${data.projectName}". Please analyze the following context: Status: ${data.status}. Accomplishments: ${data.accomplishments.join(", ")}. Concerns: ${data.concerns.join(", ")}.` }] },
@@ -273,12 +272,17 @@ export default function Dashboard({ user, isPro: globalIsPro }) {
 
                 const openNotice = `📂 **Opened Report:** ${data.projectName}`;
 
-                // 4. Add system message WITH IMAGE to chat UI
+                const bulkGalleryMessage = {
+                    role: 'assistant',
+                    content: `📂 **Bulk Report Assets (${data.images.length} items):** Click any asset below to view full resolution.`,
+                    gallery: data.images 
+                };
+
                 setChatMessages(prev => {
                     const lastMsg = prev[prev.length - 1];
                     const reportNotice = `📂 **Opened Report:** ${data.projectName}`;
                     if (lastMsg?.content === reportNotice) {
-                        return prev; // Don't add it again if it's already there
+                        return prev; 
                     }
                     
                     return [
@@ -286,18 +290,22 @@ export default function Dashboard({ user, isPro: globalIsPro }) {
                         {
                             role: 'assistant',
                             content: `📂 **Opened Report:** ${data.projectName}`,
-                            image: thumbnail 
+                            image: data.images?.[0]?.url || null,
+                            gallery: data.images || []
+                            //image: thumbnail 
                         }
                     ];
                 });
 
-                //const openNotice = `📂 **Opened Report:** ${data.projectName}`;
-                //setChatMessages(prev => [...prev, { role: 'assistant', content: openNotice, image: thumbnail }]);
-
-                await saveToDB(`System: Open ${data.projectName}`, openNotice, thumbnail);
+                await saveToDB({
+                    userId: user.uid,
+                    reportId: docSnap.id,
+                    message: `System: Open ${data.projectName}`,
+                    aiResponse: openNotice,
+                    imageUrl: thumbnail
+                });
 
             } else {
-                console.warn("Report not found, clearing ID");
                 setSearchParams({});
             }           
         } catch (error) {
@@ -307,7 +315,6 @@ export default function Dashboard({ user, isPro: globalIsPro }) {
 
 
     // --- 5. DATABASE FUNCTIONS ---
-
     const handleRenameProject = async (newName) => {
         if (!reportId || !newName.trim()) return;
         try {
@@ -385,7 +392,69 @@ export default function Dashboard({ user, isPro: globalIsPro }) {
 
     // --- 6. HANDLERS ---
 
-    // SOLUTION B: Image Compression Helper
+    // The file upload logic
+const uploadLargeFile = async (file) => {
+    const baseUrl = (import.meta.env.VITE_API_URL || 'http://localhost:5001').replace(/\/$/, '');
+    const handshakeUrl = `${baseUrl}/api/storage/resumable-url`;
+
+    console.log("📡 Attempting handshake at:", handshakeUrl);
+
+    const response = await fetch(handshakeUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ 
+            fileName: file.name, 
+            contentType: file.type, 
+            userId: user?.uid 
+        })
+    });
+    
+    if (!response.ok) {
+        const text = await response.text();
+        console.error("🚨 Server responded with error:", text);
+        throw new Error("Cloud handshake failed. Ensure backend route exists.");
+    }
+
+    const { uploadUrl, publicUrl } = await response.json();
+
+    const startRes = await fetch(uploadUrl, {
+        method: 'POST',
+        headers: {
+            'x-goog-resumable': 'start',
+            'Content-Type': file.type
+        }
+    });
+
+    const sessionUrl = startRes.headers.get('Location');
+
+    // 2. Binary Stream to Google
+    return new Promise((resolve, reject) => {
+        const xhr = new XMLHttpRequest();
+        xhr.open('PUT', sessionUrl);
+        xhr.setRequestHeader('Content-Type', file.type);
+        
+        xhr.upload.onprogress = (e) => {
+            if (e.lengthComputable) {
+                const percent = Math.round((e.loaded / e.total) * 100);
+                setUploadProgress(percent === 100 ? 99 : percent);
+            }
+        };
+
+        xhr.onload = () => {
+            if (xhr.status === 200 || xhr.status === 201) {
+                setUploadProgress(100);
+                resolve(publicUrl);
+            } else {
+                reject(`GCS rejection: ${xhr.status}`);
+            }
+        };
+        xhr.onerror = () => reject('Network error');
+        xhr.send(file);
+    });
+};
+
+
+
     const compressImage = (file) => {
         return new Promise((resolve) => {
             const reader = new FileReader();
@@ -416,22 +485,64 @@ export default function Dashboard({ user, isPro: globalIsPro }) {
     };
 
     const handleFileUpload = (e) => {
-        if (!e.target.files) return;
-        const files = Array.from(e.target.files);
+    if (!e.target.files) return;
+    const files = Array.from(e.target.files);
 
-        const newItems = files.map(file => {
-            return {
-                id: Math.random().toString(36).substr(2, 9),
-                file,
-                preview: URL.createObjectURL(file),
-                type: file.type.startsWith('video/') ? 'video' : 'image',
-                name: file.name,
-                uploadStatus: 'pending'
+    if (mediaItems.length + files.length > 10) {
+        alert("⚠️ Maximum limit reached: You can upload up to 10 files per project.");
+        // Optional: Slice the incoming array to only fill the remaining spots
+        // const allowedFiles = incomingFiles.slice(0, 10 - mediaItems.length);
+        return; 
+    }
+
+    const newItems = files.map(file => {
+        const id = Math.random().toString(36).substr(2, 9);
+        const isVideo = file.type.startsWith('video/');
+        
+        // 1. If it's a video, start the frame capture process immediately
+        if (isVideo) {
+            const video = document.createElement('video');
+            const videoUrl = URL.createObjectURL(file);
+            video.src = videoUrl;
+            video.muted = true;
+            video.playsInline = true;
+
+            video.onloadeddata = () => {
+                video.currentTime = 1; // Skip the first second to avoid black frames
             };
-        });
 
-        setMediaItems(prev => [...prev, ...newItems]);
-    };
+            video.onseeked = () => {
+                const canvas = document.createElement('canvas');
+                canvas.width = video.videoWidth;
+                canvas.height = video.videoHeight;
+                const ctx = canvas.getContext('2d');
+                if (ctx) {
+                    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+                    const thumbnail = canvas.toDataURL('image/jpeg');
+                    
+                    // Update state safely using the functional update pattern
+                    setMediaItems(prev => prev.map(item => 
+                        item.id === id ? { ...item, preview: thumbnail } : item
+                    ));
+                }
+                URL.revokeObjectURL(videoUrl);
+            };
+        }
+
+        return {
+            id,
+            file,
+            // Default: use the purple icon if it's a video until the frame is ready
+            preview: isVideo ? null : URL.createObjectURL(file), 
+            type: isVideo ? 'video' : 'image',
+            name: file.name,
+            uploadStatus: 'pending',
+            uploadProgress: 0
+        };
+    });
+
+    setMediaItems(prev => [...prev, ...newItems]);
+};
 
     const removeMedia = (id) => {
         setMediaItems(prev => prev.filter(item => item.id !== id));
@@ -445,10 +556,11 @@ export default function Dashboard({ user, isPro: globalIsPro }) {
 
         if (mediaItems.length === 0) return;
         setAnalyzing(true);
+        setUploadProgress(0);
 
         try {
             const apiKey = import.meta.env.VITE_GEMINI_API_KEY;
-            if (!apiKey) throw new Error("API Key Missing");
+            //if (!apiKey) throw new Error("API Key Missing");
 
             const genAI = new GoogleGenerativeAI(apiKey);
             const model = genAI.getGenerativeModel({
@@ -457,17 +569,35 @@ export default function Dashboard({ user, isPro: globalIsPro }) {
             });
 
             const mediaParts = await Promise.all(mediaItems.map(async (item) => {
+                if (!item.file) return null;
+
+
                 if (item.file) {
-                    if (item.type === 'image') {
-                        // SOLUTION B: Compress images before sending to AI
-                        const compressedData = await compressImage(item.file);
-                        return { inlineData: { data: compressedData, mimeType: 'image/jpeg' } };
-                    } else {
+                    if (item.file.size > 50 * 1024 * 1024) {
+                        const cloudUrl = await uploadLargeFile(item.file);
+                        return { text: `[VIDEO_CONTEXT: ${cloudUrl}]` };
+                    }
+
+                    // For PDFs Documents (OCR)
+
+                    if (item.file.type === 'application/pdf') {
                         return new Promise((resolve) => {
                             const reader = new FileReader();
-                            reader.onload = () => resolve({ inlineData: { data: reader.result.split(',')[1], mimeType: item.file.type } });
+                            reader.onload = () => resolve({
+                                inlineData: {
+                                    data: reader.result.split(',')[1],
+                                    mimeType: 'application/pdf'
+                                }
+                            });
                             reader.readAsDataURL(item.file);
                         });
+                    }
+
+
+                    // For images
+                    if (item.type === 'image') {
+                        const compressed = await compressImage(item.file);
+                        return { inlineData: { data: compressed, mimeType: 'image/jpeg' } };
                     }
                 }
                 return null;
@@ -475,18 +605,20 @@ export default function Dashboard({ user, isPro: globalIsPro }) {
 
             const validMediaParts = mediaParts.filter(p => p !== null);
 
+            // SUCCESSFUL STREAM UPLOAD LOGIC
             const uploadedImages = await Promise.all(mediaItems.map(async (item) => {
                 if (!item.file) return { url: item.preview, type: item.type, name: item.name };
-
+                if (item.file.size > 50 * 1024 * 1024) return { url: item.preview, type: item.type, name: item.name, isLarge: true };
+                
                 const storageRef = ref(storage, `reports/${user.uid}/${Date.now()}_${item.name}`);
                 await uploadBytes(storageRef, item.file);
                 const url = await getDownloadURL(storageRef);
                 return { url, type: item.type, name: item.name };
             }));
 
-            const prompt = `Analyze these files. Return JSON: { "projectName": "${projectName}", "summary": { "status": "on_track", "accomplishments": [], "concerns": [], "nextSteps": [] } }`;
+            const prompt = `Analyze these ${mediaItems.length} assets for construction progress. Return JSON: { "projectName": "${projectName || 'Untitled'}", "summary": { "status": "on_track", "accomplishments": [], "concerns": [], "nextSteps": [] } }`;
 
-            const result = await model.generateContent([prompt, ...validMediaParts]);
+            const result = await model.generateContent([prompt, ...validMediaParts.filter(Boolean)]);
             const reportData = JSON.parse(result.response.text());
 
             setReport({
@@ -512,13 +644,15 @@ export default function Dashboard({ user, isPro: globalIsPro }) {
             }]);
 
             try {
-                // Sync analysis to Cloud SQL database
                 const firstThumb = uploadedImages.length > 0 ? uploadedImages[0].url : null;
-                await saveToDB(
-                    `New Analysis: ${data.projectName}`, 
-                    `📂 **Opened Report:** ${data.projectName}`,
-                    thumbnail // Added image support to the save call
-                );
+                const finalPName = reportData.projectName || projectName;
+                await saveToDB({
+                    userId: user.uid,
+                    reportId: reportData.id || null, // Ensure you have the report ID here
+                    message: `New Analysis: ${finalPName}`,
+                    aiResponse: `📂 **Opened Report:** ${finalPName}`,
+                    imageUrl: firstThumb
+                });
                 console.log("✅ Analysis record synced to Cloud SQL");
             } catch (dbErr) {
                 console.error("❌ Failed to sync analysis to database:", dbErr);
@@ -533,6 +667,7 @@ export default function Dashboard({ user, isPro: globalIsPro }) {
             console.error(error);
         } finally {
             setAnalyzing(false);
+            setUploadProgress(0);
         }
     };
 
@@ -547,7 +682,7 @@ export default function Dashboard({ user, isPro: globalIsPro }) {
     };
 
 
-    // --- 7. AI AGENT LOGIC (WITH CLOUD SQL SYNC) ---
+    // --- 7. AI AGENT LOGIC ---
     const sendChatMessage = async () => {
         if (!chatInput.trim() || chatLoading) return;
 
@@ -560,15 +695,14 @@ export default function Dashboard({ user, isPro: globalIsPro }) {
             const apiKey = import.meta.env.VITE_GEMINI_API_KEY;
             const genAI = new GoogleGenerativeAI(apiKey);
 
-            // 1. RE-INTEGRATED MODEL MAPPING
             const modelMapping = {
-                'Fast': 'gemini-2.5-flash-lite', // Stable lite/fast version
+                'Fast': 'gemini-2.5-flash-lite', 
                 'Auto': 'gemini-2.5-flash',
                 'Pro': 'gemini-2.5-pro'
             };
             const modelName = modelMapping[selectedEngine] || 'gemini-2.5-flash';
 
-            // 2. HIGH-FIDELITY DATA HARVESTING
+            // HIGH-FIDELITY DATA HARVESTING
             const reportData = report ? {
                 projectName: report.projectName,
                 status: report.summary.status,
@@ -580,13 +714,13 @@ export default function Dashboard({ user, isPro: globalIsPro }) {
             const systemInstruction = `
             You are Rukmer AI, an advanced enterprise intelligence analyst.
             Rukmer AI - Senior Construction, Real Estate, and Insurance Analyst
-            You are a proprietary intelligence engine developed by Rukmer Inc. You specialize in forensic site analysis, risk mitigation, and executive reporting.
-            
+            Proprietary intelligence engine by Rukmer Inc.
+
             # OPERATING GUIDELINES
             - **Accuracy First**: Only report findings present in the [ACTIVE REPORT DATA]. 
             - **Analytical Tone**: Maintain a precise, corporate, and objective tone. Use engineering-appropriate language (e.g., "structural compromise," "mitigation strategy," "occupancy timeline").
             - **No Hallucinations**: If data is missing for a specific query, state: "The current report does not contain data on [X]. I recommend a follow-up site inspection."
-
+            
             [CRITICAL CONTEXT: ACTIVE REPORT]
             ${report ? `Project: ${report.projectName}\nData: ${JSON.stringify(report.summary, null, 2)}` : "NO REPORT LOADED. DO NOT HALLUCINATE."}
 
@@ -617,6 +751,7 @@ export default function Dashboard({ user, isPro: globalIsPro }) {
             - **Direct Answers**: If a report is loaded, answer the user's question immediately without introductory filler like "Based on the report..."
             - **Switching**: If the user asks to open a project, respond ONLY with: [[LOAD:ID]].
 
+            Identity: Rukmer AI. Switch reports using [[LOAD:ID]].
             `;
 
             const model = genAI.getGenerativeModel({
@@ -625,10 +760,10 @@ export default function Dashboard({ user, isPro: globalIsPro }) {
             });
 
             // 3. STABLE HISTORY: Always leading with 'user'
-            let history = chatMessages.slice(-3).map(m => ({
+            let history = chatMessages.slice(-6).map(m => ({
                 role: m.role === 'user' ? 'user' : 'model',
-                parts: [{ text: m.content || '' }]
-            })).filter(h => h.parts[0].text !== '');
+                parts: [{ text: typeof m.content === 'string' ? m.content : "User shared an asset." }]
+            }));
 
             if (history.length > 0 && history[0].role !== 'user') {
                 history = history.slice(1);
@@ -640,14 +775,21 @@ export default function Dashboard({ user, isPro: globalIsPro }) {
 
             const isLoadCommand = responseText.includes('[[LOAD:');
 
-            // --- SYNC WITH BACKEND (Cloud SQL) ---
+           // --- SYNC WITH BACKEND (Cloud SQL) ---
+
             if (!responseText.includes('[[LOAD:')) {
                 try {
-                    await saveToDB(msg, responseText); 
+                    await saveToDB({
+                        userId: user.uid,
+                        reportId: report?.id || null,
+                        message: msg,
+                        aiResponse: responseText,
+                        imageUrl: null
+                    });
+                    console.log("✅ DB Sync Success. Saved Row ID:", result.id);
                 } catch (dbErr) {
                     console.warn("DB Sync failed but AI responded:", dbErr);
                 }
-
             } else {
                 console.log("Skipping DB save for Agent Command to prevent crash on refresh.");
             }
@@ -664,8 +806,6 @@ export default function Dashboard({ user, isPro: globalIsPro }) {
             } else {
                 setChatMessages(prev => [...prev, { role: 'assistant', content: responseText }]);
             }
-
-
         } catch (error) {
             console.error("Chat Logic Error:", error);
             setChatMessages(prev => [...prev, { role: 'assistant', content: "Rukmer AI encountered a temporary connection issue." }]);
@@ -676,81 +816,70 @@ export default function Dashboard({ user, isPro: globalIsPro }) {
 
     const downloadPDF = () => {
         if (!report || !report.summary) {
-        alert("Please analyze a site or open a report first.");
-        return;
-    }
+            alert("Please analyze a site or open a report first.");
+            return;
+        }
 
-    try {
-        const doc = new jsPDF();
-        
-        // --- Header Section ---
-        doc.setFontSize(22);
-        doc.setTextColor(124, 58, 237); // Rukmer Purple
-        doc.text("RUKMER AI - SITE ANALYSIS", 14, 22);
-        
-        doc.setFontSize(10);
-        doc.setTextColor(100, 116, 139);
-        doc.text(`Project: ${report.projectName || "Untitled"}`, 14, 30);
-        doc.text(`Date: ${report.date || new Date().toLocaleDateString()}`, 14, 35);
+        try {
+            const doc = new jsPDF();
 
-        // --- Data Prep (Fixed Variable Names) ---
-        const accList = (report.summary.accomplishments || []).join('\n• ');
-        const conList = (report.summary.concerns || []).join('\n• ');
-        const nxtList = (report.summary.nextSteps || []).join('\n• ');
+            // --- Header Section ---
+            doc.setFontSize(22);
+            doc.setTextColor(124, 58, 237);  // Rukmer Purple
+            doc.text("RUKMER AI - SITE ANALYSIS", 14, 22);
+            
+            doc.setFontSize(10);
+            doc.setTextColor(100, 116, 139);
+            doc.text(`Project: ${report.projectName || "Untitled"}`, 14, 30);
+            doc.text(`Date: ${report.date || new Date().toLocaleDateString()}`, 14, 35);
 
-        // --- MODERN AUTOTABLE CALL ---
-        autoTable(doc, {
-            startY: 45,
-            head: [['SECTION', 'DETAILS']],
-            body: [
-                ['STATUS', (report.summary.status || 'N/A').toUpperCase()],
-                ['ACCOMPLISHMENTS', accList ? `• ${accList}` : 'None listed'],
-                ['CONCERNS', conList ? `• ${conList}` : 'None listed'],
-                ['NEXT STEPS', nxtList ? `• ${nxtList}` : 'None listed']
-            ],
-            theme: 'grid',
-            headStyles: { fillColor: [124, 58, 237] },
-            styles: { fontSize: 10, cellPadding: 5, overflow: 'linebreak' },
-            columnStyles: {
-                0: { cellWidth: 40, fontStyle: 'bold' },
-                1: { cellWidth: 'auto' }
-            }
-        });
+            // --- Data Prep (Fixed Variable Names) ---
 
-        // Save the file
-        doc.save(`${(report.projectName || 'Report').replace(/\s+/g, '_')}.pdf`);
-        
-    } catch (err) {
-        console.error("PDF GENERATION FAILED:", err);
-        alert(`Error: ${err.message}`);
-    }
+            const accList = (report.summary.accomplishments || []).join('\n• ');
+            const conList = (report.summary.concerns || []).join('\n• ');
+            const nxtList = (report.summary.nextSteps || []).join('\n• ');
+
+            // --- MODERN AUTOTABLE CALL ---
+
+            autoTable(doc, {
+                startY: 45,
+                head: [['SECTION', 'DETAILS']],
+                body: [
+                    ['STATUS', (report.summary.status || 'N/A').toUpperCase()],
+                    ['ACCOMPLISHMENTS', accList ? `• ${accList}` : 'None listed'],
+                    ['CONCERNS', conList ? `• ${conList}` : 'None listed'],
+                    ['NEXT STEPS', nxtList ? `• ${nxtList}` : 'None listed']
+                ],
+                theme: 'grid',
+                headStyles: { fillColor: [124, 58, 237] },
+                styles: { fontSize: 10, cellPadding: 5, overflow: 'linebreak' },
+                columnStyles: {
+                    0: { cellWidth: 40, fontStyle: 'bold' },
+                    1: { cellWidth: 'auto' }
+                }
+            });
+
+            // Save the file
+
+            doc.save(`${(report.projectName || 'Report').replace(/\s+/g, '_')}.pdf`);
+        } catch (err) {
+            console.error("PDF GENERATION FAILED:", err);
+            alert(`Error: ${err.message}`);
+        }
     };
 
     const handleSoftReset = async () => {
-        // if (!window.confirm("Start a new conversation?")) return;
-
         setChatMessages([]);
         if (chatSessionRef.current) chatSessionRef.current = null;
-    
-   // // 2. Reset the AI session so it doesn't remember the previous 
-    //if (chatSessionRef.current) {
-    //    chatSessionRef.current = null;
-   // }
-
         try {
-        // 2. THE CRITICAL STEP: Call the API to update is_active in PostgreSQL
-        const response = await fetch('http://localhost:5001/api/chat/hide', {
-            method: 'PUT',
-            headers: { 'Content-Type': 'application/json' }
-        });
-
-        if (response.ok) {
-            console.log("✅ Database successfully hid the messages.");
+            const response = await fetch(`${API_BASE_URL}/chat/hide`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' }
+            });
+            if (response.ok) console.log("✅ Database successfully hid the messages.");
+        } catch (error) {
+            console.error("❌ Failed to reach backend for reset:", error);
         }
-    } catch (error) {
-        console.error("❌ Failed to reach backend for reset:", error);
-    }
-
     };
 
     const resetApp = () => {
@@ -927,13 +1056,59 @@ export default function Dashboard({ user, isPro: globalIsPro }) {
                                         ) : (
                                             <div className="space-y-4">
                                                 <div className="grid grid-cols-4 gap-2 mb-4">
-                                                    {mediaItems.map(item => (
-                                                        <div key={item.id} className="relative aspect-square rounded-lg overflow-hidden border border-gray-200">
-                                                            <img src={item.preview} className="w-full h-full object-cover" alt="preview" />
-                                                            <button onClick={() => removeMedia(item.id)} className="absolute top-1 right-1 bg-red-500 p-1 rounded-full text-white"><X size={10} /></button>
+                                                    {mediaItems.map((item) => (
+                                                        <div key={item.id} className="relative aspect-square rounded-lg overflow-hidden border border-gray-200 bg-black/10 flex items-center justify-center">
+                                                            {item.preview ? (
+                                                                <img
+                                                                src={item.preview}
+                                                                className="w-full h-full object-cover"
+                                                                alt="preview"
+                                                                />
+                                                            ) : (
+                                                            <div className="flex flex-col items-center justify-center w-full h-full bg-[#1a1a1a]">
+                                                                <Loader2 className="animate-spin text-[#7c3aed]" size={20} />
+                                                                </div>
+                                                            )}
+                                                            <button
+                                                            onClick={() => removeMedia(item.id)}
+                                                            className="absolute top-1 right-1 bg-red-500 p-1 rounded-full text-white shadow-lg z-10 hover:bg-red-600 transition-colors"
+                                                            >
+                                                                <X size={10} />
+                                                                </button>
+                                                                </div>
+                                                            ))}
+                                                            
+                                                            {mediaItems.length > 0 && mediaItems.length < 10 && (
+                                                                <div className="flex flex-col gap-1">
+                                                                <button
+                                                                onClick={() => fileInputRef.current?.click()}
+                                                                className="relative aspect-square rounded-lg border-2 border-dashed border-gray-300 dark:border-[#333] flex flex-col items-center justify-center gap-1 hover:border-[#7c3aed] hover:bg-[#7c3aed]/5 transition-all group"
+                                                                >
+                                                                    <Plus size={20} className="text-gray-400 group-hover:text-[#7c3aed]" />
+                                                                    <span className="text-[10px] font-bold text-gray-400 group-hover:text-[#7c3aed]">ADD</span>
+                                                                    </button>
+                                                                    <span className="text-[9px] text-center text-gray-500 font-medium">
+                                                                        {10 - mediaItems.length} slots left
+                                                                        </span>
+                                                                        </div>
+                                                                )}
+                                                            </div>
+
+                                                {/* Upload Progress Bar */}
+                                                {analyzing && uploadProgress > 0 && uploadProgress < 100 && (
+                                                    <div className="mb-4 px-2">
+                                                        <div className="flex justify-between text-[10px] mb-1 font-bold">
+                                                           {/* <span>Committing to Google Cloud...</span> */}
+                                                            <span>{uploadProgress}%</span>
                                                         </div>
-                                                    ))}
-                                                </div>
+                                                        <div className="w-full bg-gray-200 dark:bg-[#333] rounded-full h-2 shadow-inner overflow-hidden">
+                                                            <div 
+                                                                className="bg-gradient-to-r from-[#7c3aed] to-[#2563eb] h-full transition-all duration-500 ease-out" 
+                                                                style={{ width: `${uploadProgress}%` }}
+                                                            ></div>
+                                                        </div>
+                                                    </div>
+                                                )}
 
                                                 {!isPro && monthlyUsage >= 5 ? (
                                                     <div className="p-4 rounded-xl bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 text-center">
@@ -953,7 +1128,12 @@ export default function Dashboard({ user, isPro: globalIsPro }) {
                                                         disabled={analyzing}
                                                         className="w-full bg-[#7c3aed] hover:bg-[#6d28d9] text-white py-3.5 rounded-xl font-bold transition flex justify-center items-center gap-2 shadow-lg"
                                                     >
-                                                        {analyzing ? <Loader2 className="animate-spin" /> : (
+                                                        {analyzing ? (
+                                                            <>
+                                                                <Loader2 className="animate-spin" size={18} />
+                                                                <span>{uploadProgress > 0 ? `Uploading (${uploadProgress}%)` : 'Processing...'}</span>
+                                                            </>
+                                                        ) : (
                                                             <>
                                                                 <Sparkles size={18} />
                                                                 {isPro ? "Generate Pro Report" : `Generate Report (${5 - monthlyUsage} left)`}
@@ -1017,7 +1197,6 @@ export default function Dashboard({ user, isPro: globalIsPro }) {
                                 </div>
                             </div>
                             
-                            {/* --- LOCAL RESET BUTTON --- */}
                             <button
                                 onClick={handleSoftReset}
                                 className={`p-2 rounded-lg transition-colors flex items-center gap-2 text-xs font-bold ${
@@ -1041,16 +1220,91 @@ export default function Dashboard({ user, isPro: globalIsPro }) {
                             ) : (
                                 chatMessages.map((msg, i) => (
                                     <div key={i} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'} animate-in slide-in-from-bottom-2`}>
-                                        <div className={`max-w-[85%] p-4 rounded-2xl shadow-sm leading-relaxed ${msg.role === 'user' ? theme.chatUser : theme.chatAI}`}>
-                                            {msg.image && (
-                                                <div className="mb-3 rounded-lg overflow-hidden border border-white/20 shadow-sm">
-                                                    <img src={msg.image} alt="Report Content" className="w-full h-auto max-h-48 object-cover" />
-                                                </div>
-                                            )}
-                                            {/* SAFETY: Check for msg.content before splitting to prevent crash */}
-                                            {msg.content && msg.content.toString().split('\n').map((line, idx) => <p key={idx} className="mb-1">{line}</p>)}
-                                        </div>
-                                    </div>
+                                        <div className={`max-w-[85%] p-4 rounded-2xl ${msg.role === 'user' ? theme.chatUser : theme.chatAI}`}>
+                                            
+                                            {msg.gallery && msg.gallery.length > 0 ? (
+                                                <div className="grid grid-cols-2 gap-2 mb-3">
+                                                    {msg.gallery.map((asset, idx) => (
+                                                        <div 
+                                                        key={idx} 
+                                                        className="relative aspect-square rounded-xl overflow-hidden border border-white/10 bg-[#111] cursor-pointer hover:opacity-80 transition-opacity group"
+                                                        onClick={() => window.open(asset.url, '_blank')}
+                                                        >
+                                                            <img 
+                                                            src={asset.url}
+                                                            alt={`Asset ${idx + 1}`}
+                                                            className="w-full h-full object-cover" 
+                                                            />
+                                                            
+                                                            {asset.type === 'video' && (
+                                                                <div className="absolute inset-0 flex items-center justify-center bg-black/20">
+                                                                    <FileVideo size={20} className="text-white drop-shadow-lg" />
+                                                                    </div>
+                                                                )}
+                                                                <div className="absolute bottom-0 inset-x-0 p-1.5 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity">
+                                                                <p className="text-[8px] text-white truncate text-center uppercase font-bold">
+                                                                    {asset.name || `Asset ${idx + 1}`}
+                                                                    </p>
+                                                                    </div>
+                                                                    </div>
+                                                                ))}
+                                                                </div>
+                                                                ) : (
+                                                                    
+                                                                    msg.image && (
+                                                                    <div className="mb-3 rounded-xl overflow-hidden border border-white/10 shadow-lg bg-[#111] min-h-[120px] flex flex-col items-center justify-center">
+                                                                        {msg.image.toLowerCase().match(/\.(mp4|webm|ogg|mov|m4v)/) || msg.image.includes('video') ? (
+                                                                            <div
+                                                                            className="w-full p-6 flex flex-col items-center gap-3 cursor-pointer hover:bg-white/5 transition-colors"
+                                                                            onClick={() => window.open(msg.image, '_blank')}
+                                                                            >
+                                                                                <div className="p-4 bg-[#7c3aed]/20 rounded-full">
+                                                                                <FileVideo className="text-[#7c3aed]" size={32} />
+                                                                                </div>
+                                                                                <span className="text-[10px] font-bold text-gray-400 uppercase tracking-widest text-center">
+                                                                                    Video Asset<br/>
+                                                                                    <span className="text-[#7c3aed]">Click to Play</span>
+                                                                                    </span>
+                                                                                    </div>
+                                                                                    ) : msg.image.toLowerCase().includes('.pdf') ? (
+                                                                                    <div
+                                                                                    className="w-full p-6 flex flex-col items-center gap-3 cursor-pointer hover:bg-white/5 transition-colors"
+                                                                                    onClick={() => window.open(msg.image, '_blank')}
+                                                                                    >
+                                                                                        <div className="p-4 bg-red-500/20 rounded-full">
+                                                                                        <FileText className="text-red-500" size={32} />
+                                                                                        </div>
+                                                                                        <span className="text-[10px] font-bold text-gray-400 uppercase tracking-widest text-center">
+                                                                                            Document Asset<br/>
+                                                                                            <span className="text-red-500">Click to View</span>
+                                                                                            </span>
+                                                                                            </div>
+                                                                                            ) : (
+                                                                                            <img
+                                                                                            src={msg.image}
+                                                                                            alt="Report Content"
+                                                                                            className="w-full h-auto max-h-64 object-cover"
+                                                                                            onError={(e) => {
+                                                                                                e.target.style.display = 'none';
+                                                                                                e.target.parentNode.innerHTML = `
+                                                                                                <div class="p-6 flex flex-col items-center gap-2">
+                                                                                                <div class="p-3 bg-gray-500/20 rounded-full">
+                                                                                                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="text-gray-400"><path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"></path><polyline points="14 2 14 8 20 8"></polyline></svg>
+                                                                                                </div>
+                                                                                                <span class="text-[9px] font-bold text-gray-500 uppercase">Asset Preview</span>
+                                                                                                </div>
+                                                                                                `;
+                                                                                            }}
+                                                                                        />
+                                                                                    )}
+                                                                                </div>
+                                                                            )
+                                                                        )}
+                                                                    {msg.content && msg.content.toString().split('\n').map((line, idx) => (
+                                                                        <p key={idx} className="mb-1 text-sm">{line}</p>
+                                                                        ))}
+                                                                        </div>
+                                                                    </div>
                                 ))
                             )}
                             {chatLoading && <div className="flex justify-start items-center gap-3"><Loader2 className="animate-spin text-[#7c3aed]" size={16} /> <span className="text-sm">Processing...</span></div>}

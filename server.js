@@ -3,7 +3,9 @@ import cors from 'cors';
 import dotenv from 'dotenv';
 import pkg from 'pg';
 // This imports the pool you already configured in db.js
-import pool from './backend/config/db.js'; 
+import pool from './backend/config/db.js';
+import { Storage } from '@google-cloud/storage';
+import path from 'path';
 
 // 1. Load Environment Variables
 dotenv.config();
@@ -11,6 +13,11 @@ dotenv.config();
 const { Pool } = pkg;
 const app = express();
 const PORT = process.env.PORT || 5001 || 8080;
+
+const storage = new Storage({
+    keyFilename: path.join(process.cwd(), 'service-account.json'), // Path to your key
+    projectId: 'rukmer-saas' // Your GCP Project ID
+});
 
 // 2. Database Config
 const isProduction = process.env.NODE_ENV === 'production' || !!process.env.K_SERVICE;
@@ -37,7 +44,7 @@ app.use(cors({
     "http://localhost:5173", "https://rukmer-saas-service-361739908342.us-central1.run.app"
   ],
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization']
+  allowedHeaders: ['Content-Type', 'Authorization', 'x-goog-resumable']
 }));
 app.use(express.json());
 
@@ -58,23 +65,30 @@ app.get('/health', (req, res) => res.json({ status: 'ok' }));
 
 app.post('/api/chat', async (req, res) => {
     try {
-        const { message, aiResponse, imageUrl } = req.body; 
-        
-        const query = 'INSERT INTO chats (user_message, ai_reply, image_url) VALUES ($1, $2, $3) RETURNING *';
-        const values = [message, aiResponse, imageUrl || null];
-        
-        const result = await pool.query(query, values);
-        console.log("✅ Chat Saved to Cloud SQL:", result.rows[0].id);
-        res.json(result.rows[0]);
+        const { userId, reportId, message, aiResponse, imageUrl } = req.body;
+        console.log("Incoming chat POST:", { userId,reportId, message, aiResponse, imageUrl });
+        const query = 'INSERT INTO chats (user_id, report_id, user_message, ai_reply, image_url, is_active) VALUES ($1, $2, $3, $4, $5, TRUE) RETURNING *';
+        const values = [userId, reportId || null, message, aiResponse, imageUrl || null];
+        try {
+            const result = await pool.query(query, values);
+            console.log("✅ Chat Saved to Cloud SQL:", userId, "Row:", result.rows[0]);
+            res.json(result.rows[0]);
+        } catch (dbErr) {
+            console.error("🚨 DB Insert Error:", dbErr.message);
+            console.error("Query:", query);
+            console.error("Values:", values);
+            res.status(500).json({ error: dbErr.message });
+        }
     } catch (error) {
-        console.error("🚨 DB Insert Error:", error.message);
+        console.error("🚨 Handler Error:", error);
         res.status(500).json({ error: error.message });
     }
 });
 
 app.get('/api/history', async (req, res) => {
     try {
-        const result = await pool.query('SELECT * FROM chats WHERE is_active = TRUE ORDER BY created_at ASC LIMIT 30');
+        const { userId } = req.query;
+        const result = await pool.query('SELECT * FROM chats WHERE user_id = $1 AND is_active = TRUE ORDER BY created_at ASC LIMIT 30');
         console.log(`Sent ${result.rowCount} rows to frontend`);
         res.json(result.rows);
     } catch (error) {
@@ -95,6 +109,110 @@ app.put('/api/chat/hide', async (req, res) => {
     }
 });
 
+// backend/server.js
+// CRITICAL FIX: Proper resumable upload URL generation
+app.post('/api/storage/resumable-url', async (req, res) => {
+    try {
+        const { fileName, contentType, userId } = req.body;
+
+        const bucket = storage.bucket('rukmer-saas-data'); 
+        const filePath = `uploads/${userId}/${Date.now()}_${fileName}`;
+        const file = bucket.file(filePath);
+
+        console.log(`📋 Generating resumable URL for: ${fileName}`);
+        console.log(`📍 Destination: ${filePath}`);
+        console.log(`📦 Content-Type: ${contentType}`);
+
+        // CRITICAL: Use 'resumable' action with proper headers
+        const [url] = await file.getSignedUrl({
+            version: 'v4',
+            action: 'resumable',  // This enables chunked uploads
+            expires: Date.now() + 3 * 60 * 60 * 1000, // 3 hours (enough for large uploads)
+            contentType: contentType,
+            extensionHeaders: {
+                'x-goog-resumable': 'start'  // Required header for resumable uploads
+            }
+        });
+
+        const publicUrl = `https://storage.googleapis.com/${bucket.name}/${filePath}`;
+
+        console.log(`✅ Handshake Success for: ${fileName}`);
+
+        console.log(`✅ Resumable URL generated successfully`);
+        console.log(`🔗 Upload URL: ${url.substring(0, 60)}...`);
+        console.log(`🌐 Public URL: ${publicUrl}`);
+
+        res.json({ 
+            uploadUrl: url, 
+            publicUrl: `https://storage.googleapis.com/rukmer-saas-data/${filePath}` 
+        });
+
+    } catch (error) {
+        console.error("🚨 GCS Resumable URL Error:", error.message);
+        console.error("Stack:", error.stack);
+        res.status(500).json({ 
+            error: "Failed to generate resumable upload URL",
+            details: error.message,
+            bucket: 'rukmer-saas-data'
+        });
+    }
+});
+
+// NEW: Check upload status (optional but helpful for debugging)
+// backend/server.js
+app.post('/api/storage/resumable-url', async (req, res) => {
+    try {
+        const { fileName, contentType, userId } = req.body;
+        
+        const bucket = storage.bucket('rukmer-saas-data'); 
+        const filePath = `uploads/${userId}/${Date.now()}_${fileName}`;
+        const file = bucket.file(filePath);
+
+        // V4 Signing enabled chunked/resumable uploads for 5GB stability
+        const [url] = await file.getSignedUrl({
+            version: 'v4',
+            action: 'resumable', 
+            expires: Date.now() + 60 * 60 * 1000, // 1 hour session
+            contentType: contentType,
+        });
+
+        res.json({ 
+            uploadUrl: url, 
+            publicUrl: `https://storage.googleapis.com/rukmer-saas-data/${filePath}` 
+        });
+    } catch (error) {
+        console.error("🚨 Handshake Error:", error.message);
+        res.status(500).json({ error: "Cloud signing failed" });
+    }
+});
+
+// NEW: List uploaded files for a user (helpful for debugging)
+app.get('/api/storage/list/:userId', async (req, res) => {
+    try {
+        const { userId } = req.params;
+        const prefix = `uploads/${userId}/`;
+        
+        const bucket = storage.bucket('rukmer-saas-data');
+        const [files] = await bucket.getFiles({ prefix });
+        
+        const fileList = files.map(file => ({
+            name: file.name,
+            size: file.metadata.size,
+            contentType: file.metadata.contentType,
+            created: file.metadata.timeCreated,
+            publicUrl: `https://storage.googleapis.com/${bucket.name}/${file.name}`
+        }));
+
+        console.log(`📂 Listed ${fileList.length} files for user: ${userId}`);
+        res.json({ files: fileList, count: fileList.length });
+    } catch (error) {
+        console.error("List files error:", error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+
+
 // 5. THE FIX: The Diagnostic and Server Start
 const runSetup = async () => {
     try {
@@ -107,6 +225,19 @@ const runSetup = async () => {
         console.log("Server Time:", res.rows[0].now);
         console.log("---------------------------");
 
+        // Test GCS connection
+        try {
+            const bucket = storage.bucket('rukmer-saas-data');
+            const [exists] = await bucket.exists();
+            if (exists) {
+                console.log("✅ Connected to GCS Bucket: rukmer-saas-data");
+            } else {
+                console.warn("⚠️ GCS Bucket 'rukmer-saas-data' not found!");
+            }
+        } catch (gcsError) {
+            console.error("❌ GCS Connection Error:", gcsError.message);
+        }
+
     } catch (err) {
         console.error("❌ Database Diagnostic Failed:", err.message);
     }
@@ -114,6 +245,9 @@ const runSetup = async () => {
     app.listen(PORT, () => {
         console.log(`🚀 Rukmer Backend running on port ${PORT}`);
         console.log(`Environment: ${isProduction ? 'Production' : 'Development'}`);
+        console.log(`📡 API Base: http://localhost:${PORT}/api`);
+        console.log(`📦 GCS Bucket: rukmer-saas-data`);
+        console.log(`\n🔧 Resumable uploads enabled for files up to 5GB`);
     });
 };
 

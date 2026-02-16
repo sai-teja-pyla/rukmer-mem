@@ -28,6 +28,9 @@ Thumbs.db          # Windows
 .firebase/
 firebase-debug.log
 
+
+service-account.json
+
 App1.jsx
 dash.jsx
 dd.jsx
@@ -35,3 +38,5 @@ subpage.jsx
 fb.js
 db1.js
 ser.js
+Dashboard_FIXED.jsx
+server_FIXED.js

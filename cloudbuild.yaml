@@ -12,6 +12,7 @@ steps:
       '--build-arg', 'VITE_FIREBASE_MESSAGING_SENDER_ID=$_VITE_FIREBASE_MESSAGING_SENDER_ID',
       '--build-arg', 'VITE_FIREBASE_APP_ID=$_VITE_FIREBASE_APP_ID',
       '--build-arg', 'VITE_FIREBASE_MEASUREMENT_ID=$_VITE_FIREBASE_MEASUREMENT_ID',
+      '--build-arg', 'VITE_API_URL=$_VITE_API_URL',
       '.'
     ]
 
@@ -52,3 +53,4 @@ substitutions:
     _DB_NAME: ''
     _DB_PASSWORD: ''
     _INSTANCE_CONNECTION_NAME: ''
+    _VITE_API_URL: ''

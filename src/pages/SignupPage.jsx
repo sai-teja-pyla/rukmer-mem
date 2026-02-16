@@ -65,18 +65,29 @@ export default function SignupPage() {
     <div className="min-h-screen flex items-center justify-center bg-gray-50 p-4">
       <div className="w-full max-w-md bg-white p-8 rounded-2xl shadow-sm border border-gray-100">
         
-        <div className="text-center mb-8">
-            <h2 className="text-2xl font-bold text-gray-900">Create Account</h2>
-            <p className="text-xs text-gray-500 mt-2">By signing up, you agree to our{' '}
-              <a href="/privacy.html" target="_blank" rel="noopener noreferrer" className="text-[#5b67e8] hover:underline font-semibold">
-                Terms of Service
-              </a>
-              {' '}and{' '}
-              <a href="/privacy.html" target="_blank" rel="noopener noreferrer" className="text-[#5b67e8] hover:underline font-semibold">
-                Privacy Policy
-              </a>
-            </p>
-        </div>
+        {/* --- Terms & Privacy Text --- */}
+        <div className="mt-6 text-center border-t border-gray-100 pt-4">
+          <p className="text-xs text-gray-500">
+            By signing up, you agree to our{' '}
+            <a 
+              href="/privacy.html" 
+              target="_blank" 
+              rel="noopener noreferrer" 
+              className="text-[#5b67e8] hover:underline font-semibold transition-colors"
+            >
+              Terms of Service
+            </a>
+            {' '}and{' '}
+            <a 
+              href="/privacy.html" 
+              target="_blank" 
+              rel="noopener noreferrer" 
+              className="text-[#5b67e8] hover:underline font-semibold transition-colors"
+          >
+            Privacy Policy
+          </a>.
+        </p>
+      </div>
 
         {error && (
             <div className="mb-4 p-3 bg-red-50 text-red-600 text-sm rounded-lg border border-red-100">

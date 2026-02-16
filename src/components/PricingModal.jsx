@@ -8,15 +8,15 @@ export default function PricingModal({ isOpen, onClose, onCheckout }) {
 
   // Replace these with your actual IDs from the Stripe Dashboard
   const PRICE_IDS = {
-    monthly: 'price_1Sz7s82NaqjgxJZ3lEwj7RkC',
-    yearly: 'price_1Sz7s82NaqjgxJZ32GnHY47G'
+    monthly: 'price_1Sz9K72NaqjgxJZ3NKo6BAuK',
+    yearly: 'price_1Sz9K72NaqjgxJZ3hLY1TTa0'
   };
 
   const features = [
     "Unlimited AI Asset Reports",
     "Advanced Enterprise VLM Analysis",
     "Priority Chat Support",
-    "500MB+ Large File Uploads",
+    "5GB Large File Uploads",
     "Custom PDF Export Branding"
   ];
 

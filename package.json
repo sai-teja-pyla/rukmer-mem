@@ -12,8 +12,10 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@google-cloud/storage": "^7.19.0",
     "@google/generative-ai": "^0.24.1",
     "@react-oauth/google": "^0.13.4",
+    "axios": "^1.13.5",
     "cors": "^2.8.6",
     "dotenv": "^17.2.3",
     "express": "^5.2.1",
