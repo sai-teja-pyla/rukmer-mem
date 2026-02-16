@@ -40,9 +40,7 @@ const dbConfig = {
 // 3. Middleware
 app.use(cors({
   // Refined: Allow both local and production URLs to prevent CORS errors
-  origin: [
-    "http://localhost:5173", "https://rukmer-backend-361739908342.us-central1.run.app"
-  ],
+  origin: '*',
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'x-goog-resumable']
 }));
@@ -80,7 +78,7 @@ app.post('/api/chat', async (req, res) => { // <--- WAS likely '/chat'
     res.json(result.rows[0]);
   } catch (err) {
     console.error("🚨 Chat Error:", err);
-    res.status(500).json({ error: err.message });
+    res.status(200).json({ error: err.message });
   }
 });
 
