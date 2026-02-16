@@ -1,45 +1,52 @@
-//services/api.js
-// 1. Ensure the variable name matches what is used in the functions below
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:5001/api';
+const BASE_DOMAIN = import.meta.env.VITE_API_URL || 'http://localhost:5001';
 
 /**
- * Sends a new chat message to the Node.js backend to be stored in Cloud SQL.
- * @param {string} message - The user's input message
- * @param {string} aiResponse - The AI's generated response to be archived
- * @param {string} imageUrl - Optional URL of an image to associate with this chat entry
- * @param {string} userId - The ID of the user sending the message (critical for multi-user support)
- * @param {string} reportId - The ID of the report/project this chat is associated with (optional)
+ * Sends a chat message to the backend.
  */
-// services/api.js
 export const sendChatMessage = async ({ userId, reportId, message, aiResponse, imageUrl }) => {
     try {
+        // FIX #1: We explicitly add '/api/chat' here.
+        // This fixes the "405 Method Not Allowed" error.
+        const endpoint = `${BASE_DOMAIN}/api/chat`; 
+        
+        console.log("📤 API Sending to:", endpoint); 
 
-        console.log("📤 API Sending:", {  userId, reportId, message, aiResponse, imageUrl  });
-
-        const response = await fetch( /*`${API_BASE_URL}/api/chat` || `http://localhost:5001/api/chat` || */ `${API_BASE_URL}/chat`, {
+        const response = await fetch(endpoint, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ userId, reportId, message, aiResponse, imageUrl }), // This sends {userId, message, aiResponse, imageUrl}
+            body: JSON.stringify({ userId, reportId, message, aiResponse, imageUrl }),
         });
 
         if (!response.ok) {
-            const errorData = await response.json();
-            throw new Error(errorData.error || 'Failed to send message');
+            const errorData = await response.text();
+            throw new Error(errorData || 'Failed to send message');
         }
 
         return await response.json();
     } catch (error) {
-        console.error("🚨 API Service Error:", error);
+        console.error("🚨 API Service Error (sendChatMessage):", error);
         throw error;
     }
 };
 
 /**
- * Fetches the existing chat history from the Cloud SQL database.
+ * Fetches chat history.
  */
-export const fetchChatHistory = async () => {
+// FIX #2: Added 'userId' inside the parentheses below!
+// Previously it was empty "async () =>", causing the ReferenceError.
+export const fetchChatHistory = async (userId) => { 
     try {
-        const response = await fetch(`${API_BASE_URL}/history?userId=${userId}` /*|| `http://localhost:5001/api/history?userId=${userId}` */);
+        if (!userId) {
+            console.warn("⚠️ fetchChatHistory called without userId");
+            return [];
+        }
+
+        // FIX #3: Ensure we hit /api/history, not just /history
+        const endpoint = `${BASE_DOMAIN}/api/history?userId=${userId}`;
+        
+        console.log("📡 Fetching History from:", endpoint);
+
+        const response = await fetch(endpoint);
         
         if (!response.ok) {
             throw new Error('Failed to fetch history');
@@ -53,7 +60,9 @@ export const fetchChatHistory = async () => {
 };
 
 export const hideChatHistory = async () => {
-    const response = await fetch(`${API_BASE_URL}/chat/hide` /* || `http://localhost:5001/chat/hide` */, {
+    // FIX #4: Ensure we hit /api/chat/hide
+    const endpoint = `${BASE_DOMAIN}/api/chat/hide`;
+    const response = await fetch(endpoint, {
         method: 'PUT'
     });
     return response.json();
