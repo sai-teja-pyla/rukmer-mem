@@ -16,7 +16,7 @@ export const sendChatMessage = async ({ userId, reportId, message, aiResponse, i
 
         console.log("📤 API Sending:", {  userId, reportId, message, aiResponse, imageUrl  });
 
-        const response = await fetch( `${API_BASE_URL}/api/chat` || `http://localhost:5001/api/chat` || `${API_BASE_URL}/chat`, {
+        const response = await fetch( /*`${API_BASE_URL}/api/chat` || `http://localhost:5001/api/chat` || */ `${API_BASE_URL}/chat`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ userId, reportId, message, aiResponse, imageUrl }), // This sends {userId, message, aiResponse, imageUrl}
@@ -39,7 +39,7 @@ export const sendChatMessage = async ({ userId, reportId, message, aiResponse, i
  */
 export const fetchChatHistory = async () => {
     try {
-        const response = await fetch(`${API_BASE_URL}/history?userId=${userId}`|| `http://localhost:5001/api/history?userId=${userId}`);
+        const response = await fetch(`${API_BASE_URL}/history?userId=${userId}` /*|| `http://localhost:5001/api/history?userId=${userId}` */);
         
         if (!response.ok) {
             throw new Error('Failed to fetch history');
@@ -53,7 +53,7 @@ export const fetchChatHistory = async () => {
 };
 
 export const hideChatHistory = async () => {
-    const response = await fetch(`${API_BASE_URL}/chat/hide` || `http://localhost:5001/chat/hide`, {
+    const response = await fetch(`${API_BASE_URL}/chat/hide` /* || `http://localhost:5001/chat/hide` */, {
         method: 'PUT'
     });
     return response.json();

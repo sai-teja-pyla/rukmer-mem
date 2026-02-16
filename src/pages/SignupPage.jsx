@@ -106,7 +106,8 @@ export default function SignupPage() {
               value={formData.name}
               onChange={(e) => setFormData({...formData, name: e.target.value})}
               placeholder="John Doe"
-              className="w-full px-4 py-3 rounded-lg border border-gray-300 bg-white text-gray-900 focus:ring-2 focus:ring-[#5b67e8] focus:border-[#5b67e8] outline-none transition-all placeholder:text-gray-400"
+              style={{ colorScheme: 'light' }}
+              className="w-full px-4 py-3 rounded-lg border border-gray-300 bg-white text-gray-900 focus:ring-2 focus:ring-[#5b67e8] focus:border-[#5b67e8] outline-none transition-all placeholder:text-gray-500"
             />
           </div>
 
@@ -119,6 +120,7 @@ export default function SignupPage() {
               value={formData.email}
               onChange={(e) => setFormData({...formData, email: e.target.value})}
               placeholder="you@example.com"
+              style={{ colorScheme: 'light' }}
               className="w-full px-4 py-3 rounded-lg border border-gray-300 bg-white text-gray-900 focus:ring-2 focus:ring-[#5b67e8] focus:border-[#5b67e8] outline-none transition-all placeholder:text-gray-400"
             />
           </div>
@@ -132,6 +134,7 @@ export default function SignupPage() {
               value={formData.password}
               onChange={(e) => setFormData({...formData, password: e.target.value})}
               placeholder="Create a password"
+              style={{ colorScheme: 'light' }}
               className="w-full px-4 py-3 rounded-lg border border-gray-300 bg-white text-gray-900 focus:ring-2 focus:ring-[#5b67e8] focus:border-[#5b67e8] outline-none transition-all placeholder:text-gray-400"
             />
           </div>
