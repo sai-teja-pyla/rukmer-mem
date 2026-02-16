@@ -20,11 +20,18 @@ const storage = new Storage({
 const isProduction = process.env.NODE_ENV === 'production' || !!process.env.K_SERVICE;
 
 // 2. Middleware (Fixed CORS for Production)
-app.use(cors({
-  origin: '*', // Allows all origins during debugging; narrow this to your frontend URL later
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'x-goog-resumable']
-}));
+app.use((req, res, next) => {
+    // Set CORS headers manually to ensure they are always present
+    res.header('Access-Control-Allow-Origin', '*'); 
+    res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+    res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization, x-goog-resumable');
+    
+    // If this is an OPTIONS request, answer 200 immediately and stop
+    if (req.method === 'OPTIONS') {
+        return res.sendStatus(200);
+    }
+    next();
+});
 app.use(express.json());
 
 // 3. Routes
