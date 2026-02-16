@@ -12,7 +12,7 @@ dotenv.config();
 
 const { Pool } = pkg;
 const app = express();
-const PORT = process.env.PORT || 5001 || 8080;
+const PORT = process.env.PORT || 8080;
 
 const storage = new Storage({
     keyFilename: path.join(process.cwd(), 'service-account.json'), // Path to your key
@@ -41,7 +41,7 @@ const dbConfig = {
 app.use(cors({
   // Refined: Allow both local and production URLs to prevent CORS errors
   origin: [
-    "http://localhost:5173", "https://rukmer-saas-service-361739908342.us-central1.run.app"
+    "http://localhost:5173", "https://rukmer-backend-361739908342.us-central1.run.app"
   ],
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'x-goog-resumable']
