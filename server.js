@@ -119,7 +119,7 @@ app.post('/api/storage/resumable-url', async (req, res) => {
             .toLowerCase();
 
         const folderName = `${safeName}_${userId.substring(0, 5)}`;
-        const filePath = `uploads/${userId}/${Date.now()}_${fileName}`;
+        const filePath = `uploads/${folderName}/${Date.now()}_${fileName}`; // Foldername replaced
         const file = bucket.file(filePath);
 
         console.log(`📋 Generating resumable URL for: ${fileName}`);
