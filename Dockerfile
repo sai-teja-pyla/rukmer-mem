@@ -33,8 +33,22 @@ COPY . .
 RUN npm run build
 
 # Stage 2: Serve with Nginx
-FROM nginx:alpine
-COPY --from=build /app/dist /usr/share/nginx/html
-COPY nginx.conf /etc/nginx/conf.d/default.conf
+#FROM nginx:alpine
+#COPY --from=build /app/dist /usr/share/nginx/html
+#COPY nginx.conf /etc/nginx/conf.d/default.conf
+#EXPOSE 8080
+#CMD ["nginx", "-g", "daemon off;"]
+
+# Stage 2: Run the Node.js Backend
+FROM node:22-alpine
+WORKDIR /app
+COPY package*.json ./
+RUN npm install --omit=dev
+# Copy the built frontend from Stage 1 into the backend folder
+COPY --from=build /app/dist ./dist
+# Copy the rest of your backend source code
+COPY . .
+
 EXPOSE 8080
-CMD ["nginx", "-g", "daemon off;"]
+# Run your backend script (ensure "start" in package.json points to your server file)
+CMD ["npm", "start"]

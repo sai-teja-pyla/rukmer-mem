@@ -6,10 +6,14 @@ import pool from './backend/config/db.js'; // Ensure this path is correct in you
 import { Storage } from '@google-cloud/storage';
 import path from 'path';
 
+import { fileURLToPath } from 'url';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 dotenv.config();
 const app = express();
-const PORT = process.env.PORT || 5001 || 8080;
+const PORT = process.env.PORT || 8080;
 
 // 1. Storage Configuration
 // Note: Ensure service-account.json is in your root folder
@@ -22,25 +26,18 @@ app.use(express.static(path.join(__dirname, 'dist')));
 
 const isProduction = process.env.NODE_ENV === 'production' || !!process.env.K_SERVICE;
 
-const dbConfig = {
-    user: process.env.DB_USER,
-    password: process.env.DB_PASSWORD,
-    database: process.env.DB_NAME,
-    host: isProduction 
-        ? `/cloudsql/${process.env.INSTANCE_CONNECTION_NAME}` 
-        : (process.env.DB_HOST || '127.0.0.1'),
-    port: isProduction ? 5432 : (process.env.DB_PORT || 5432),
-};
-
 // 2. Middleware (Fixed CORS for Production)
-app.use(cors({
-  // Refined: Allow both local and production URLs to prevent CORS errors
-  origin: [
-    process.env.FRONTEND_URL, process.env.HOST_BASE_URL
-  ],
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization']
-}));
+app.use((req, res, next) => {
+    res.header('Access-Control-Allow-Origin', '*'); 
+    res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+    res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization, x-goog-resumable');
+    
+    // If this is an OPTIONS request, answer 200 immediately and stop
+    if (req.method === 'OPTIONS') {
+        return res.sendStatus(200);
+    }
+    next();
+});
 app.use(express.json());
 
 // 3. Routes
@@ -117,16 +114,20 @@ app.post('/api/storage/resumable-url', async (req, res) => {
 
 // 4. Start Server
 const runSetup = async () => {
-    try {
-        await pool.query("SELECT 1");
-        console.log("✅ Connected to PostgreSQL");
-    } catch (err) {
-        console.error("❌ Database Connection Failed:", err.message);
-    }
-
     app.listen(PORT, '0.0.0.0', () => {
-        console.log(`🚀 Rukmer Backend running on port ${PORT}`);
+        console.log(`🚀 Rukmer Backend is listening on port ${PORT}`);
+        
+        // 2. Perform DB check in the background after the server is up
+        pool.query("SELECT 1")
+            .then(() => {
+                console.log("✅ Connected to PostgreSQL");
+            })
+            .catch((err) => {
+                console.error("❌ Database Connection Failed:", err.message);
+                console.log("⚠️  Server is still running, but DB features will fail.");
+            });
     });
 };
 
+// Execute the function
 runSetup();
