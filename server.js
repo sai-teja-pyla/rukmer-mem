@@ -19,12 +19,20 @@ const PORT = process.env.PORT || 8080;
 
 // 1. Storage Configuration
 // Note: Ensure service-account.json is in your root folder
-const storage = new Storage({
-    keyFilename: path.join(process.cwd(), 'service-account.json'),
-    projectId: 'rukmer-saas'
-});
+const storageConfig = {
+  projectId: 'rukmer-saas',
+};
 
-app.use(express.static(path.join(__dirname, 'dist')));
+// ONLY add the key file if we are NOT in production
+if (process.env.NODE_ENV !== 'production') {
+  storageConfig.keyFilename = path.join(process.cwd(), 'service-account.json');
+}
+
+const storage = new Storage(storageConfig);
+
+//app.use(express.static(path.join(__dirname, 'dist')));
+
+app.use(express.static(path.join(process.cwd(), 'dist'), { index: false }));
 
 const isProduction = process.env.NODE_ENV === 'production' || !!process.env.K_SERVICE;
 
