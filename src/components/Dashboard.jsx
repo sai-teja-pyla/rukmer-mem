@@ -394,10 +394,18 @@ export default function Dashboard({ user, isPro: globalIsPro }) {
 
     // The file upload logic
 const uploadLargeFile = async (file) => {
+     if (!user) {
+        console.error("No user found! Are you logged in?");
+        return;
+    }
+
+
     const baseUrl = (import.meta.env.VITE_API_URL || 'http://localhost:5001').replace(/\/$/, '');
     const handshakeUrl = `${baseUrl}/api/storage/resumable-url`;
 
     console.log("📡 Attempting handshake at:", handshakeUrl);
+
+    //const userNameToSend = user.displayName || user.email.split('@')[0];
 
     const response = await fetch(handshakeUrl, {
         method: 'POST',
@@ -405,7 +413,8 @@ const uploadLargeFile = async (file) => {
         body: JSON.stringify({ 
             fileName: file.name, 
             contentType: file.type, 
-            userId: user?.uid 
+            userId: user?.uid,
+            userName: user?.displayName || user.email?.split('@')[0] || 'user'
         })
     });
     

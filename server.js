@@ -15,7 +15,7 @@ dotenv.config();
 const app = express();
 const PORT = process.env.PORT || 8080;
 
-
+//const folderName = userName ? `${userName}_${userId}` : userId;
 
 // 1. Storage Configuration
 // Note: Ensure service-account.json is in your root folder
@@ -114,8 +114,14 @@ app.get('/{*any}', (req, res) => {
 
 app.post('/api/storage/resumable-url', async (req, res) => {
     try {
-        const { fileName, contentType, userId } = req.body;
-        const bucket = storage.bucket('rukmer-saas-data'); 
+        const { fileName, contentType, userId, userName } = req.body;
+        const bucket = storage.bucket('rukmer-saas-data');
+        const safeName = (userName || 'user')
+            .split('@')[0] // If it's an email, just take the first part
+            .replace(/[^a-z0-9]/gi, '_') // Replace symbols with underscores
+            .toLowerCase();
+
+        const folderName = `${safeName}_${userId.substring(0, 5)}`;
         const filePath = `uploads/${userId}/${Date.now()}_${fileName}`;
         const file = bucket.file(filePath);
 
@@ -138,6 +144,35 @@ app.post('/api/storage/resumable-url', async (req, res) => {
     } catch (error) {
         console.error("🚨 GCS Resumable URL Error:", error.message);
         res.status(500).json({ error: "Failed to generate upload URL" });
+    }
+});
+
+app.get('/api/storage/files', async (req, res) => {
+    try {
+        const { userId } = req.query; // The frontend sends the long UID
+        const bucket = storage.bucket('rukmer-saas-data');
+
+        // 1. Search everything under 'uploads/'
+        const [allFiles] = await bucket.getFiles({ prefix: 'uploads/' });
+
+        // 2. Filter files: Keep them if the path contains the userId
+        // This works for: 
+        // - uploads/ya42I9u7.../ (Old format)
+        // - uploads/john_ya42I/ (New format)
+        const userFiles = allFiles.filter(file => file.name.includes(userId.substring(0, 5)) || file.name.includes(userId));
+
+        // 3. Map to a clean list for the frontend
+        const fileList = userFiles.map(file => ({
+            name: file.name.split('/').pop(), // Just the filename
+            fullPath: file.name,
+            url: `https://storage.googleapis.com/${bucket.name}/${file.name}`,
+            timeCreated: file.metadata.timeCreated
+        }));
+
+        res.json(fileList);
+    } catch (error) {
+        console.error("🚨 Error listing files:", error);
+        res.status(500).json({ error: "Failed to fetch files" });
     }
 });
 
