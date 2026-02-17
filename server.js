@@ -15,6 +15,8 @@ dotenv.config();
 const app = express();
 const PORT = process.env.PORT || 8080;
 
+
+
 // 1. Storage Configuration
 // Note: Ensure service-account.json is in your root folder
 const storage = new Storage({
@@ -27,18 +29,22 @@ app.use(express.static(path.join(__dirname, 'dist')));
 const isProduction = process.env.NODE_ENV === 'production' || !!process.env.K_SERVICE;
 
 // 2. Middleware (Fixed CORS for Production)
-app.use((req, res, next) => {
-    res.header('Access-Control-Allow-Origin', '*'); 
-    res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
-    res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization, x-goog-resumable');
-    
-    // If this is an OPTIONS request, answer 200 immediately and stop
-    if (req.method === 'OPTIONS') {
-        return res.sendStatus(200);
-    }
-    next();
-});
+app.use(cors({
+  origin: [
+    'https://rukmer-saas-service-361739908342.us-central1.run.app', // Your Cloud Run Frontend
+    'http://localhost:5173', // Your Localhost (for testing)
+    'https://rukmer-saas.web.app' // (Optional) If you use Firebase Hosting later
+  ],
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
+  credentials: true // Allow cookies/headers to pass through
+}));
+
+// FORCE Handle Preflight Requests for all routes
+app.options('*', cors());
 app.use(express.json());
+
+
 
 // 3. Routes
 
