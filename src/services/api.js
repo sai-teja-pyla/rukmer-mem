@@ -7,7 +7,7 @@ export const sendChatMessage = async ({ userId, reportId, message, aiResponse, i
     try {
         // FIX #1: We explicitly add '/api/chat' here.
         // This fixes the "405 Method Not Allowed" error.
-        const endpoint = `${BASE_DOMAIN}api/chat`; 
+        const endpoint = `${BASE_DOMAIN}/api/chat`; 
         
         console.log("📤 API Sending to:", endpoint); 
 
@@ -42,7 +42,7 @@ export const fetchChatHistory = async (userId) => {
         }
 
         // FIX #3: Ensure we hit /api/history, not just /history
-        const endpoint = `${BASE_DOMAIN}api/history?userId=${userId}`;
+        const endpoint = `${BASE_DOMAIN}/api/history?userId=${userId}`;
         
         console.log("📡 Fetching History from:", endpoint);
 
@@ -61,7 +61,7 @@ export const fetchChatHistory = async (userId) => {
 
 export const hideChatHistory = async () => {
     // FIX #4: Ensure we hit /api/chat/hide
-    const endpoint = `${BASE_DOMAIN}api/chat/hide`;
+    const endpoint = `${BASE_DOMAIN}/api/chat/hide`;
     const response = await fetch(endpoint, {
         method: 'PUT'
     });
