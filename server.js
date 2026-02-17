@@ -80,9 +80,15 @@ app.get('/api/history', async (req, res) => {
   }
 });
 
-/**
- * FIXED: Resumable URL Route (Merged & Corrected)
- */
+app.get('/{*any}', (req, res) => {
+    // If it's a broken API call, return a JSON error
+    if (req.path.startsWith('/api')) {
+        return res.status(404).json({ error: 'API route not found' });
+    }
+    // Otherwise, serve the React app
+    res.sendFile(path.join(__dirname, 'dist', 'index.html'));
+});
+
 app.post('/api/storage/resumable-url', async (req, res) => {
     try {
         const { fileName, contentType, userId } = req.body;
@@ -111,6 +117,9 @@ app.post('/api/storage/resumable-url', async (req, res) => {
         res.status(500).json({ error: "Failed to generate upload URL" });
     }
 });
+
+
+
 
 // 4. Start Server
 const runSetup = async () => {
