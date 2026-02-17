@@ -36,7 +36,7 @@ const dbConfig = {
 app.use(cors({
   // Refined: Allow both local and production URLs to prevent CORS errors
   origin: [
-    process.env.FRONTEND_URL, process.env.HOST_BASE_URL, '*'
+    process.env.FRONTEND_URL, process.env.HOST_BASE_URL
   ],
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization']
