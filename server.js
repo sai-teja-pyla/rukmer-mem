@@ -10,6 +10,7 @@ import { fileURLToPath } from 'url';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+
 dotenv.config();
 
 const app = express();
@@ -30,9 +31,11 @@ if (process.env.NODE_ENV !== 'production') {
 
 const storage = new Storage(storageConfig);
 
+const folderName = "FORCE_TEST_" + Date.now();
+
 //app.use(express.static(path.join(__dirname, 'dist')));
 
-app.use(express.static(path.join(process.cwd(), 'dist'), { index: false }));
+app.use(express.static(path.join(process.cwd(), 'dist')));
 
 const isProduction = process.env.NODE_ENV === 'production' || !!process.env.K_SERVICE;
 
@@ -103,19 +106,13 @@ app.get('/api/history', async (req, res) => {
   }
 });
 
-app.get('/{*any}', (req, res) => {
-    // If it's a broken API call, return a JSON error
-    if (req.path.startsWith('/api')) {
-        return res.status(404).json({ error: 'API route not found' });
-    }
-    // Otherwise, serve the React app
-    res.sendFile(path.join(__dirname, 'dist', 'index.html'));
-});
+
 
 app.post('/api/storage/resumable-url', async (req, res) => {
     try {
         const { fileName, contentType, userId, userName } = req.body;
         const bucket = storage.bucket('rukmer-saas-data');
+        const displayLabel = userName || 'user';
         const safeName = (userName || 'user')
             .split('@')[0] // If it's an email, just take the first part
             .replace(/[^a-z0-9]/gi, '_') // Replace symbols with underscores
@@ -174,6 +171,15 @@ app.get('/api/storage/files', async (req, res) => {
         console.error("🚨 Error listing files:", error);
         res.status(500).json({ error: "Failed to fetch files" });
     }
+});
+
+app.get('/{*any}', (req, res) => {
+    // If it's a broken API call, return a JSON error
+    if (req.path.startsWith('/api')) {
+        return res.status(404).json({ error: 'API route not found' });
+    }
+    // Otherwise, serve the React app
+    res.sendFile(path.join(__dirname, 'dist', 'index.html'));
 });
 
 

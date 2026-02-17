@@ -414,7 +414,7 @@ const uploadLargeFile = async (file) => {
             fileName: file.name, 
             contentType: file.type, 
             userId: user?.uid,
-            userName: user?.displayName || user.email?.split('@')[0] || 'user'
+            userName: user?.displayName || 'user'
         })
     });
     
