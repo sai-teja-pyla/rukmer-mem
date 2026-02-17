@@ -23,7 +23,7 @@ const dbConfig = {
     host: isProduction 
         ? `/cloudsql/${process.env.INSTANCE_CONNECTION_NAME}` 
         : '127.0.0.1',
-    port: 5432,
+    port: isProduction ? undefined : 5432,
     max: 20,
     idleTimeoutMillis: 30000,
     connectionTimeoutMillis: 2000,

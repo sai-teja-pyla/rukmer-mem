@@ -30,16 +30,27 @@ const isProduction = process.env.NODE_ENV === 'production' || !!process.env.K_SE
 
 // 2. Middleware (Fixed CORS for Production)
 app.use((req, res, next) => {
-    res.header('Access-Control-Allow-Origin', '*'); 
+    const allowedOrigins = [
+        'http://localhost:5173', // Local development (Vite default)
+        'https://rukmer-saas-service-361739908342.us-central1.run.app' // Production
+    ];
+    
+    const origin = req.headers.origin;
+    if (allowedOrigins.includes(origin)) {
+        res.header('Access-Control-Allow-Origin', origin);
+    }
+
     res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
     res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization, x-goog-resumable');
-    
-    // If this is an OPTIONS request, answer 200 immediately and stop
+    res.header('Access-Control-Allow-Credentials', 'true');
+
+    // EXPLICITLY handle the OPTIONS preflight
     if (req.method === 'OPTIONS') {
-        return res.sendStatus(200);
+        return res.status(200).send();
     }
     next();
 });
+
 app.use(express.json());
 
 
