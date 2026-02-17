@@ -9,7 +9,7 @@ import path from 'path';
 
 dotenv.config();
 const app = express();
-const PORT = process.env.PORT || 8080;
+const PORT = process.env.PORT || 5001 || 8080;
 
 // 1. Storage Configuration
 // Note: Ensure service-account.json is in your root folder
@@ -22,19 +22,25 @@ app.use(express.static(path.join(__dirname, 'dist')));
 
 const isProduction = process.env.NODE_ENV === 'production' || !!process.env.K_SERVICE;
 
+const dbConfig = {
+    user: process.env.DB_USER,
+    password: process.env.DB_PASSWORD,
+    database: process.env.DB_NAME,
+    host: isProduction 
+        ? `/cloudsql/${process.env.INSTANCE_CONNECTION_NAME}` 
+        : (process.env.DB_HOST || '127.0.0.1'),
+    port: isProduction ? 5432 : (process.env.DB_PORT || 5432),
+};
+
 // 2. Middleware (Fixed CORS for Production)
-app.use((req, res, next) => {
-    // Set CORS headers manually to ensure they are always present
-    res.header('Access-Control-Allow-Origin', '*'); 
-    res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
-    res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization, x-goog-resumable');
-    
-    // If this is an OPTIONS request, answer 200 immediately and stop
-    if (req.method === 'OPTIONS') {
-        return res.sendStatus(200);
-    }
-    next();
-});
+app.use(cors({
+  // Refined: Allow both local and production URLs to prevent CORS errors
+  origin: [
+    process.env.FRONTEND_URL, process.env.HOST_BASE_URL, '*'
+  ],
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization']
+}));
 app.use(express.json());
 
 // 3. Routes
