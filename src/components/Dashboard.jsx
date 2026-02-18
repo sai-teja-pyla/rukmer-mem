@@ -278,6 +278,19 @@ export default function Dashboard({ user, isPro: globalIsPro }) {
                     gallery: data.images 
                 };
 
+                const firstAsset = data.images?.[0];
+                let safeType = 'image';
+
+                if (firstAsset) {
+                    if (firstAsset.type) {
+                        safeType = firstAsset.type;
+                    } else if (firstAsset.url.includes('/videos/') || firstAsset.url.toLowerCase().match(/\.(mp4|mov|webm|m4v)/)) {
+                        safeType = 'video';
+                    } else if (firstAsset.url.includes('/reports/') || firstAsset.url.toLowerCase().includes('.pdf')) {
+                        safeType = 'pdf';
+                    }
+                }
+
                 setChatMessages(prev => {
                     const lastMsg = prev[prev.length - 1];
                     const reportNotice = `📂 **Opened Report:** ${data.projectName}`;
@@ -290,7 +303,9 @@ export default function Dashboard({ user, isPro: globalIsPro }) {
                         {
                             role: 'assistant',
                             content: `📂 **Opened Report:** ${data.projectName}`,
-                            image: data.images?.[0]?.url || null,
+                            image: firstAsset?.url || null,
+                            assetType: safeType,
+                            //image: data.images?.[0]?.url || null,
                             gallery: data.images || []
                             //image: thumbnail 
                         }
@@ -302,7 +317,8 @@ export default function Dashboard({ user, isPro: globalIsPro }) {
                     reportId: docSnap.id,
                     message: `System: Open ${data.projectName}`,
                     aiResponse: openNotice,
-                    imageUrl: thumbnail
+                    imageUrl: firstAsset ? firstAsset.url : null,
+                    assetType: safeType
                 });
 
             } else {
@@ -625,7 +641,7 @@ const uploadLargeFile = async (file, user, category = 'uploads') => {
             const uploadedImages = await Promise.all(mediaItems.map(async (item) => {
     // 1. If no file is selected, return the existing preview
     if (!item.file) {
-        return { url: item.preview, type: item.type, name: item.name };
+        return { url: item.preview, type: item.type, name: item.name, isLarge: true };
     }
 
     try {
@@ -684,7 +700,8 @@ const uploadLargeFile = async (file, user, category = 'uploads') => {
                     reportId: reportData.id || null, // Ensure you have the report ID here
                     message: `New Analysis: ${finalPName}`,
                     aiResponse: `📂 **Opened Report:** ${finalPName}`,
-                    imageUrl: firstThumb
+                    imageUrl: firstThumb,
+                    assetType: uploadedImages[0]?.type || 'image'
                 });
                 console.log("✅ Analysis record synced to Cloud SQL");
             } catch (dbErr) {
@@ -705,14 +722,33 @@ const uploadLargeFile = async (file, user, category = 'uploads') => {
     };
 
     const handleCheckout = async (priceId) => {
-        try {
-            const { handleUpgrade } = await import('../lib/stripe');
-            await handleUpgrade(user.uid, priceId);
-        } catch (error) {
-            console.error("Stripe Checkout Error:", error);
-            alert("Failed to initiate checkout. Please try again.");
-        }
+    // 1. Define your LIVE Stripe Payment Links
+    // Replace these keys with the EXACT Price IDs from your PricingModal.jsx
+    // Replace the URLs with your actual 'buy.stripe.com' links
+    const liveLinks = {
+        'price_1Sz9K72NaqjgxJZ3NKo6BAuK': 'https://buy.stripe.com/your_live_monthly_link',
+        'price_1Sz9K72NaqjgxJZ3hLY1TTa0': 'https://buy.stripe.com/your_live_yearly_link'
     };
+
+    // 2. Check if the current priceId exists in your link map
+    if (liveLinks[priceId]) {
+        console.log("💳 Redirecting to Stripe Payment Link...");
+        window.location.href = liveLinks[priceId];
+        return; // Exit early if we use the direct link
+    }
+
+    // 3. Fallback: Use the Firestore-Stripe Extension logic if no link is found
+    try {
+        setLoading(true); // Ensure you have a loading state for UX
+        const { handleUpgrade } = await import('../lib/stripe');
+        await handleUpgrade(user.uid, priceId);
+    } catch (error) {
+        console.error("Stripe Checkout Error:", error);
+        alert("Failed to initiate checkout. Please check your connection.");
+    } finally {
+        setLoading(false);
+    }
+};
 
 
     // --- 7. AI AGENT LOGIC ---
@@ -1256,83 +1292,99 @@ const uploadLargeFile = async (file, user, category = 'uploads') => {
                                         <div className={`max-w-[85%] p-4 rounded-2xl ${msg.role === 'user' ? theme.chatUser : theme.chatAI}`}>
                                             
                                             {msg.gallery && msg.gallery.length > 0 ? (
-                                                <div className="grid grid-cols-2 gap-2 mb-3">
-                                                    {msg.gallery.map((asset, idx) => (
-                                                        <div 
-                                                        key={idx} 
-                                                        className="relative aspect-square rounded-xl overflow-hidden border border-white/10 bg-[#111] cursor-pointer hover:opacity-80 transition-opacity group"
-                                                        onClick={() => window.open(asset.url, '_blank')}
-                                                        >
-                                                            <img 
-                                                            src={asset.url}
-                                                            alt={`Asset ${idx + 1}`}
-                                                            className="w-full h-full object-cover" 
-                                                            />
-                                                            
-                                                            {asset.type === 'video' && (
-                                                                <div className="absolute inset-0 flex items-center justify-center bg-black/20">
-                                                                    <FileVideo size={20} className="text-white drop-shadow-lg" />
-                                                                    </div>
-                                                                )}
-                                                                <div className="absolute bottom-0 inset-x-0 p-1.5 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity">
-                                                                <p className="text-[8px] text-white truncate text-center uppercase font-bold">
-                                                                    {asset.name || `Asset ${idx + 1}`}
-                                                                    </p>
-                                                                    </div>
-                                                                    </div>
-                                                                ))}
-                                                                </div>
-                                                                ) : (
-                                                                    
-                                                                    msg.image && (
-                                                                    <div className="mb-3 rounded-xl overflow-hidden border border-white/10 shadow-lg bg-[#111] min-h-[120px] flex flex-col items-center justify-center">
-                                                                        {msg.image.toLowerCase().match(/\.(mp4|webm|ogg|mov|m4v)/) || msg.image.includes('video') ? (
-                                                                            <div
-                                                                            className="w-full p-6 flex flex-col items-center gap-3 cursor-pointer hover:bg-white/5 transition-colors"
-                                                                            onClick={() => window.open(msg.image, '_blank')}
-                                                                            >
-                                                                                <div className="p-4 bg-[#7c3aed]/20 rounded-full">
-                                                                                <FileVideo className="text-[#7c3aed]" size={32} />
-                                                                                </div>
-                                                                                <span className="text-[10px] font-bold text-gray-400 uppercase tracking-widest text-center">
-                                                                                    Video Asset<br/>
-                                                                                    <span className="text-[#7c3aed]">Click to Play</span>
-                                                                                    </span>
-                                                                                    </div>
-                                                                                    ) : msg.image.toLowerCase().includes('.pdf') ? (
-                                                                                    <div
-                                                                                    className="w-full p-6 flex flex-col items-center gap-3 cursor-pointer hover:bg-white/5 transition-colors"
-                                                                                    onClick={() => window.open(msg.image, '_blank')}
-                                                                                    >
-                                                                                        <div className="p-4 bg-red-500/20 rounded-full">
-                                                                                        <FileText className="text-red-500" size={32} />
-                                                                                        </div>
-                                                                                        <span className="text-[10px] font-bold text-gray-400 uppercase tracking-widest text-center">
-                                                                                            Document Asset<br/>
-                                                                                            <span className="text-red-500">Click to View</span>
-                                                                                            </span>
-                                                                                            </div>
-                                                                                            ) : (
-                                                                                            <img
-                                                                                            src={msg.image}
-                                                                                            alt="Report Content"
-                                                                                            className="w-full h-auto max-h-64 object-cover"
-                                                                                            onError={(e) => {
-                                                                                                e.target.style.display = 'none';
-                                                                                                e.target.parentNode.innerHTML = `
-                                                                                                <div class="p-6 flex flex-col items-center gap-2">
-                                                                                                <div class="p-3 bg-gray-500/20 rounded-full">
-                                                                                                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="text-gray-400"><path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"></path><polyline points="14 2 14 8 20 8"></polyline></svg>
-                                                                                                </div>
-                                                                                                <span class="text-[9px] font-bold text-gray-500 uppercase">Asset Preview</span>
-                                                                                                </div>
-                                                                                                `;
-                                                                                            }}
-                                                                                        />
-                                                                                    )}
-                                                                                </div>
-                                                                            )
-                                                                        )}
+    <div className="grid grid-cols-2 gap-2 mb-3">
+        {msg.gallery.map((asset, idx) => (
+            <div 
+                key={idx} 
+                className="relative aspect-square rounded-xl overflow-hidden border border-white/10 bg-[#111] cursor-pointer hover:bg-white/5 transition-all flex items-center justify-center group"
+                onClick={() => window.open(asset.url, '_blank')}
+            >
+                {/* 1. GRID LOGIC: Check type first to show Icon instead of broken Image */}
+                {(asset.type === 'video' || asset.url.includes('/videos/') || asset.url.match(/\.(mp4|mov|webm)$/i)) ? (
+                    <div className="flex flex-col items-center gap-2">
+                        <div className="p-3 bg-[#7c3aed]/20 rounded-full">
+                            <FileVideo className="text-[#7c3aed]" size={24} />
+                        </div>
+                        <span className="text-[8px] font-bold text-gray-500 uppercase tracking-tight">Video Asset</span>
+                    </div>
+                ) : (asset.type === 'pdf' || asset.url.includes('/reports/') || asset.url.match(/\.pdf$/i)) ? (
+                    <div className="flex flex-col items-center gap-2">
+                        <div className="p-3 bg-red-500/20 rounded-full">
+                            <FileText className="text-red-500" size={24} />
+                        </div>
+                        <span className="text-[8px] font-bold text-gray-500 uppercase tracking-tight">PDF Document</span>
+                    </div>
+                ) : (
+                    <img 
+                        src={asset.url} 
+                        alt={asset.name || `Asset ${idx + 1}`}
+                        className="w-full h-full object-cover"
+                        onError={(e) => {
+                            e.target.style.display = 'none';
+                            e.target.parentNode.innerHTML = '<span class="text-[8px] text-gray-500">Preview N/A</span>';
+                        }}
+                    />
+                )}
+
+                <div className="absolute bottom-0 inset-x-0 p-1.5 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity">
+                    <p className="text-[8px] text-white truncate text-center uppercase font-bold">
+                        {asset.name || `Asset ${idx + 1}`}
+                    </p>
+                </div>
+            </div>
+        ))}
+    </div>
+) : (
+    msg.image && (
+        <div className="mb-3 rounded-xl overflow-hidden border border-white/10 shadow-lg bg-[#111] min-h-[120px] flex flex-col items-center justify-center">
+            {/* 2. SINGLE ASSET LOGIC: Robust checking for Video/PDF vs Image */}
+            {(msg.assetType === 'video' || msg.image.includes('/videos/') || msg.image.toLowerCase().match(/\.(mp4|webm|ogg|mov|m4v)$/i)) ? (
+                <div
+                    className="w-full p-6 flex flex-col items-center gap-3 cursor-pointer hover:bg-white/5 transition-colors"
+                    onClick={() => window.open(msg.image, '_blank')}
+                >
+                    <div className="p-4 bg-[#7c3aed]/20 rounded-full">
+                        <FileVideo className="text-[#7c3aed]" size={32} />
+                    </div>
+                    <span className="text-[10px] font-bold text-gray-400 uppercase tracking-widest text-center">
+                        Video Asset<br/>
+                        <span className="text-[#7c3aed]">Click to Play</span>
+                    </span>
+                </div>
+            ) : (msg.assetType === 'pdf' || msg.image.includes('/reports/') || msg.image.toLowerCase().includes('.pdf')) ? (
+                <div
+                    className="w-full p-6 flex flex-col items-center gap-3 cursor-pointer hover:bg-white/5 transition-colors"
+                    onClick={() => window.open(msg.image, '_blank')}
+                >
+                    <div className="p-4 bg-red-500/20 rounded-full">
+                        <FileText className="text-red-500" size={32} />
+                    </div>
+                    <span className="text-[10px] font-bold text-gray-400 uppercase tracking-widest text-center">
+                        Document Asset<br/>
+                        <span className="text-red-500">Click to View</span>
+                    </span>
+                </div>
+            ) : (
+                <img
+                    src={msg.image}
+                    alt="Report Content"
+                    className="w-full h-auto max-h-64 object-cover"
+                    onError={(e) => {
+                        e.target.style.display = 'none';
+                        e.target.parentNode.innerHTML = `
+                            <div class="p-6 flex flex-col items-center gap-2">
+                                <div class="p-3 bg-gray-500/20 rounded-full">
+                                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="text-gray-400"><path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"></path><polyline points="14 2 14 8 20 8"></polyline></svg>
+                                </div>
+                                <span class="text-[9px] font-bold text-gray-500 uppercase">Preview Unavailable</span>
+                            </div>
+                        `;
+                    }}
+                />
+            )}
+        </div>
+    )
+)}
                                                                     {msg.content && msg.content.toString().split('\n').map((line, idx) => (
                                                                         <p key={idx} className="mb-1 text-sm">{line}</p>
                                                                         ))}

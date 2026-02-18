@@ -187,6 +187,27 @@ app.get('/api/storage/files', async (req, res) => {
     }
 });
 
+// Add this to your routes in server.js
+app.put('/api/chat/hide', async (req, res) => {
+    const { userId } = req.body; // Ensure the frontend is sending this
+
+    if (!userId) {
+        return res.status(400).json({ error: "User ID is required" });
+    }
+
+    try {
+        // This 'hides' the chat history for this specific user
+        await pool.query(
+            "UPDATE chats SET is_active = FALSE WHERE user_id = $1",
+            [userId]
+        );
+        res.status(200).json({ message: "Chat history hidden" });
+    } catch (error) {
+        console.error("🚨 Error hiding chat:", error);
+        res.status(500).json({ error: "Failed to hide chat history" });
+    }
+});
+
 app.get('/{*any}', (req, res) => {
     // If it's a broken API call, return a JSON error
     if (req.path.startsWith('/api')) {
@@ -216,5 +237,5 @@ const runSetup = async () => {
     });
 };
 
-// Execute the function
+
 runSetup();
