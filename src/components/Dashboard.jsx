@@ -393,7 +393,7 @@ export default function Dashboard({ user, isPro: globalIsPro }) {
     // --- 6. HANDLERS ---
 
     // The file upload logic
-const uploadLargeFile = async (file) => {
+const uploadLargeFile = async (file, user, category = 'uploads') => {
      if (!user) {
         console.error("No user found! Are you logged in?");
         return;
@@ -407,14 +407,17 @@ const uploadLargeFile = async (file) => {
 
     //const userNameToSend = user.displayName || user.email.split('@')[0];
 
+
+
     const response = await fetch(handshakeUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ 
             fileName: file.name, 
-            contentType: file.type, 
-            userId: user?.uid,
-            userName: user?.displayName || 'user'
+            contentType: file.type || 'application/octet-stream', 
+            userId: user.uid,
+            userName: user.displayName || user?.email?.split('@')[0] || 'user',
+            category: category
         })
     });
     
@@ -440,8 +443,11 @@ const uploadLargeFile = async (file) => {
     return new Promise((resolve, reject) => {
         const xhr = new XMLHttpRequest();
         xhr.open('PUT', sessionUrl);
-        xhr.setRequestHeader('Content-Type', file.type);
-        
+        xhr.setRequestHeader('Content-Type', file.type || 'application/octet-stream');
+    
+        // Use the filename as a unique key so multiple uploads don't clash
+        const fileKey = file.name;
+
         xhr.upload.onprogress = (e) => {
             if (e.lengthComputable) {
                 const percent = Math.round((e.loaded / e.total) * 100);
@@ -452,7 +458,8 @@ const uploadLargeFile = async (file) => {
         xhr.onload = () => {
             if (xhr.status === 200 || xhr.status === 201) {
                 setUploadProgress(100);
-                resolve(publicUrl);
+                // Return an object so your .map() logic works correctly
+                resolve({ publicUrl }); 
             } else {
                 reject(`GCS rejection: ${xhr.status}`);
             }
@@ -616,14 +623,31 @@ const uploadLargeFile = async (file) => {
 
             // SUCCESSFUL STREAM UPLOAD LOGIC
             const uploadedImages = await Promise.all(mediaItems.map(async (item) => {
-                if (!item.file) return { url: item.preview, type: item.type, name: item.name };
-                if (item.file.size > 50 * 1024 * 1024) return { url: item.preview, type: item.type, name: item.name, isLarge: true };
-                
-                const storageRef = ref(storage, `reports/${user.uid}/${Date.now()}_${item.name}`);
-                await uploadBytes(storageRef, item.file);
-                const url = await getDownloadURL(storageRef);
-                return { url, type: item.type, name: item.name };
-            }));
+    // 1. If no file is selected, return the existing preview
+    if (!item.file) {
+        return { url: item.preview, type: item.type, name: item.name };
+    }
+
+    try {
+        // 2. Use the unified backend function for the upload
+        // This handles the naming (john_ya42i) and the path (images/)
+        const result = await uploadLargeFile(item.file, user);
+        const finalUrl = result.publicUrl;
+        
+        // 3. Return the exact object structure your state/database expects
+        return { 
+            url: result.publicUrl, 
+            type: item.type, 
+            name: item.name 
+        };
+    } catch (error) {
+        console.error(`❌ Upload failed for ${item.name}:`, error);
+        // 4. Return null so one failure doesn't crash the whole process
+        return null; 
+    }
+}))
+// 5. CRITICAL: Remove the nulls so your analysis function doesn't crash
+.then(results => results.filter(img => img !== null));
 
             const prompt = `Analyze these ${mediaItems.length} assets for construction progress. Return JSON: { "projectName": "${projectName || 'Untitled'}", "summary": { "status": "on_track", "accomplishments": [], "concerns": [], "nextSteps": [] } }`;
 

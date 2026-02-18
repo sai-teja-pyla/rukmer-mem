@@ -63,6 +63,7 @@ app.use((req, res, next) => {
 });
 
 app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
 
 
 
@@ -114,12 +115,19 @@ app.post('/api/storage/resumable-url', async (req, res) => {
         const bucket = storage.bucket('rukmer-saas-data');
         const displayLabel = userName || 'user';
         const safeName = (userName || 'user')
-            .split('@')[0] // If it's an email, just take the first part
+            .split('@')[0]
             .replace(/[^a-z0-9]/gi, '_') // Replace symbols with underscores
             .toLowerCase();
 
         const folderName = `${safeName}_${userId.substring(0, 5)}`;
-        const filePath = `uploads/${folderName}/${Date.now()}_${fileName}`; // Foldername replaced
+
+        // Map the contentType to your new folder names
+        let rootDir = 'others'; // Fallback for PDF, etc.
+        if (contentType.startsWith('image/')) rootDir = 'images';
+        if (contentType.startsWith('video/')) rootDir = 'videos';
+
+        //const rootDir = category === 'reports' ? 'reports' : 'uploads';
+        const filePath = `${rootDir}/${folderName}/${Date.now()}_${fileName}`; // Foldername replaced
         const file = bucket.file(filePath);
 
         console.log(`📋 Generating resumable URL for: ${fileName}`);
@@ -150,13 +158,19 @@ app.get('/api/storage/files', async (req, res) => {
         const bucket = storage.bucket('rukmer-saas-data');
 
         // 1. Search everything under 'uploads/'
-        const [allFiles] = await bucket.getFiles({ prefix: 'uploads/' });
+        const [allFiles] = await bucket.getFiles();
+
 
         // 2. Filter files: Keep them if the path contains the userId
         // This works for: 
         // - uploads/ya42I9u7.../ (Old format)
         // - uploads/john_ya42I/ (New format)
-        const userFiles = allFiles.filter(file => file.name.includes(userId.substring(0, 5)) || file.name.includes(userId));
+        //const userFiles = allFiles.filter(file => file.name.includes(userId.substring(0, 5)) || file.name.includes(userId));
+
+        const shortId = userId.substring(0, 5);
+        const userFiles = allFiles.filter(file => 
+            file.name.includes(shortId) || file.name.includes(userId)
+        );
 
         // 3. Map to a clean list for the frontend
         const fileList = userFiles.map(file => ({
