@@ -26,6 +26,8 @@ export default function SubscriptionPage({ user, isPro }) {
       const { data } = await createPortalLink({
         returnUrl: window.location.origin + '/subscription',
       });
+
+      console.log("Portal Data Result:", data);
       
       if (data?.url) {
         window.location.href = data.url; // Use href for better cross-browser compatibility

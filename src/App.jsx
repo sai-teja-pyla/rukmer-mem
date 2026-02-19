@@ -47,7 +47,7 @@ export default function App() {
     const unsubscribeAuth = onAuthStateChanged(auth, (currentUser) => {
       if (currentUser) {
         setUser({
-          name: currentUser.displayName || currentUser.email.split('@')[0],
+          name: currentUser.displayName || (currentUser?.email?.includes('@') ? currentUser.email.split('@')[0] : 'Guest User'),
           email: currentUser.email,
           photo: currentUser.photoURL,
           uid: currentUser.uid

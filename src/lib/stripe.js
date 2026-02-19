@@ -16,11 +16,11 @@ export const handleUpgrade = async (userId, priceId) => {
   onSnapshot(docRef, (snap) => {
     const data = snap.data();
     if (data?.error) {
-      console.error(`Stripe Error: ${error.message}`);
+      console.error(`Stripe Error: ${data.error.message}`);
     }
     if (data?.url) {
       // 3. Redirect to the secure Stripe Checkout page
-      window.location.assign(data.url);
+      window.open(data.url, '_blank', 'noopener,noreferrer');
     }
   });
 };

@@ -25,6 +25,8 @@ export default function UserDropdown({ user, onUpgradeClick, isPro }) {
 
   const isDark = settings?.theme === 'dark';
 
+  const displayName = settings?.displayName || user?.displayName || user?.email?.split('@')[0] || "User";
+
   const theme = {
     menuBg: isDark ? 'bg-[#1a1a1a] border-gray-800' : 'bg-white border-gray-200',
     text: isDark ? 'text-gray-200' : 'text-gray-700',
@@ -76,10 +78,10 @@ export default function UserDropdown({ user, onUpgradeClick, isPro }) {
           
           <div className={`px-4 py-4 border-b ${theme.divider} ${theme.headerBg}`}>
             <p className={`font-semibold truncate ${theme.text}`}>
-              {settings?.displayName || "User"}
+              {displayName}
             </p>
             <p className={`text-xs truncate ${theme.subText}`}>
-              {settings?.email || "user@example.com"}
+              {settings?.email || user?.email || "user@example.com"}
             </p>
           </div>
 

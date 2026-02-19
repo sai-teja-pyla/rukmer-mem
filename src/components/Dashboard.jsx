@@ -4,7 +4,7 @@ import { GoogleGenerativeAI } from "@google/generative-ai";
 import {
     Upload, Loader2, X, Sparkles, MessageCircle, Send,
     FileVideo, FileText, Moon, Sun, CheckCircle2, AlertTriangle,
-    SquarePen, Hexagon, Plus, FileStack, Edit2, Trash2, LayoutGrid,
+    Hexagon, Plus, FileStack, Edit2, Trash2, LayoutGrid,
     ImageIcon, Zap, ChevronDown, Search, Download
 } from 'lucide-react';
 import { jsPDF } from 'jspdf';
@@ -16,7 +16,7 @@ import { useUserSettings } from '../hooks/useUserSettings';
 
 // FIREBASE IMPORTS
 import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
-import { collection, addDoc, getDocs, getDoc, query, where, orderBy, serverTimestamp, doc, updateDoc, deleteDoc, onSnapshot } from "firebase/firestore";
+import { collection, addDoc, getDocs, getDoc, query, where, orderBy, serverTimestamp, doc, updateDoc, deleteDoc, onSnapshot, writeBatch } from "firebase/firestore";
 import { storage, db } from "../firebase";
 
 // --- NEW API SERVICE IMPORTS ---
@@ -30,7 +30,7 @@ export default function Dashboard({ user, isPro: globalIsPro }) {
     const [searchParams, setSearchParams] = useSearchParams();
     const [mediaItems, setMediaItems] = useState([]);
     const [analyzing, setAnalyzing] = useState(false);
-    const [uploadProgress, setUploadProgress] = useState(0); // Tracking 5GB uploads
+    const [uploadProgress, setUploadProgress] = useState({}); // Track progress for each file
 
     const [report, setReport] = useState(null);
     const [reportId, setReportId] = useState(null);
@@ -41,6 +41,11 @@ export default function Dashboard({ user, isPro: globalIsPro }) {
     const [pastReports, setPastReports] = useState([]);
     const [showHistory, setShowHistory] = useState(false);
     const [reportIdToDelete, setReportIdToDelete] = useState(null);
+
+    const [hideBeforeTime, setHideBeforeTime] = useState(0);
+
+    const [isSessionCleared, setIsSessionCleared] = useState(false);
+    const [clearTime, setClearTime] = useState(0);
     
     // NEW: Search state for reports sidebar
     const [searchQuery, setSearchQuery] = useState('');
@@ -58,6 +63,7 @@ export default function Dashboard({ user, isPro: globalIsPro }) {
     const fileInputRef = useRef(null);
     const chatEndRef = useRef(null);
     const chatSessionRef = useRef(null);
+    const uploadProgressRef = useRef({}); // Track individual file progress
 
     // Model selection (VLRE 1.0)
     const [selectedEngine, setSelectedEngine] = useState('Auto'); // Default to Auto
@@ -121,40 +127,29 @@ export default function Dashboard({ user, isPro: globalIsPro }) {
         }
     };
 
+
     // --- REFINED: LOAD CHAT HISTORY WITHOUT CRASHING ---
-    useEffect(() => {
-        const loadCloudHistory = async () => {
-            if (!user) return;
-            try {
-                console.log("📡 Fetching history for user:", user.uid);
-                const history = await fetchChatHistory(user.uid);
+// --- LOAD HISTORY FROM POSTGRESQL (via API) ---
+useEffect(() => {
+    const loadHistory = async () => {
+        if (!user?.uid) return;
+        const history = await fetchChatHistory(user.uid);
+        
+        const formattedMsgs = [];
+        history.forEach(row => {
+            formattedMsgs.push({ role: 'user', content: row.user_message });
+            formattedMsgs.push({ role: 'assistant', content: row.ai_reply });
+        });
 
-                console.log("📥 Raw history from DB:", history);
-                
-                if (Array.isArray(history) && history.length > 0) {
-                    const formattedHistory = history.flatMap(chat =>[
-                        { 
-                            role: 'user', 
-                            content: chat.user_message || '...' 
-                        },
-                        { 
-                            role: 'assistant', 
-                            content: chat.ai_reply || '...', 
-                            image: chat.image_url || null // Merged correctly to prevent UI crashes
-                        }
-                    ]);
-                    console.log("✅ Setting messages to state:", formattedHistory);
-                    setChatMessages(formattedHistory);
-                } else {
-                console.log("ℹ️ No active history found in DB.");
-            }
-            } catch (err) {
-                console.error("No cloud history found or server offline", err);
-            }
-        };
+        // ONLY update if the length is different to prevent double-rendering on mount
+        setChatMessages(prev => {
+            if (prev.length === 0) return formattedMsgs;
+            return prev; 
+        });
+    };
+    loadHistory();
+}, [user?.uid]);
 
-        loadCloudHistory();
-    }, [user]);
 
     useEffect(() => {
         if (user) {
@@ -174,6 +169,9 @@ export default function Dashboard({ user, isPro: globalIsPro }) {
             fetchReports();
         }
     }, [user]);
+
+
+
 
     useEffect(() => {
         checkMonthlyUsage();
@@ -223,13 +221,16 @@ export default function Dashboard({ user, isPro: globalIsPro }) {
                 let thumbnail = null;
 
 
+                // Add fallback for missing or empty images
+                const images = Array.isArray(data.images) && data.images.length > 0 ? data.images : [];
+
                 // 1. Restore Report Text Data
                 setReportId(docSnap.id);
                 setProjectName(data.projectName);
                 setReport({
                     projectName: data.projectName,
                     date: data.date,
-                    images: data.images || [],
+                    images: images,
                     summary: {
                         status: data.status,
                         accomplishments: data.accomplishments || [],
@@ -239,8 +240,8 @@ export default function Dashboard({ user, isPro: globalIsPro }) {
                 });
 
                 // 2. Restore Media Items for Display
-                if (data.images && Array.isArray(data.images)) {
-                    const restoredMedia = data.images.map(img => ({
+                if (images.length > 0) {
+                    const restoredMedia = images.map(img => ({
                         id: Math.random().toString(36).substr(2, 9),
                         preview: img.url, 
                         type: img.type || 'image',
@@ -248,10 +249,6 @@ export default function Dashboard({ user, isPro: globalIsPro }) {
                         uploadStatus: 'done' 
                     }));
                     setMediaItems(restoredMedia);
-                    
-                    if (data.images.length > 0) {
-                        thumbnail = data.images[0].url;
-                    }
                 } else {
                     setMediaItems([]);
                 }
@@ -274,8 +271,8 @@ export default function Dashboard({ user, isPro: globalIsPro }) {
 
                 const bulkGalleryMessage = {
                     role: 'assistant',
-                    content: `📂 **Bulk Report Assets (${data.images.length} items):** Click any asset below to view full resolution.`,
-                    gallery: data.images 
+                    content: `📂 **Bulk Report Assets (${images.length} items):** Click any asset below to view full resolution.`,
+                    gallery: images 
                 };
 
                 const firstAsset = data.images?.[0];
@@ -291,26 +288,27 @@ export default function Dashboard({ user, isPro: globalIsPro }) {
                     }
                 }
 
-                setChatMessages(prev => {
-                    const lastMsg = prev[prev.length - 1];
-                    const reportNotice = `📂 **Opened Report:** ${data.projectName}`;
-                    if (lastMsg?.content === reportNotice) {
-                        return prev; 
-                    }
-                    
-                    return [
-                        ...prev,
-                        {
-                            role: 'assistant',
-                            content: `📂 **Opened Report:** ${data.projectName}`,
-                            image: firstAsset?.url || null,
-                            assetType: safeType,
-                            //image: data.images?.[0]?.url || null,
-                            gallery: data.images || []
-                            //image: thumbnail 
+                // Add bulkGalleryMessage to chat messages if images exist
+                if (images.length > 0) {
+                    const bulkGalleryMessage = {
+                        role: 'assistant',
+                        content: `📂 **Bulk Report Assets (${images.length} items):** Click any asset below to view full resolution.`,
+                        gallery: images
+                    };
+
+                    setChatMessages(prev => {
+                        const lastMsg = prev[prev.length - 1];
+                        const reportNotice = `📂 **Opened Report:** ${data.projectName}`;
+                        if (lastMsg?.content === reportNotice) {
+                            return [...prev, bulkGalleryMessage];
                         }
-                    ];
-                });
+                        return [
+                            ...prev,
+                            { role: 'assistant', content: reportNotice },
+                            bulkGalleryMessage
+                        ];
+                    });
+                }
 
                 await saveToDB({
                     userId: user.uid,
@@ -409,10 +407,10 @@ export default function Dashboard({ user, isPro: globalIsPro }) {
     // --- 6. HANDLERS ---
 
     // The file upload logic
-const uploadLargeFile = async (file, user, category = 'uploads') => {
-     if (!user) {
-        console.error("No user found! Are you logged in?");
-        return;
+    const uploadLargeFile = async (file, user, category = 'uploads', onProgress = null) => {
+     if (!user || !user.uid) {
+        console.error("❌ No user found! Are you logged in?");
+        return null; // Return null instead of throwing to prevent app crash
     }
 
 
@@ -432,7 +430,7 @@ const uploadLargeFile = async (file, user, category = 'uploads') => {
             fileName: file.name, 
             contentType: file.type || 'application/octet-stream', 
             userId: user.uid,
-            userName: user.displayName || user?.email?.split('@')[0] || 'user',
+            userName: user.displayName || ( user?.email.split('@')[0] || 'user' ),
             category: category
         })
     });
@@ -455,6 +453,7 @@ const uploadLargeFile = async (file, user, category = 'uploads') => {
 
     const sessionUrl = startRes.headers.get('Location');
 
+
     // 2. Binary Stream to Google
     return new Promise((resolve, reject) => {
         const xhr = new XMLHttpRequest();
@@ -467,13 +466,13 @@ const uploadLargeFile = async (file, user, category = 'uploads') => {
         xhr.upload.onprogress = (e) => {
             if (e.lengthComputable) {
                 const percent = Math.round((e.loaded / e.total) * 100);
-                setUploadProgress(percent === 100 ? 99 : percent);
+                if (onProgress) onProgress(percent);
             }
         };
 
         xhr.onload = () => {
             if (xhr.status === 200 || xhr.status === 201) {
-                setUploadProgress(100);
+                if (onProgress) onProgress(100);
                 // Return an object so your .map() logic works correctly
                 resolve({ publicUrl }); 
             } else {
@@ -574,6 +573,19 @@ const uploadLargeFile = async (file, user, category = 'uploads') => {
     });
 
     setMediaItems(prev => [...prev, ...newItems]);
+
+    files.forEach(file => {
+        uploadLargeFile(file, user).then(uploadedFile => {
+            setMediaItems(prev => prev.map(item => 
+                item.name === file.name ? { ...item, uploadStatus: 'done', preview: uploadedFile.publicUrl } : item
+            ));
+        }).catch(err => {
+            console.error("Upload failed:", err);
+            setMediaItems(prev => prev.map(item => 
+                item.name === file.name ? { ...item, uploadStatus: 'error' } : item
+            ));
+        });
+    });
 };
 
     const removeMedia = (id) => {
@@ -581,6 +593,14 @@ const uploadLargeFile = async (file, user, category = 'uploads') => {
     };
 
     const analyzeSite = async () => {
+
+        // 1. Session Check (Primary Safeguard)
+        if (!user || !user.uid) {
+            alert("Session error: Please wait a moment or re-login.");
+            return;
+        }
+
+        // 2. Usage Check (Business Logic)
         if (!isPro && monthlyUsage >= 5) {
             setShowPricing(true);
             return;
@@ -603,15 +623,8 @@ const uploadLargeFile = async (file, user, category = 'uploads') => {
             const mediaParts = await Promise.all(mediaItems.map(async (item) => {
                 if (!item.file) return null;
 
-
-                if (item.file) {
-                    if (item.file.size > 50 * 1024 * 1024) {
-                        const cloudUrl = await uploadLargeFile(item.file);
-                        return { text: `[VIDEO_CONTEXT: ${cloudUrl}]` };
-                    }
-
+                try {
                     // For PDFs Documents (OCR)
-
                     if (item.file.type === 'application/pdf') {
                         return new Promise((resolve) => {
                             const reader = new FileReader();
@@ -625,12 +638,45 @@ const uploadLargeFile = async (file, user, category = 'uploads') => {
                         });
                     }
 
-
                     // For images
                     if (item.type === 'image') {
                         const compressed = await compressImage(item.file);
                         return { inlineData: { data: compressed, mimeType: 'image/jpeg' } };
                     }
+
+                    // For videos - extract frame and analyze it
+                    if (item.type === 'video') {
+                        return new Promise((resolve) => {
+                            const video = document.createElement('video');
+                            video.src = URL.createObjectURL(item.file);
+                            video.muted = true;
+                            video.currentTime = 2; // Get frame at 2 seconds
+                            
+                            video.onseeked = async () => {
+                                const canvas = document.createElement('canvas');
+                                canvas.width = video.videoWidth;
+                                canvas.height = video.videoHeight;
+                                const ctx = canvas.getContext('2d');
+                                ctx.drawImage(video, 0, 0);
+                                
+                                const imageData = canvas.toDataURL('image/jpeg', 0.7).split(',')[1];
+                                resolve({
+                                    inlineData: {
+                                        data: imageData,
+                                        mimeType: 'image/jpeg'
+                                    }
+                                });
+                                URL.revokeObjectURL(video.src);
+                            };
+                            
+                            video.onerror = () => {
+                                resolve(null); // Skip if video can't be read
+                            };
+                        });
+                    }
+                } catch (err) {
+                    console.error("Media processing error:", err);
+                    return null;
                 }
                 return null;
             }));
@@ -638,37 +684,60 @@ const uploadLargeFile = async (file, user, category = 'uploads') => {
             const validMediaParts = mediaParts.filter(p => p !== null);
 
             // SUCCESSFUL STREAM UPLOAD LOGIC
-            const uploadedImages = await Promise.all(mediaItems.map(async (item) => {
-    // 1. If no file is selected, return the existing preview
-    if (!item.file) {
-        return { url: item.preview, type: item.type, name: item.name, isLarge: true };
-    }
+            // Track progress for each file individually
+            uploadProgressRef.current = {};
+            mediaItems.forEach((item, idx) => {
+                uploadProgressRef.current[idx] = 0;
+            });
 
-    try {
-        // 2. Use the unified backend function for the upload
-        // This handles the naming (john_ya42i) and the path (images/)
-        const result = await uploadLargeFile(item.file, user);
-        const finalUrl = result.publicUrl;
-        
-        // 3. Return the exact object structure your state/database expects
-        return { 
-            url: result.publicUrl, 
-            type: item.type, 
-            name: item.name 
-        };
-    } catch (error) {
-        console.error(`❌ Upload failed for ${item.name}:`, error);
-        // 4. Return null so one failure doesn't crash the whole process
-        return null; 
-    }
-}))
-// 5. CRITICAL: Remove the nulls so your analysis function doesn't crash
-.then(results => results.filter(img => img !== null));
+            let uploadedImages = [];
+            try {
+                uploadedImages = await Promise.all(mediaItems.map(async (item, index) => {
+                    if (!item.file) {
+                        return { url: item.preview, type: item.type, name: item.name };
+                    }
+
+                    const result = await uploadLargeFile(item.file, user, 'uploads', (percent) => {
+                        // Update this specific file's progress
+                        uploadProgressRef.current[index] = percent;
+                        
+                        // Calculate average progress across all files
+                        const progressValues = Object.values(uploadProgressRef.current);
+                        const avgProgress = Math.floor(
+                            progressValues.reduce((a, b) => a + b, 0) / progressValues.length
+                        );
+                        
+                        setUploadProgress(avgProgress === 100 ? 99 : avgProgress);
+                    });
+                    return { url: result.publicUrl, type: item.type, name: item.name };
+                }));
+
+                // Filter out null results and set final progress
+                uploadedImages = uploadedImages.filter(img => img !== null);
+                setUploadProgress(100);
+            } catch (err) {
+                console.error("❌ Upload failed:", err);
+                setAnalyzing(false);
+                return;
+            }
 
             const prompt = `Analyze these ${mediaItems.length} assets for construction progress. Return JSON: { "projectName": "${projectName || 'Untitled'}", "summary": { "status": "on_track", "accomplishments": [], "concerns": [], "nextSteps": [] } }`;
 
-            const result = await model.generateContent([prompt, ...validMediaParts.filter(Boolean)]);
-            const reportData = JSON.parse(result.response.text());
+            // Add retry logic for AI analysis
+            let reportData, analysisRetries = 0;
+            while (analysisRetries < 2) {
+                try {
+                    const result = await model.generateContent([prompt, ...validMediaParts.filter(Boolean)]);
+                    const responseText = result.response.text();
+                    reportData = JSON.parse(responseText);
+                    break;
+                } catch (err) {
+                    analysisRetries++;
+                    if (analysisRetries >= 2) throw err;
+                    console.warn(`Analysis failed, retrying (${analysisRetries}/2)...`);
+                    await new Promise(r => setTimeout(r, 2000)); // Wait 2 seconds before retry
+                }
+            }
 
             setReport({
                 projectName: reportData.projectName || projectName,
@@ -709,12 +778,22 @@ const uploadLargeFile = async (file, user, category = 'uploads') => {
             }
 
         } catch (error) {
-            if (error.message.includes("429") || error.message.includes("Quota")) {
-                alert("⚠️ AI Usage Limit Reached. Please wait a minute and try again.");
+            console.error("Analysis Error:", error);
+            let errorMsg = "❌ Analysis failed. ";
+            
+            if (error.message?.includes("429") || error.message?.includes("Quota")) {
+                errorMsg += "AI usage limit reached. Please wait a minute and try again.";
+            } else if (error.message?.includes("Unexpected")) {
+                errorMsg += "Invalid response from AI. Try uploading clearer images/videos.";
+            } else if (error.message?.includes("SyntaxError") || error.message?.includes("JSON")) {
+                errorMsg += "Could not parse AI response. Please try again.";
+            } else if (error.message?.includes("network") || error.message?.includes("fetch")) {
+                errorMsg += "Network error. Check your connection and try again.";
             } else {
-                alert(`Error: ${error.message}`);
+                errorMsg += error.message;
             }
-            console.error(error);
+            
+            alert(errorMsg);
         } finally {
             setAnalyzing(false);
             setUploadProgress(0);
@@ -726,14 +805,15 @@ const uploadLargeFile = async (file, user, category = 'uploads') => {
     // Replace these keys with the EXACT Price IDs from your PricingModal.jsx
     // Replace the URLs with your actual 'buy.stripe.com' links
     const liveLinks = {
-        'price_1Sz9K72NaqjgxJZ3NKo6BAuK': 'https://buy.stripe.com/your_live_monthly_link',
-        'price_1Sz9K72NaqjgxJZ3hLY1TTa0': 'https://buy.stripe.com/your_live_yearly_link'
+        'price_1Sz9K72NaqjgxJZ3NKo6BAuK': 'https://buy.stripe.com/cNieV62jv6fL0bq1od9Ve01',
+        'price_1Sz9K72NaqjgxJZ3hLY1TTa0': 'https://buy.stripe.com/cNi4gsbU57jP0bq5Et9Ve00'
     };
 
     // 2. Check if the current priceId exists in your link map
     if (liveLinks[priceId]) {
         console.log("💳 Redirecting to Stripe Payment Link...");
-        window.location.href = liveLinks[priceId];
+        window.open(liveLinks[priceId], '_blank', 'noopener,noreferrer');
+        //setLoading(false);
         return; // Exit early if we use the direct link
     }
 
@@ -834,12 +914,27 @@ const uploadLargeFile = async (file, user, category = 'uploads') => {
                 parts: [{ text: typeof m.content === 'string' ? m.content : "User shared an asset." }]
             }));
 
-            if (history.length > 0 && history[0].role !== 'user') {
+            // Remove ALL leading 'model' messages to ensure history starts with 'user'
+            while (history.length > 0 && history[0].role === 'model') {
                 history = history.slice(1);
             }
 
             const chat = model.startChat({ history });
-            const result = await chat.sendMessage(msg);
+            
+            // Add retry logic for transient failures
+            let result, retries = 0;
+            while (retries < 2) {
+                try {
+                    result = await chat.sendMessage(msg);
+                    break;
+                } catch (err) {
+                    retries++;
+                    if (retries >= 2) throw err;
+                    console.warn(`AI request failed, retrying (${retries}/2)...`);
+                    await new Promise(r => setTimeout(r, 1000)); // Wait 1 second before retry
+                }
+            }
+            
             const responseText = result.response.text();
 
             const isLoadCommand = responseText.includes('[[LOAD:');
@@ -850,12 +945,14 @@ const uploadLargeFile = async (file, user, category = 'uploads') => {
                 try {
                     await saveToDB({
                         userId: user.uid,
-                        reportId: report?.id || null,
+                        reportId: report?.id,
                         message: msg,
                         aiResponse: responseText,
                         imageUrl: null
                     });
-                    console.log("✅ DB Sync Success. Saved Row ID:", result.id);
+
+                    //setChatMessages(prev => [...prev, { role: 'assistant', content: responseText }]);
+                    //console.log("✅ DB Sync Success. Saved Row ID:", result.id);
                 } catch (dbErr) {
                     console.warn("DB Sync failed but AI responded:", dbErr);
                 }
@@ -877,7 +974,17 @@ const uploadLargeFile = async (file, user, category = 'uploads') => {
             }
         } catch (error) {
             console.error("Chat Logic Error:", error);
-            setChatMessages(prev => [...prev, { role: 'assistant', content: "Rukmer AI encountered a temporary connection issue." }]);
+            
+            let errorMessage = "Rukmer AI encountered a temporary connection issue.";
+            if (error.message?.includes("429") || error.message?.includes("quota")) {
+                errorMessage = "⚠️ AI rate limit reached. Please wait a moment and try again.";
+            } else if (error.message?.includes("API key")) {
+                errorMessage = "⚠️ API authentication issue. Please refresh and try again.";
+            } else if (error.message?.includes("network") || error.message?.includes("fetch")) {
+                errorMessage = "⚠️ Network error. Please check your connection and try again.";
+            }
+            
+            setChatMessages(prev => [...prev, { role: 'assistant', content: errorMessage }]);
         } finally {
             setChatLoading(false);
         }
@@ -938,18 +1045,30 @@ const uploadLargeFile = async (file, user, category = 'uploads') => {
     };
 
     const handleSoftReset = async () => {
-        setChatMessages([]);
-        if (chatSessionRef.current) chatSessionRef.current = null;
-        try {
-            const response = await fetch(`${API_BASE_URL}/chat/hide`, {
-                method: 'PUT',
-                headers: { 'Content-Type': 'application/json' }
-            });
-            if (response.ok) console.log("✅ Database successfully hid the messages.");
-        } catch (error) {
-            console.error("❌ Failed to reach backend for reset:", error);
+    // 1. Clear UI immediately for a snappy feel
+    setChatMessages([]);
+    if (chatSessionRef.current) chatSessionRef.current = null;
+
+    try {
+        // 2. Tell the Database to hide these messages forever
+        const response = await fetch(`${API_BASE_URL}/api/chat/hide`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ userId: user.uid }) // Send the User ID!
+        });
+
+        if (response.ok) {
+            console.log("✅ Database successfully hid the messages.");
+        } else if (response.status === 404) {
+            // Backend route not present — treat as non-fatal for frontend UX
+            console.warn("⚠️ /chat/hide endpoint not found (404). Skipping backend sync.");
+        } else {
+            console.warn(`⚠️ Database failed to hide messages. Status: ${response.status}`);
         }
-    };
+    } catch (error) {
+        console.error("❌ Network error during clear:", error);
+    }
+};
 
     const resetApp = () => {
         setMediaItems([]);
@@ -989,8 +1108,10 @@ const uploadLargeFile = async (file, user, category = 'uploads') => {
                 </div>
                 <div className="flex items-center gap-4">
                     {isPro ? (
-                        <span className="bg-gradient-to-r from-purple-600 to-blue-600 text-white px-3 py-1 rounded-full text-[10px] font-bold shadow-lg flex items-center gap-1">
-                            <Zap size={10} fill="white" /> PRO MEMBER
+                        <span className={
+                            `bg-gradient-to-r from-purple-600 to-blue-600 text-white px-3 py-1 rounded-full text-[10px] font-bold shadow-lg flex items-center gap-1`
+                        }>
+                            <Zap size={10} className={darkMode ? "fill-white !text-white" : "fill-amber-300 text-amber-300"} /> PRO MEMBER
                         </span>
                     ) : (
                         <button
@@ -1015,16 +1136,25 @@ const uploadLargeFile = async (file, user, category = 'uploads') => {
                 <div className="lg:col-span-5 flex flex-col h-full min-h-0 overflow-y-auto pr-2 custom-scrollbar flex-shrink-0">
                     <div className="mb-6 space-y-1">
                         <button
-                            onClick={() => { setShowHistory(false); if (report) resetApp(); }}
-                            className={`w-full flex items-center justify-between p-3.5 rounded-xl transition-all group ${!showHistory && !report ? (darkMode ? 'bg-[#222] text-white' : 'bg-white shadow-sm border border-gray-200 text-gray-900') : 'text-gray-500 hover:bg-gray-100 dark:hover:bg-[#222]'
-                                }`}
-                        >
-                            <div className="flex items-center gap-3 font-semibold">
-                                <SquarePen size={20} className={(!showHistory && !report) ? "text-[#7c3aed]" : "text-gray-400"} />
-                                <span>New Chat</span>
-                            </div>
-                            <Plus size={18} className="text-gray-400 group-hover:text-gray-600" />
-                        </button>
+    onClick={() => {
+        handleSoftReset(); // Marks history as hidden in SQL
+        resetApp();        // Resets the UI and state
+    }}
+    className={`w-full flex items-center justify-between p-3.5 rounded-xl transition-all group ${
+        !showHistory && !report 
+            ? (darkMode ? 'bg-[#222] text-white' : 'bg-white shadow-sm border border-gray-200 text-gray-900') 
+            : 'text-gray-500 hover:bg-gray-100 dark:hover:bg-[#222]'
+    }`} // Added the missing } here
+>
+    <div className="flex items-center gap-3">
+        <Edit2 
+            size={20} 
+            className={(!showHistory && !report) ? "text-[#7c3aed]" : "text-gray-400"} 
+        />
+        <span className="font-semibold">New Chat</span>
+    </div>
+    <Plus size={18} className="text-gray-400 group-hover:text-gray-600" />
+</button>
 
                         <button className="w-full flex items-center gap-3 p-3.5 rounded-xl text-gray-500 hover:bg-gray-100 dark:hover:bg-[#222] transition-all font-semibold opacity-60 cursor-not-allowed">
                             <LayoutGrid size={20} />
@@ -1164,7 +1294,7 @@ const uploadLargeFile = async (file, user, category = 'uploads') => {
                                                             </div>
 
                                                 {/* Upload Progress Bar */}
-                                                {analyzing && uploadProgress > 0 && uploadProgress < 100 && (
+                                                {analyzing && uploadProgress >= 0 && uploadProgress < 100 && (
                                                     <div className="mb-4 px-2">
                                                         <div className="flex justify-between text-[10px] mb-1 font-bold">
                                                            {/* <span>Committing to Google Cloud...</span> */}
@@ -1200,7 +1330,9 @@ const uploadLargeFile = async (file, user, category = 'uploads') => {
                                                         {analyzing ? (
                                                             <>
                                                                 <Loader2 className="animate-spin" size={18} />
-                                                                <span>{uploadProgress > 0 ? `Uploading (${uploadProgress}%)` : 'Processing...'}</span>
+                                                                <span>{uploadProgress > 0 && uploadProgress < 100 
+                                                                 ? `Uploading (${uploadProgress}%)` 
+                                                                  : "Processing..."}</span>
                                                             </>
                                                         ) : (
                                                             <>
