@@ -816,7 +816,9 @@ useEffect(() => {
     // 2. Check if the current priceId exists in your link map
     if (liveLinks[priceId]) {
         console.log("💳 Redirecting to Stripe Payment Link...");
-        window.open(liveLinks[priceId], '_blank', 'noopener,noreferrer');
+        const paymentUrl = new URL(liveLinks[priceId]);
+        paymentUrl.searchParams.append('client_reference_id', user.uid);
+        window.open(paymentUrl.toString(), '_blank', 'noopener,noreferrer');
         //setLoading(false);
         return; // Exit early if we use the direct link
     }

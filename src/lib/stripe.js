@@ -7,6 +7,7 @@ export const handleUpgrade = async (userId, priceId) => {
     collection(db, "customers", userId, "checkout_sessions"),
     {
       price: priceId,
+      allow_promotion_codes: true,
       success_url: window.location.origin + '/dashboard?payment=success',
       cancel_url: window.location.origin + '/dashboard?payment=cancelled',
     }
