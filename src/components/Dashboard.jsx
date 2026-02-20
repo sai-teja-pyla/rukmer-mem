@@ -72,6 +72,7 @@ export default function Dashboard({ user, isPro: globalIsPro }) {
 
     // --- SUBSCRIPTION LOGIC ---
     const [showPricing, setShowPricing] = useState(false);
+    const [loading, setLoading] = useState(false);
 
     const isPro = globalIsPro;
 
@@ -421,11 +422,14 @@ useEffect(() => {
 
     //const userNameToSend = user.displayName || user.email.split('@')[0];
 
+    const token = await user.getIdToken();
 
 
     const response = await fetch(handshakeUrl, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token}` 
+        },
         body: JSON.stringify({ 
             fileName: file.name, 
             contentType: file.type || 'application/octet-stream', 
@@ -1049,11 +1053,15 @@ useEffect(() => {
     setChatMessages([]);
     if (chatSessionRef.current) chatSessionRef.current = null;
 
+    const token = await user.getIdToken();
+
     try {
         // 2. Tell the Database to hide these messages forever
         const response = await fetch(`${API_BASE_URL}/api/chat/hide`, {
             method: 'PUT',
-            headers: { 'Content-Type': 'application/json' },
+            headers: { 'Content-Type': 'application/json',
+                     'Authorization': `Bearer ${token}`
+             },
             body: JSON.stringify({ userId: user.uid }) // Send the User ID!
         });
 

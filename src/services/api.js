@@ -1,20 +1,43 @@
-const BASE_DOMAIN = import.meta.env.VITE_API_URL || 'http://localhost:5001';
+import { auth } from '../firebase';
+
+const BASE_DOMAIN = (import.meta.env.VITE_API_URL || 'http://localhost:5001').replace(/\/$/, '');
+
+// 🚨 THE BULLETPROOF LOCK: Forces React to wait for Firebase
+const waitForToken = () => {
+    return new Promise((resolve, reject) => {
+        const unsubscribe = auth.onAuthStateChanged(async (user) => {
+            unsubscribe(); // Stop listening once we get the user
+            if (user) {
+                try {
+                    const token = await user.getIdToken(true); // Force a fresh token
+                    console.log("💎 TOKEN OBTAINED:", token.substring(0, 15) + "...");
+                    resolve(token);
+                } catch (error) {
+                    reject(new Error("Failed to refresh Firebase token"));
+                }
+            } else {
+                reject(new Error("User is not logged in"));
+            }
+        });
+    });
+};
 
 /**
  * Sends a chat message to the backend.
  */
-export const sendChatMessage = async ({ userId, reportId, message, aiResponse, imageUrl }) => {
+export const sendChatMessage = async (data) => {
     try {
-        // FIX #1: We explicitly add '/api/chat' here.
-        // This fixes the "405 Method Not Allowed" error.
-        const endpoint = `${BASE_DOMAIN}/api/chat`; 
-        
-        console.log("📤 API Sending to:", endpoint); 
+        const endpoint = `${BASE_DOMAIN}/api/chat`;
+        const token = await waitForToken(); // 👈 Wait securely for the token
 
         const response = await fetch(endpoint, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ userId, reportId, message, aiResponse, imageUrl }),
+            headers: { 
+                'Accept': 'application/json',
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${token}` // 👈 Guaranteed to exist now
+            },
+            body: JSON.stringify(data),
         });
 
         if (!response.ok) {
@@ -32,26 +55,22 @@ export const sendChatMessage = async ({ userId, reportId, message, aiResponse, i
 /**
  * Fetches chat history.
  */
-// FIX #2: Added 'userId' inside the parentheses below!
-// Previously it was empty "async () =>", causing the ReferenceError.
 export const fetchChatHistory = async (userId) => { 
     try {
-        if (!userId) {
-            console.warn("⚠️ fetchChatHistory called without userId");
-            return [];
-        }
+        if (!userId) return [];
 
-        // FIX #3: Ensure we hit /api/history, not just /history
         const endpoint = `${BASE_DOMAIN}/api/history?userId=${userId}`;
+        const token = await waitForToken(); // 👈 Wait securely
         
-        console.log("📡 Fetching History from:", endpoint);
-
-        const response = await fetch(endpoint);
+        const response = await fetch(endpoint, {
+            method: 'GET',
+            headers: {
+                'Accept': 'application/json',
+                'Authorization': `Bearer ${token}` 
+            }
+        });
         
-        if (!response.ok) {
-            throw new Error('Failed to fetch history');
-        }
-
+        if (!response.ok) throw new Error('Failed to fetch history');
         return await response.json();
     } catch (error) {
         console.error("🚨 API Service Error (fetchChatHistory):", error);
@@ -59,11 +78,28 @@ export const fetchChatHistory = async (userId) => {
     }
 };
 
-export const hideChatHistory = async () => {
-    // FIX #4: Ensure we hit /api/chat/hide
-    const endpoint = `${BASE_DOMAIN}/api/chat/hide`;
-    const response = await fetch(endpoint, {
-        method: 'PUT'
-    });
-    return response.json();
+/**
+ * Hides chat history.
+ */
+export const hideChatHistory = async (userId) => { 
+    try {
+        const endpoint = `${BASE_DOMAIN}/api/chat/hide`;
+        const token = await waitForToken(); // 👈 Wait securely
+
+        const response = await fetch(endpoint, {
+            method: 'PUT',
+            headers: {
+                'Accept': 'application/json',
+                'Content-Type': 'application/json', 
+                'Authorization': `Bearer ${token}` 
+            },
+            body: JSON.stringify({ userId }) 
+        });
+
+        if (!response.ok) throw new Error('Failed to hide chat history');
+        return await response.json();
+    } catch (error) {
+        console.error("🚨 API Service Error (hideChatHistory):", error);
+        throw error;
+    }
 };
