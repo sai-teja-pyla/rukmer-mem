@@ -17,7 +17,7 @@ import { useUserSettings } from '../hooks/useUserSettings';
 // FIREBASE IMPORTS
 import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
 import { collection, addDoc, getDocs, getDoc, query, where, orderBy, serverTimestamp, doc, updateDoc, deleteDoc, onSnapshot, writeBatch } from "firebase/firestore";
-import { storage, db } from "../firebase";
+import { storage, db, auth } from "../firebase";
 
 // --- NEW API SERVICE IMPORTS ---
 import { sendChatMessage as saveToDB, fetchChatHistory } from '../services/api';
@@ -517,84 +517,89 @@ useEffect(() => {
     // --- 6. HANDLERS ---
 
     // The file upload logic
-    const uploadLargeFile = async (file, user, category = 'uploads', onProgress = null) => {
-     if (!user || !user.uid) {
-        console.error("❌ No user found! Are you logged in?");
-        return null; // Return null instead of throwing to prevent app crash
+    // Add 'auth' to your existing firebase imports at the top
+
+const uploadLargeFile = async (file, passedUser, category = 'uploads', onProgress = null) => {
+    // 1. Get the LIVE user instance directly from Firebase Auth
+    // This fixes the "getIdToken is not a function" error
+    const currentUser = auth.currentUser;
+
+    if (!currentUser) {
+        console.error("❌ No authenticated user found!");
+        return null;
     }
 
+    try {
+        const baseUrl = (import.meta.env.VITE_API_URL || 'http://localhost:5001').replace(/\/$/, '');
+        const handshakeUrl = `${baseUrl}/api/storage/resumable-url`;
 
-    const baseUrl = (import.meta.env.VITE_API_URL || 'http://localhost:5001').replace(/\/$/, '');
-    const handshakeUrl = `${baseUrl}/api/storage/resumable-url`;
+        console.log("📡 Attempting secure handshake at:", handshakeUrl);
 
-    console.log("📡 Attempting handshake at:", handshakeUrl);
+        // 2. Get a fresh security token
+        const token = await currentUser.getIdToken(true);
 
-    //const userNameToSend = user.displayName || user.email.split('@')[0];
+        // 3. Request the signed URL from your backend
+        const response = await fetch(handshakeUrl, {
+            method: 'POST',
+            headers: { 
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${token}` // 🚨 Your "Bouncer" needs this!
+            },
+            body: JSON.stringify({ 
+                fileName: file.name, 
+                contentType: file.type || 'application/octet-stream', 
+                userId: currentUser.uid,
+                userName: currentUser.displayName || currentUser.email.split('@')[0],
+                category: category
+            })
+        });
 
-    const token = await user.getIdToken();
-
-
-    const response = await fetch(handshakeUrl, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json',
-        'Authorization': `Bearer ${token}` 
-        },
-        body: JSON.stringify({ 
-            fileName: file.name, 
-            contentType: file.type || 'application/octet-stream', 
-            userId: user.uid,
-            userName: user.displayName || ( user?.email.split('@')[0] || 'user' ),
-            category: category
-        })
-    });
-    
-    if (!response.ok) {
-        const text = await response.text();
-        console.error("🚨 Server responded with error:", text);
-        throw new Error("Cloud handshake failed. Ensure backend route exists.");
-    }
-
-    const { uploadUrl, publicUrl } = await response.json();
-
-    const startRes = await fetch(uploadUrl, {
-        method: 'POST',
-        headers: {
-            'x-goog-resumable': 'start',
-            'Content-Type': file.type
+        if (!response.ok) {
+            const errorText = await response.text();
+            throw new Error(`Cloud handshake failed: ${errorText}`);
         }
-    });
 
-    const sessionUrl = startRes.headers.get('Location');
+        const { uploadUrl, publicUrl } = await response.json();
 
-
-    // 2. Binary Stream to Google
-    return new Promise((resolve, reject) => {
-        const xhr = new XMLHttpRequest();
-        xhr.open('PUT', sessionUrl);
-        xhr.setRequestHeader('Content-Type', file.type || 'application/octet-stream');
-    
-        // Use the filename as a unique key so multiple uploads don't clash
-        const fileKey = file.name;
-
-        xhr.upload.onprogress = (e) => {
-            if (e.lengthComputable) {
-                const percent = Math.round((e.loaded / e.total) * 100);
-                if (onProgress) onProgress(percent);
+        // 4. Start the resumable session with Google Cloud Storage
+        const startRes = await fetch(uploadUrl, {
+            method: 'POST',
+            headers: {
+                'x-goog-resumable': 'start',
+                'Content-Type': file.type
             }
-        };
+        });
 
-        xhr.onload = () => {
-            if (xhr.status === 200 || xhr.status === 201) {
-                if (onProgress) onProgress(100);
-                // Return an object so your .map() logic works correctly
-                resolve({ publicUrl }); 
-            } else {
-                reject(`GCS rejection: ${xhr.status}`);
-            }
-        };
-        xhr.onerror = () => reject('Network error');
-        xhr.send(file);
-    });
+        const sessionUrl = startRes.headers.get('Location');
+
+        // 5. Stream the binary data
+        return new Promise((resolve, reject) => {
+            const xhr = new XMLHttpRequest();
+            xhr.open('PUT', sessionUrl);
+            xhr.setRequestHeader('Content-Type', file.type || 'application/octet-stream');
+        
+            xhr.upload.onprogress = (e) => {
+                if (e.lengthComputable && onProgress) {
+                    const percent = Math.round((e.loaded / e.total) * 100);
+                    onProgress(percent);
+                }
+            };
+
+            xhr.onload = () => {
+                if (xhr.status === 200 || xhr.status === 201) {
+                    if (onProgress) onProgress(100);
+                    resolve({ publicUrl }); 
+                } else {
+                    reject(`GCS Upload Error: ${xhr.status}`);
+                }
+            };
+            xhr.onerror = () => reject('Network error during binary upload');
+            xhr.send(file);
+        });
+    } catch (error) {
+        console.error("🚨 uploadLargeFile Error:", error);
+        return null;
+    }
 };
 
 
@@ -1167,7 +1172,14 @@ useEffect(() => {
     setChatMessages([]);
     if (chatSessionRef.current) chatSessionRef.current = null;
 
-    const token = await user.getIdToken();
+    const currentUser = auth.currentUser;
+
+    if (!currentUser) {
+        console.warn("⚠️ No user found during reset, skipping database hide.");
+        return;
+    }
+
+    const token = await currentUser.getIdToken();
 
     try {
         // 2. Tell the Database to hide these messages forever
@@ -1176,7 +1188,7 @@ useEffect(() => {
             headers: { 'Content-Type': 'application/json',
                      'Authorization': `Bearer ${token}`
              },
-            body: JSON.stringify({ userId: user.uid }) // Send the User ID!
+            body: JSON.stringify({ userId: currentUser.uid }) // Send the User ID!
         });
 
         if (response.ok) {

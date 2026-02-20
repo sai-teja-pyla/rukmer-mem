@@ -89,7 +89,8 @@ export default function LandingPage({ onLoginSuccess }) {
                     <input 
                       type="text" 
                       placeholder="Your Name"
-                      className="w-full px-4 py-3 rounded-lg border border-slate-200 outline-none focus:ring-2 focus:ring-[#6366f1]/20"
+                      className="w-full px-4 py-3 rounded-lg border border-slate-200 outline-none focus:ring-2 focus:ring-[#6366f1]/20 !text-black"
+                      style={{ color: '#000000' }}
                       value={fullName}
                       onChange={(e) => setFullName(e.target.value)}
                     />
@@ -103,7 +104,8 @@ export default function LandingPage({ onLoginSuccess }) {
                 <input 
                   type="email" 
                   placeholder="you@example.com"
-                  className="w-full px-4 py-3 rounded-lg border border-slate-200 outline-none focus:ring-2 focus:ring-[#6366f1]/20"
+                  className="w-full px-4 py-3 rounded-lg border border-slate-200 outline-none focus:ring-2 focus:ring-[#6366f1]/20 !text-black"
+                  style={{ color: '#000000' }}
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
                 />
@@ -114,7 +116,8 @@ export default function LandingPage({ onLoginSuccess }) {
                 <input 
                   type="password" 
                   placeholder="********"
-                  className="w-full px-4 py-3 rounded-lg border border-slate-200 outline-none focus:ring-2 focus:ring-[#6366f1]/20"
+                  className="w-full px-4 py-3 rounded-lg border border-slate-200 outline-none focus:ring-2 focus:ring-[#6366f1]/20 !text-black"
+                  style={{ color: '#000000' }}
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                 />

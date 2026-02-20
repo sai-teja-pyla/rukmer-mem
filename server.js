@@ -43,7 +43,8 @@ app.use((req, res, next) => {
         'http://localhost:5173', 
         'https://rukmer-saas-service-361739908342.us-central1.run.app',
         'https://rukmer.com',
-        'https://www.rukmer.com'
+        'https://www.rukmer.com',
+        'https://app.rukmer.com'
     ];
     const origin = req.headers.origin;
     if (allowedOrigins.includes(origin)) res.header('Access-Control-Allow-Origin', origin);
