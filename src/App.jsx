@@ -46,6 +46,7 @@ export default function App() {
 
     const unsubscribeAuth = onAuthStateChanged(auth, (currentUser) => {
       if (currentUser) {
+        console.log("👤 User authenticated:", currentUser.email);
         setUser({
           name: currentUser.displayName || (currentUser?.email?.includes('@') ? currentUser.email.split('@')[0] : 'Guest User'),
           email: currentUser.email,
@@ -57,8 +58,17 @@ export default function App() {
         const subRef = collection(db, "customers", currentUser.uid, "subscriptions");
         const q = query(subRef, where("status", "in", ["active", "trialing"]));
         
+        console.log("🔍 Starting Firestore subscription query for:", currentUser.uid);
         unsubscribeSub = onSnapshot(q, (snapshot) => {
-          setIsPro(!snapshot.empty); // Set global Pro state
+          const newIsPro = !snapshot.empty;
+          console.log("📊 Firestore subscription query result:", newIsPro ? "✅ PRO" : "❌ FREE", "- Docs found:", snapshot.docs.length);
+          if (snapshot.docs.length > 0) {
+            console.log("📋 Subscription docs:", snapshot.docs.map(doc => ({ id: doc.id, data: doc.data() })));
+          }
+          setIsPro(newIsPro);
+        }, (error) => {
+          console.error("🚨 Firestore subscription error:", error);
+          setIsPro(false);
         });
 
       } else {

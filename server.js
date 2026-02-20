@@ -7,6 +7,8 @@ import { Storage } from '@google-cloud/storage';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import admin from 'firebase-admin'; // 🚨 The Security Bouncer
+//import { stripeWebhookHandler } from './backend/config/stripeController.js';
+
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -54,7 +56,7 @@ app.use((req, res, next) => {
     next();
 });
 
-// --- 4. Parsers ---
+
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
@@ -180,6 +182,20 @@ app.get('/api/chat/history/:userId', authenticateUser, async (req, res) => {
         res.json({ success: true, hidden: result.rowCount });
     } catch (error) {
         res.status(500).json({ error: "Failed to fetch history" });
+    }
+});
+
+app.get('/api/user-status/:userId', authenticateUser, async (req, res) => {
+    try {
+        const { userId } = req.params;
+        const result = await pool.query('SELECT is_pro, plan_type FROM users WHERE id = $1', [userId]);
+        if (result.rows.length > 0) {
+            res.json({ isPro: result.rows[0].is_pro, planType: result.rows[0].plan_type });
+        } else {
+            res.json({ isPro: false, planType: 'free' });
+        }
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to fetch user status' });
     }
 });
 

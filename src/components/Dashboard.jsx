@@ -79,6 +79,71 @@ export default function Dashboard({ user, isPro: globalIsPro }) {
     // For tracking monthly usage
     const [monthlyUsage, setMonthlyUsage] = useState(0);
 
+    // --- CHECK IF RETURNING FROM STRIPE & REFRESH PRO STATUS ---
+    useEffect(() => {
+        const checkSuccessPayment = async () => {
+            const params = new URLSearchParams(window.location.search);
+            if (params.has('success') || params.has('session_id')) {
+                console.log("🔄 Detected return from Stripe payment...");
+                console.log("   Current isPro status:", isPro);
+                console.log("   User UID:", user?.uid);
+                
+                // Don't redirect if already Pro
+                if (isPro) {
+                    console.log("✅ Already Pro! Payment was successful.");
+                    // Clean up URL
+                    window.history.replaceState({}, document.title, '/dashboard');
+                    return;
+                }
+                
+                // Give Firestore/backend a moment to sync (webhook delay)
+                console.log("   Waiting 2 seconds for webhook processing...");
+                await new Promise(r => setTimeout(r, 2000));
+                
+                // Poll for Pro status up to 60 seconds
+                let proStatusFound = false;
+                for (let attempt = 0; attempt < 12; attempt++) {
+                    console.log(`   Poll attempt ${attempt + 1}/12...`);
+                    
+                    try {
+                        const { getDocs, query, where, collection } = await import('firebase/firestore');
+                        const { db } = await import('../firebase');
+                        const subRef = collection(db, "customers", user.uid, "subscriptions");
+                        
+                        const q = query(subRef, where("status", "in", ["active", "trialing"]));
+                        const snapshot = await getDocs(q);
+                        
+                        if (!snapshot.empty) {
+                            console.log("✅ Firestore shows PRO status! Subscription found:", snapshot.docs[0].data());
+                            proStatusFound = true;
+                            break;
+                        }
+                    } catch (err) {
+                        console.error(`   Poll error:`, err.message);
+                    }
+                    
+                    // Wait 5 seconds before next poll
+                    if (attempt < 11) {
+                        await new Promise(r => setTimeout(r, 5000));
+                    }
+                }
+                
+                if (proStatusFound) {
+                    console.log("✅ Pro status confirmed! Reloading dashboard...");
+                    setTimeout(() => window.location.href = '/dashboard', 1000);
+                } else {
+                    console.warn("⚠️  Pro status not detected after 60 seconds. Webhook may have failed.");
+                    console.warn("   Please check server logs for webhook errors.");
+                }
+                
+                // Clean up URL to avoid infinite loops
+                window.history.replaceState({}, document.title, '/dashboard');
+            }
+        };
+        
+        checkSuccessPayment();
+    }, [isPro, user?.uid]);
+
     // --- 2. USAGE TRACKING LOGIC ---
     const checkMonthlyUsage = () => {
         if (!user || isPro) {
@@ -209,6 +274,50 @@ useEffect(() => {
         }
         restoreSession();
     }, [searchParams, user]);
+
+    //Successful payment redirect logic
+
+    // --- 🏆 THE FINAL STRIPE WEBHOOK LISTENER ---
+    useEffect(() => {
+        const urlParams = new URLSearchParams(window.location.search);
+        const paymentStatus = urlParams.get('payment');
+
+        if (paymentStatus === 'success' && user) {
+            console.log("💳 Payment successful! Waiting for Stripe to tell Firebase...");
+            
+            // 1. Point directly to this user's subscriptions folder in Firestore
+            const subsRef = collection(db, "customers", user.uid, "subscriptions");
+            
+            // 2. We only care when a subscription becomes 'active'
+            const q = query(subsRef, where("status", "in", ["trialing", "active"]));
+
+            // 3. Start listening to the database in real-time
+            const unsubscribe = onSnapshot(q, async (snapshot) => {
+                if (snapshot.empty) {
+                    console.log("⏳ Waiting for backend webhook to finish...");
+                    return;
+                }
+
+                console.log("✅ Webhook finished! Forcing React to reload...");
+                
+                // Stop listening to the database
+                unsubscribe(); 
+                
+                // 4. THE LIFESAVER: Force a hard reload of the app
+                // This ensures App.jsx fetches the new token and passes down isPro=true
+                window.location.href = "/dashboard";
+            });
+
+            return () => unsubscribe();
+            
+        } else if (paymentStatus === 'cancelled') {
+            console.warn("⚠️ Checkout was cancelled by the user.");
+            alert("Checkout cancelled. Your account has not been charged.");
+            window.location.href = "/dashboard"; // Hard reload to clear URL
+        }
+    }, [user]);
+
+
 
     // --- 4. HELPER: LOAD REPORT & SHOW IMAGE IN CHAT ---
     const loadReportById = async (id) => {
@@ -808,24 +917,27 @@ useEffect(() => {
     // 1. Define your LIVE Stripe Payment Links
     // Replace these keys with the EXACT Price IDs from your PricingModal.jsx
     // Replace the URLs with your actual 'buy.stripe.com' links
-    const liveLinks = {
-        'price_1Sz9K72NaqjgxJZ3NKo6BAuK': 'https://buy.stripe.com/cNieV62jv6fL0bq1od9Ve01',
-        'price_1Sz9K72NaqjgxJZ3hLY1TTa0': 'https://buy.stripe.com/cNi4gsbU57jP0bq5Et9Ve00'
-    };
+  //  const liveLinks = {
+    //    'price_1Sz9K72NaqjgxJZ3NKo6BAuK': 'https://buy.stripe.com/cNieV62jv6fL0bq1od9Ve01',
+      //  'price_1Sz9K72NaqjgxJZ3hLY1TTa0': 'https://buy.stripe.com/cNi4gsbU57jP0bq5Et9Ve00'
+  //  };
 
     // 2. Check if the current priceId exists in your link map
-    if (liveLinks[priceId]) {
-        console.log("💳 Redirecting to Stripe Payment Link...");
-        const paymentUrl = new URL(liveLinks[priceId]);
-        paymentUrl.searchParams.append('client_reference_id', user.uid);
-        window.open(paymentUrl.toString(), '_blank', 'noopener,noreferrer');
+   // if (liveLinks[priceId]) {
+     //   console.log("💳 Redirecting to Stripe Payment Link...");
+    //    const paymentUrl = new URL(liveLinks[priceId]);
+    //    paymentUrl.searchParams.append('client_reference_id', user.uid);
+    //    window.open(paymentUrl.toString(), '_blank', 'noopener,noreferrer');
         //setLoading(false);
-        return; // Exit early if we use the direct link
-    }
+   //     return; // Exit early if we use the direct link
+  //  }
 
     // 3. Fallback: Use the Firestore-Stripe Extension logic if no link is found
     try {
         setLoading(true); // Ensure you have a loading state for UX
+
+        console.log("💳 Generating secure Stripe session via Firebase...");
+
         const { handleUpgrade } = await import('../lib/stripe');
         await handleUpgrade(user.uid, priceId);
     } catch (error) {
@@ -1118,10 +1230,12 @@ useEffect(() => {
                 </div>
                 <div className="flex items-center gap-4">
                     {isPro ? (
-                        <span className={
-                            `bg-gradient-to-r from-purple-600 to-blue-600 text-white px-3 py-1 rounded-full text-[10px] font-bold shadow-lg flex items-center gap-1`
-                        }>
-                            <Zap size={10} className={darkMode ? "fill-white !text-white" : "fill-amber-300 text-amber-300"} /> PRO MEMBER
+                        <span className={`px-3 py-1 rounded-full text-[10px] font-bold shadow-lg flex items-center gap-1 ${
+                            darkMode 
+                                ? 'bg-gradient-to-r from-purple-600 to-blue-600 text-white' 
+                                : 'bg-gradient-to-r from-purple-400 to-blue-400 text-purple-900'
+                        }`}>
+                            <Zap size={10} className={darkMode ? "fill-white !text-white" : "fill-purple-900 text-purple-900"} /> PRO MEMBER
                         </span>
                     ) : (
                         <button
