@@ -39,17 +39,23 @@ export default function LoginPage() {
     }
   };
 
-  const handleForgotPassword = async (e) => {
-    e.preventDefault();
+  // --- PASSWORD RESET LOGIC ---
+  const handleForgotPassword = async () => {
     if (!email) {
-      setError("Please enter your email address first.");
+      setError("Please enter your email address first so we can send a reset link.");
       return;
     }
     try {
       await sendPasswordResetEmail(auth, email);
-      alert("Password reset link sent! Check your inbox.");
-    } catch (error) {
-      setError("Reset Error: " + error.message);
+      alert("🚀 Password reset link sent! Please check your inbox (and spam folder).");
+      setError(''); // Clear any previous errors
+    } catch (err) {
+      console.error("Reset Error:", err);
+      if (err.code === 'auth/user-not-found') {
+        setError("No account found with this email address.");
+      } else {
+        setError("Could not send reset email. Please try again later.");
+      }
     }
   };
 
@@ -89,10 +95,11 @@ export default function LoginPage() {
             <div>
               <div className="flex justify-between items-center mb-2">
                   <label className="block text-sm font-bold text-gray-900">Password</label>
+                  {/* FORGOT PASSWORD BUTTON */}
                   <button 
                     type="button"
                     onClick={handleForgotPassword}
-                    className="text-xs text-[#7c3aed] font-semibold hover:underline"
+                    className="text-xs text-[#7c3aed] font-semibold hover:underline transition-colors"
                   >
                     Forgot?
                   </button>
@@ -131,7 +138,6 @@ export default function LoginPage() {
               </Link>
             </div>
 
-            {/* LOGIN FOOTER MESSAGE: Matches Landing Page Style */}
             <div className="mt-6 text-center border-t border-gray-100 pt-6">
                <p className="text-sm text-gray-500">
                 Welcome back. Please login to your account to continue.
@@ -141,7 +147,7 @@ export default function LoginPage() {
         </div>
       </div>
 
-      {/* GLOBAL FOOTER: Correctly positioned at the bottom */}
+      {/* FOOTER */}
       <footer className="w-full py-8 border-t border-gray-200 bg-white text-center">
         <div className="flex flex-col items-center gap-2">
           <div className="flex justify-center space-x-6 text-sm text-gray-500">

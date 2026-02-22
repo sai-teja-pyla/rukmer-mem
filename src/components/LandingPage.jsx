@@ -3,7 +3,13 @@ import { useGoogleLogin } from '@react-oauth/google';
 import { Eye, ArrowRight, User, Loader2 } from 'lucide-react';
 // IMPORT FIREBASE FUNCTIONS
 import { auth, googleProvider } from '../firebase';
-import { createUserWithEmailAndPassword, signInWithEmailAndPassword, signInWithPopup, updateProfile } from "firebase/auth";
+import { 
+  createUserWithEmailAndPassword, 
+  signInWithEmailAndPassword, 
+  signInWithPopup, 
+  updateProfile,
+  sendPasswordResetEmail // Added this
+} from "firebase/auth";
 
 export default function LandingPage({ onLoginSuccess }) {
   const [isSignUp, setIsSignUp] = useState(false);
@@ -19,14 +25,10 @@ export default function LandingPage({ onLoginSuccess }) {
     setLoading(true);
     try {
       if (isSignUp) {
-        // --- CREATE ACCOUNT ---
         const userCredential = await createUserWithEmailAndPassword(auth, email, password);
-        // Add Name to Profile
         await updateProfile(userCredential.user, { displayName: fullName });
-        // Send user data back to App.jsx
         onLoginSuccess(userCredential.user);
       } else {
-        // --- SIGN IN ---
         const userCredential = await signInWithEmailAndPassword(auth, email, password);
         onLoginSuccess(userCredential.user);
       }
@@ -37,7 +39,7 @@ export default function LandingPage({ onLoginSuccess }) {
     }
   };
 
-  // 2. Handle Google Login (via Firebase Popup is easier than the custom hook for backend)
+  // 2. Handle Google Login
   const handleGoogleSignIn = async () => {
     try {
         const result = await signInWithPopup(auth, googleProvider);
@@ -48,14 +50,26 @@ export default function LandingPage({ onLoginSuccess }) {
     }
   };
 
+  // --- NEW: PASSWORD RESET LOGIC ---
+  const handleForgotPassword = async () => {
+    if (!email) {
+      setError("Please enter your email address first.");
+      return;
+    }
+    try {
+      await sendPasswordResetEmail(auth, email);
+      alert("🚀 Reset link sent! Check your email inbox.");
+      setError('');
+    } catch (err) {
+      setError("Reset Error: " + err.message.replace('Firebase: ', ''));
+    }
+  };
+
   return (
-    // 1. Change to flex-col to allow footer to sit at the bottom
     <div className="min-h-screen flex flex-col bg-white">
-      
-      {/* 2. Wrap the main content in a div that grows */}
       <div className="flex flex-1 w-full">
         
-        {/* LEFT SIDE (Blue) */}
+        {/* LEFT SIDE (Dark) */}
         <div className="hidden lg:flex w-1/2 bg-[#0f172a] p-12 flex-col justify-center relative overflow-hidden">
           <div className="relative z-10 max-w-lg">
             <h1 className="text-6xl font-bold text-white leading-tight mb-6">
@@ -67,7 +81,7 @@ export default function LandingPage({ onLoginSuccess }) {
           </div>
         </div>
 
-        {/* RIGHT SIDE (White Form) */}
+        {/* RIGHT SIDE (Form) */}
         <div className="w-full lg:w-1/2 flex flex-col justify-center items-center p-8">
           <div className="w-full max-w-md space-y-8">
             <div className="text-center">
@@ -90,7 +104,6 @@ export default function LandingPage({ onLoginSuccess }) {
                       type="text" 
                       placeholder="Your Name"
                       className="w-full px-4 py-3 rounded-lg border border-slate-200 outline-none focus:ring-2 focus:ring-[#6366f1]/20 !text-black"
-                      style={{ color: '#000000' }}
                       value={fullName}
                       onChange={(e) => setFullName(e.target.value)}
                     />
@@ -105,7 +118,6 @@ export default function LandingPage({ onLoginSuccess }) {
                   type="email" 
                   placeholder="you@example.com"
                   className="w-full px-4 py-3 rounded-lg border border-slate-200 outline-none focus:ring-2 focus:ring-[#6366f1]/20 !text-black"
-                  style={{ color: '#000000' }}
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
                 />
@@ -117,16 +129,27 @@ export default function LandingPage({ onLoginSuccess }) {
                   type="password" 
                   placeholder="********"
                   className="w-full px-4 py-3 rounded-lg border border-slate-200 outline-none focus:ring-2 focus:ring-[#6366f1]/20 !text-black"
-                  style={{ color: '#000000' }}
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                 />
+                
+                {/* FORGOT PASSWORD LINK (Only shows on Sign In mode) */}
+                {!isSignUp && (
+                  <div className="flex justify-end">
+                    <button 
+                      onClick={handleForgotPassword}
+                      className="text-xs text-[#6366f1] font-medium hover:underline transition-all"
+                    >
+                      Forgot Password?
+                    </button>
+                  </div>
+                )}
               </div>
 
               <button 
                   onClick={handleAuth}
                   disabled={loading}
-                  className="w-full bg-[#6366f1] hover:bg-[#4f46e5] text-white font-semibold py-3 px-4 rounded-lg flex items-center justify-center gap-2 transition-all"
+                  className="w-full bg-[#6366f1] hover:bg-[#4f46e5] text-white font-semibold py-3 px-4 rounded-lg flex items-center justify-center gap-2 transition-all shadow-sm"
               >
                 {loading ? <Loader2 className="animate-spin" /> : (isSignUp ? "Create Account" : "Sign In")}
               </button>
@@ -147,14 +170,13 @@ export default function LandingPage({ onLoginSuccess }) {
                  </button>
               </div>
 
-              {/* DYNAMIC FOOTER SECTION */}
               <div className="mt-6 text-center border-t border-slate-100 pt-6">
                 {isSignUp ? (
                   <p className="text-[11px] text-gray-500 leading-relaxed max-w-xs mx-auto">
                     By signing up, you agree to our{" "}
-                    <a href="/terms.html" target="_blank" rel="noopener noreferrer" className="text-[#6366f1] hover:underline font-medium">Terms of Service</a>
+                    <a href="/terms.html" target="_blank" className="text-[#6366f1] hover:underline font-medium">Terms of Service</a>
                     {" "}and{" "}
-                    <a href="/privacy.html" target="_blank" rel="noopener noreferrer" className="text-[#6366f1] hover:underline font-medium">Privacy Policy</a>.
+                    <a href="/privacy.html" target="_blank" className="text-[#6366f1] hover:underline font-medium">Privacy Policy</a>.
                   </p>
                 ) : (
                   <p className="text-sm text-gray-500">
@@ -167,7 +189,6 @@ export default function LandingPage({ onLoginSuccess }) {
         </div>
       </div>
 
-      {/* 3. ACTUAL FOOTER (Outside the split screen) */}
       <footer className="w-full py-8 border-t border-gray-100 bg-white text-center">
         <div className="flex flex-col items-center gap-2">
           <div className="flex justify-center space-x-6 text-sm text-gray-500">

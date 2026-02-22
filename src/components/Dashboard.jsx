@@ -82,6 +82,8 @@ export default function Dashboard({ user, isPro: globalIsPro }) {
     // For tracking monthly usage
     const [monthlyUsage, setMonthlyUsage] = useState(0);
 
+    
+
     // --- CHECK IF RETURNING FROM STRIPE & REFRESH PRO STATUS ---
     useEffect(() => {
         const checkSuccessPayment = async () => {
@@ -1216,6 +1218,8 @@ const uploadLargeFile = async (file, passedUser, category = 'uploads', onProgres
         setShowHistory(false);
         setSearchParams({});
     };
+
+
 
     const theme = {
         bg: darkMode ? 'bg-black' : 'bg-[#f8fafc]',

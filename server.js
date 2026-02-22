@@ -200,6 +200,26 @@ app.get('/api/user-status/:userId', authenticateUser, async (req, res) => {
     }
 });
 
+// Example Node.js/Express Route
+app.delete('/api/user/delete-complete', authenticateUser,async (req, res) => {
+  try {
+    const token = req.headers.authorization.split('Bearer ')[1];
+    const decodedToken = await admin.auth().verifyIdToken(token);
+    const uid = decodedToken.uid;
+
+    // 1. Delete from PostgreSQL
+    // await pool.query('DELETE FROM chats WHERE user_id = $1', [uid]);
+
+    // 2. Delete from Google Cloud Storage
+    // await storage.bucket('rukmer-assets').deleteFiles({ prefix: `uploads/${uid}/` });
+
+    res.status(200).send({ message: 'Cleanup successful' });
+  } catch (error) {
+    console.error(error);
+    res.status(500).send('Cleanup failed');
+  }
+});
+
 app.get('/{*any}', (req, res) => {
     if (req.path.startsWith('/api')) return res.status(404).json({ error: 'API route not found' });
     res.sendFile(path.join(__dirname, 'dist', 'index.html'));
