@@ -22,6 +22,9 @@ import { storage, db, auth } from "../firebase";
 // --- NEW API SERVICE IMPORTS ---
 import { sendChatMessage as saveToDB, fetchChatHistory } from '../services/api';
 
+// For analytics tracking
+//import { useAnalytics } from '../hooks/useAnalytics';
+
 // Constant for the resumable API endpoint
 const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:5001/api';
 

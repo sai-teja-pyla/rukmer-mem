@@ -15,6 +15,7 @@ import SignupPage from './pages/SignupPage';
 import PrivacyPage from './pages/PrivacyPage';
 import TermsPage from './pages/TermsPage'; 
 import SubscriptionPage from './pages/SubscriptionPage';
+import { initAnalytics } from '../hooks/analytics';
 
 // Hook Import
 import { useUserSettings } from './hooks/useUserSettings';
@@ -24,7 +25,12 @@ export default function App() {
   const [authLoading, setAuthLoading] = useState(true);
   const [isPro, setIsPro] = useState(false); // Global Pro status
   
-  const { settings } = useUserSettings(); 
+  const { settings } = useUserSettings();
+
+  // Initialize Google Analytics on app load
+  useEffect(() => {
+    initAnalytics('G-1XG5ZEVHB4');
+  }, []);
 
   // 1. THEME SYNC
   useLayoutEffect(() => {
