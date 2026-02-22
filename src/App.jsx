@@ -15,7 +15,7 @@ import SignupPage from './pages/SignupPage';
 import PrivacyPage from './pages/PrivacyPage';
 import TermsPage from './pages/TermsPage'; 
 import SubscriptionPage from './pages/SubscriptionPage';
-import { initAnalytics } from '../hooks/analytics';
+import { initAnalytics } from './hooks/analytics';
 
 // Hook Import
 import { useUserSettings } from './hooks/useUserSettings';
