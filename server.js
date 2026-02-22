@@ -6,8 +6,10 @@ import pool from './backend/config/db.js';
 import { Storage } from '@google-cloud/storage';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { sendWelcomeEmail } from './src/utils/mailer.js';
 import admin from 'firebase-admin'; // 🚨 The Security Bouncer
 //import { stripeWebhookHandler } from './backend/config/stripeController.js';
+
 
 
 const __filename = fileURLToPath(import.meta.url);
@@ -218,6 +220,17 @@ app.delete('/api/user/delete-complete', authenticateUser,async (req, res) => {
     console.error(error);
     res.status(500).send('Cleanup failed');
   }
+});
+
+app.post('/api/signup-success', authenticateUser, async (req, res) => {
+  const { email, name } = req.body;
+  
+  // 1. Your logic to sync Firestore...
+  
+  // 2. Trigger the professional welcome
+  await sendWelcomeEmail(email, name);
+  
+  res.status(200).send({ message: "Welcome email sent" });
 });
 
 app.get('/{*any}', (req, res) => {

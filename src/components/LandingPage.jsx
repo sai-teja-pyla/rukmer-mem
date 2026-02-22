@@ -1,15 +1,16 @@
 import React, { useState } from 'react';
-import { useGoogleLogin } from '@react-oauth/google';
-import { Eye, ArrowRight, User, Loader2 } from 'lucide-react';
+import { Eye, ArrowRight, User, Loader2, CheckCircle2 } from 'lucide-react';
 // IMPORT FIREBASE FUNCTIONS
-import { auth, googleProvider } from '../firebase';
+import { auth, googleProvider, db } from '../firebase';
 import { 
   createUserWithEmailAndPassword, 
   signInWithEmailAndPassword, 
   signInWithPopup, 
   updateProfile,
-  sendPasswordResetEmail // Added this
+  sendEmailVerification,
+  sendPasswordResetEmail 
 } from "firebase/auth";
+import { doc, setDoc, getDoc, serverTimestamp } from 'firebase/firestore';
 
 export default function LandingPage({ onLoginSuccess }) {
   const [isSignUp, setIsSignUp] = useState(false);
@@ -18,17 +19,50 @@ export default function LandingPage({ onLoginSuccess }) {
   const [fullName, setFullName] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [successMsg, setSuccessMsg] = useState('');
+
+  // Helper: Sync User Data to Firestore
+  const syncUserToFirestore = async (user, nameOverride = null) => {
+    const userDocRef = doc(db, "users", user.uid);
+    const userDoc = await getDoc(userDocRef);
+
+    // Only create a new doc if it doesn't exist
+    if (!userDoc.exists()) {
+      await setDoc(userDocRef, {
+        displayName: nameOverride || user.displayName || 'User',
+        email: user.email,
+        theme: "light",
+        createdAt: serverTimestamp(),
+        plan: "free"
+      });
+    }
+  };
 
   // 1. Handle Email/Password Login & Signup
   const handleAuth = async () => {
     setError('');
+    setSuccessMsg('');
     setLoading(true);
     try {
       if (isSignUp) {
+        // A. Create Account
         const userCredential = await createUserWithEmailAndPassword(auth, email, password);
-        await updateProfile(userCredential.user, { displayName: fullName });
-        onLoginSuccess(userCredential.user);
+        const user = userCredential.user;
+
+        // B. Update Profile Name & Reload local state
+        await updateProfile(user, { displayName: fullName });
+        await user.reload();
+        const refreshedUser = auth.currentUser;
+
+        // C. Sync to Firestore Database
+        await syncUserToFirestore(refreshedUser, fullName);
+        
+        // D. Send Branded Verification Email
+        await sendEmailVerification(refreshedUser);
+        
+        onLoginSuccess(refreshedUser);
       } else {
+        // Standard Login
         const userCredential = await signInWithEmailAndPassword(auth, email, password);
         onLoginSuccess(userCredential.user);
       }
@@ -41,25 +75,33 @@ export default function LandingPage({ onLoginSuccess }) {
 
   // 2. Handle Google Login
   const handleGoogleSignIn = async () => {
+    setError('');
+    setSuccessMsg('');
     try {
         const result = await signInWithPopup(auth, googleProvider);
-        onLoginSuccess(result.user);
+        const user = result.user;
+
+        // Sync Firestore (Ensure profile exists for dashboard)
+        await syncUserToFirestore(user);
+
+        onLoginSuccess(user);
     } catch (error) {
         console.error(error);
         setError("Google Sign-In Failed");
     }
   };
 
-  // --- NEW: PASSWORD RESET LOGIC ---
+  // 3. Handle Password Reset
   const handleForgotPassword = async () => {
     if (!email) {
       setError("Please enter your email address first.");
       return;
     }
+    setError('');
+    setSuccessMsg('');
     try {
       await sendPasswordResetEmail(auth, email);
-      alert("🚀 Reset link sent! Check your email inbox.");
-      setError('');
+      setSuccessMsg("Reset link sent! Check your inbox.");
     } catch (err) {
       setError("Reset Error: " + err.message.replace('Firebase: ', ''));
     }
@@ -69,7 +111,7 @@ export default function LandingPage({ onLoginSuccess }) {
     <div className="min-h-screen flex flex-col bg-white">
       <div className="flex flex-1 w-full">
         
-        {/* LEFT SIDE (Dark) */}
+        {/* LEFT SIDE (Branding) */}
         <div className="hidden lg:flex w-1/2 bg-[#0f172a] p-12 flex-col justify-center relative overflow-hidden">
           <div className="relative z-10 max-w-lg">
             <h1 className="text-6xl font-bold text-white leading-tight mb-6">
@@ -94,7 +136,13 @@ export default function LandingPage({ onLoginSuccess }) {
             </div>
 
             <div className="space-y-6 mt-8">
+              {/* Notifications */}
               {error && <div className="p-3 bg-red-50 text-red-600 text-sm rounded border border-red-200">{error}</div>}
+              {successMsg && (
+                <div className="p-3 bg-green-50 text-green-700 text-sm rounded border border-green-200 flex items-center gap-2">
+                  <CheckCircle2 size={16} /> {successMsg}
+                </div>
+              )}
 
               {isSignUp && (
                 <div className="space-y-2">
@@ -103,7 +151,7 @@ export default function LandingPage({ onLoginSuccess }) {
                     <input 
                       type="text" 
                       placeholder="Your Name"
-                      className="w-full px-4 py-3 rounded-lg border border-slate-200 outline-none focus:ring-2 focus:ring-[#6366f1]/20 !text-black"
+                      className="w-full px-4 py-3 rounded-lg border border-slate-200 outline-none focus:ring-2 focus:ring-[#6366f1]/20 text-black"
                       value={fullName}
                       onChange={(e) => setFullName(e.target.value)}
                     />
@@ -117,7 +165,7 @@ export default function LandingPage({ onLoginSuccess }) {
                 <input 
                   type="email" 
                   placeholder="you@example.com"
-                  className="w-full px-4 py-3 rounded-lg border border-slate-200 outline-none focus:ring-2 focus:ring-[#6366f1]/20 !text-black"
+                  className="w-full px-4 py-3 rounded-lg border border-slate-200 outline-none focus:ring-2 focus:ring-[#6366f1]/20 text-black"
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
                 />
@@ -128,12 +176,11 @@ export default function LandingPage({ onLoginSuccess }) {
                 <input 
                   type="password" 
                   placeholder="********"
-                  className="w-full px-4 py-3 rounded-lg border border-slate-200 outline-none focus:ring-2 focus:ring-[#6366f1]/20 !text-black"
+                  className="w-full px-4 py-3 rounded-lg border border-slate-200 outline-none focus:ring-2 focus:ring-[#6366f1]/20 text-black"
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                 />
                 
-                {/* FORGOT PASSWORD LINK (Only shows on Sign In mode) */}
                 {!isSignUp && (
                   <div className="flex justify-end">
                     <button 
@@ -149,7 +196,7 @@ export default function LandingPage({ onLoginSuccess }) {
               <button 
                   onClick={handleAuth}
                   disabled={loading}
-                  className="w-full bg-[#6366f1] hover:bg-[#4f46e5] text-white font-semibold py-3 px-4 rounded-lg flex items-center justify-center gap-2 transition-all shadow-sm"
+                  className="w-full bg-[#6366f1] hover:bg-[#4f46e5] text-white font-semibold py-3 px-4 rounded-lg flex items-center justify-center gap-2 transition-all shadow-sm disabled:opacity-70"
               >
                 {loading ? <Loader2 className="animate-spin" /> : (isSignUp ? "Create Account" : "Sign In")}
               </button>
@@ -171,18 +218,12 @@ export default function LandingPage({ onLoginSuccess }) {
               </div>
 
               <div className="mt-6 text-center border-t border-slate-100 pt-6">
-                {isSignUp ? (
-                  <p className="text-[11px] text-gray-500 leading-relaxed max-w-xs mx-auto">
-                    By signing up, you agree to our{" "}
-                    <a href="/terms.html" target="_blank" className="text-[#6366f1] hover:underline font-medium">Terms of Service</a>
-                    {" "}and{" "}
-                    <a href="/privacy.html" target="_blank" className="text-[#6366f1] hover:underline font-medium">Privacy Policy</a>.
-                  </p>
-                ) : (
-                  <p className="text-sm text-gray-500">
-                    Welcome back. Please login to your account to continue.
-                  </p>
-                )}
+                <p className="text-[11px] text-gray-500 leading-relaxed max-w-xs mx-auto">
+                  By {isSignUp ? "signing up" : "logging in"}, you agree to our{" "}
+                  <a href="/terms.html" target="_blank" className="text-[#6366f1] hover:underline font-medium">Terms of Service</a>
+                  {" "}and{" "}
+                  <a href="/privacy.html" target="_blank" className="text-[#6366f1] hover:underline font-medium">Privacy Policy</a>.
+                </p>
               </div>
             </div>
           </div>
