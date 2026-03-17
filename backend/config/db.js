@@ -25,7 +25,7 @@ const dbConfig = {
     port: isProduction ? undefined : 5432,
     max: 20,
     idleTimeoutMillis: 30000,
-    connectionTimeoutMillis: 5000,  // Increased from 2000 to 5000ms
+    connectionTimeoutMillis: 15000,
     statement_timeout: 10000,
 };
 
@@ -79,8 +79,8 @@ const testConnection = async () => {
         console.error("  Connection Target:", `${dbConfig.host}:${dbConfig.port}/${dbConfig.database}`);
         
         if (isProduction || REQUIRE_DB) {
-            console.error("\n⚠️  FATAL: Database is required in production\n");
-            process.exit(1);  // Exit if database is required
+            console.error("\n⚠️  FATAL: Database is required in production");
+            console.error("  Server will continue running and retry DB connections on requests.\n");
         } else {
             console.warn("\n⚠️  DATABASE UNAVAILABLE (development mode)");
             console.warn("  The app will continue without database functionality");

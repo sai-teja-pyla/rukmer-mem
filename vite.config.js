@@ -7,6 +7,11 @@ export default defineConfig({
   plugins: [react()],
   server: {
     proxy: {
+      '/api': {
+        target: 'http://localhost:5001',
+        changeOrigin: true,
+        secure: false,
+      },
       // This creates a "fake" local folder that actually points to Anthropic
       '/anthropic-api': {
         target: 'https://api.anthropic.com',
