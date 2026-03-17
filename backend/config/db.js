@@ -19,14 +19,14 @@ const dbConfig = {
     user: process.env.DB_USER,
     password: process.env.DB_PASSWORD,
     database: process.env.DB_NAME,
-    // Fix: Ensure the ? follows the condition and : separates the options
     host: isProduction 
         ? `/cloudsql/${process.env.INSTANCE_CONNECTION_NAME}` 
         : '127.0.0.1',
     port: isProduction ? undefined : 5432,
     max: 20,
     idleTimeoutMillis: 30000,
-    connectionTimeoutMillis: 2000,
+    connectionTimeoutMillis: 5000,  // Increased from 2000 to 5000ms
+    statement_timeout: 10000,
 };
 
 if (isProduction) {
@@ -55,18 +55,49 @@ pool.on('connect', () => {
 
 pool.on('error', (err) => {
     console.error('🚨 Rukmer DB: Unexpected error on idle client', err);
-    // On ETIMEDOUT, check if your local IP is whitelisted in Google Cloud Console
+    console.error('  Host:', dbConfig.host);
+    console.error('  Port:', dbConfig.port);
+    console.error('  Database:', dbConfig.database);
 });
 
 // Refined Export for ESM (Compatibility with your server.js import)
 export const query = (text, params) => pool.query(text, params);
 export default pool;
 
-// This forces the app to try connecting immediately on startup
-pool.query('SELECT NOW()', (err, res) => {
-    if (err) {
-        console.error("❌ CONNECTION ATTEMPT FAILED:", err.message);
-    } else {
-        console.log("✅ DATABASE HANDSHAKE SUCCESSFUL AT:", res.rows[0].now);
+// For development: make database optional by default
+const REQUIRE_DB = process.env.REQUIRE_DB === 'true';
+
+// Try to connect on startup with better error handling
+const testConnection = async () => {
+    try {
+        const result = await pool.query('SELECT NOW()');
+        console.log("✅ DATABASE HANDSHAKE SUCCESSFUL AT:", result.rows[0].now);
+        return true;
+    } catch (err) {
+        console.error("\n❌ DATABASE CONNECTION FAILED");
+        console.error("  Error:", err.message);
+        console.error("  Connection Target:", `${dbConfig.host}:${dbConfig.port}/${dbConfig.database}`);
+        
+        if (isProduction || REQUIRE_DB) {
+            console.error("\n⚠️  FATAL: Database is required in production\n");
+            process.exit(1);  // Exit if database is required
+        } else {
+            console.warn("\n⚠️  DATABASE UNAVAILABLE (development mode)");
+            console.warn("  The app will continue without database functionality");
+            console.warn("\n  To fix this:");
+            console.warn("  1. Open a new terminal in the project root");
+            console.warn("  2. Run: cloud-sql-proxy rukmer-saas:us-central1:rukmer-saas-ai");
+            console.warn("  3. Restart this server");
+            console.warn("  4. Or set REQUIRE_DB=true to exit on failure\n");
+        }
+        return false;
+    }
+};
+
+// Run connection test asynchronously
+testConnection().catch(err => {
+    if (isProduction || REQUIRE_DB) {
+        console.error("Failed to connect to database during startup", err);
+        process.exit(1);
     }
 });

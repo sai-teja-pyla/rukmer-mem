@@ -5,8 +5,14 @@ import { Zap, CreditCard, ArrowLeft, Loader2 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { getFunctions, httpsCallable } from 'firebase/functions';
 import { useUserSettings } from '../hooks/useUserSettings';
+import { UserProfile } from '../types';
 
-export default function SubscriptionPage({ user, isPro }) {
+interface SubscriptionPageProps {
+  user: UserProfile | null;
+  isPro: boolean;
+}
+
+export default function SubscriptionPage({ user, isPro }: SubscriptionPageProps) {
   const [loading, setLoading] = useState(false);
   const navigate = useNavigate();
   
@@ -14,7 +20,7 @@ export default function SubscriptionPage({ user, isPro }) {
   // STABILITY FIX: Default to false if settings are loading to prevent white flash
   const isDark = settings?.theme === 'dark';
 
-  const handleManageBilling = async () => {
+  const handleManageBilling = async (): Promise<void> => {
     setLoading(true);
     try {
       const functions = getFunctions();
@@ -29,11 +35,12 @@ export default function SubscriptionPage({ user, isPro }) {
 
       console.log("Portal Data Result:", data);
       
-      if (data?.url) {
-        window.location.href = data.url; // Use href for better cross-browser compatibility
+      const portalData = data as any;
+      if (portalData?.url) {
+        window.location.href = portalData.url; // Use href for better cross-browser compatibility
       }
-    } catch (err) {
-      console.error("Portal Error:", err);
+    } catch (err: any) {
+      console.error("Portal Error:", err?.message || err);
       alert("Stripe Portal error. Ensure it is enabled in Stripe Dashboard.");
     } finally {
       setLoading(false);

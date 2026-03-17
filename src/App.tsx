@@ -1,8 +1,8 @@
-import { useState, useEffect, useLayoutEffect } from 'react';
+import React, { useState, useEffect, useLayoutEffect } from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'; 
-import { auth, db } from './firebase'; // Ensure db is imported
-import { onAuthStateChanged } from 'firebase/auth';
-import { collection, query, where, onSnapshot } from 'firebase/firestore'; // For global Pro check
+import { auth, db } from './firebase';
+import { onAuthStateChanged, User as FirebaseUser } from 'firebase/auth';
+import { collection, query, where, onSnapshot } from 'firebase/firestore';
 
 // Page Imports
 import LandingPage from './components/LandingPage';
@@ -17,22 +17,25 @@ import TermsPage from './pages/TermsPage';
 import SubscriptionPage from './pages/SubscriptionPage';
 import { initAnalytics } from './hooks/analytics';
 
+// 1. IMPORT YOUR TYPES CORRECTLY
+import { UserProfile } from './types'; 
+
 // Hook Import
 import { useUserSettings } from './hooks/useUserSettings';
 
 export default function App() {
-  const [user, setUser] = useState(null);
+  // 2. DEFINE STATE WITH TYPES
+  const [user, setUser] = useState<UserProfile | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
-  const [isPro, setIsPro] = useState(false); // Global Pro status
+  const [isPro, setIsPro] = useState(false);
   
   const { settings } = useUserSettings();
 
-  // Initialize Google Analytics on app load
   useEffect(() => {
     initAnalytics('G-1XG5ZEVHB4');
   }, []);
 
-  // 1. THEME SYNC
+  // Theme Sync
   useLayoutEffect(() => {
     const targetTheme = settings?.theme || localStorage.getItem('appTheme') || 'light';
     if (targetTheme === 'dark') {
@@ -46,32 +49,25 @@ export default function App() {
     }
   }, [settings?.theme]);
 
-  // 2. Auth & Subscription Listener
+  // Auth & Subscription Listener
   useEffect(() => {
-    let unsubscribeSub = () => {};
+    let unsubscribeSub: () => void = () => {};
 
-    const unsubscribeAuth = onAuthStateChanged(auth, (currentUser) => {
+    const unsubscribeAuth = onAuthStateChanged(auth, (currentUser: FirebaseUser | null) => {
       if (currentUser) {
-        console.log("👤 User authenticated:", currentUser.email);
         setUser({
-          name: currentUser.displayName || (currentUser?.email?.includes('@') ? currentUser.email.split('@')[0] : 'Guest User'),
-          email: currentUser.email,
-          photo: currentUser.photoURL,
-          uid: currentUser.uid
+          uid: currentUser.uid,
+          email: currentUser.email || '',
+          name: currentUser.displayName || (currentUser.email?.split('@')[0]) || 'Guest User',
+          photo: currentUser.photoURL || undefined
         });
 
-        // Start listening to subscription status as soon as we have a user
+        // Subscription Listener
         const subRef = collection(db, "customers", currentUser.uid, "subscriptions");
         const q = query(subRef, where("status", "in", ["active", "trialing"]));
         
-        console.log("🔍 Starting Firestore subscription query for:", currentUser.uid);
         unsubscribeSub = onSnapshot(q, (snapshot) => {
-          const newIsPro = !snapshot.empty;
-          console.log("📊 Firestore subscription query result:", newIsPro ? "✅ PRO" : "❌ FREE", "- Docs found:", snapshot.docs.length);
-          if (snapshot.docs.length > 0) {
-            console.log("📋 Subscription docs:", snapshot.docs.map(doc => ({ id: doc.id, data: doc.data() })));
-          }
-          setIsPro(newIsPro);
+          setIsPro(!snapshot.empty);
         }, (error) => {
           console.error("🚨 Firestore subscription error:", error);
           setIsPro(false);
@@ -91,7 +87,6 @@ export default function App() {
     };
   }, []);
 
-  // 3. Loading Screen
   if (authLoading) {
     const isDark = localStorage.getItem('appTheme') === 'dark';
     return (
@@ -101,35 +96,36 @@ export default function App() {
     );
   }
 
+  const handleLoginSuccess = () => {
+    // User state is already updated via Firebase auth listener
+    // Navigate happens automatically through route based on user state
+  };
+
   return (
     <BrowserRouter>
       <Routes>
-        {/* Public Routes */}
-        <Route path="/" element={!user ? <LandingPage /> : <Navigate to="/dashboard" replace />} />
+        <Route path="/" element={!user ? <LandingPage onLoginSuccess={handleLoginSuccess} /> : <Navigate to="/dashboard" replace />} />
         <Route path="/login" element={!user ? <LoginPage /> : <Navigate to="/dashboard" replace />} />
         <Route path="/signup" element={!user ? <SignupPage /> : <Navigate to="/dashboard" replace />} />
         <Route path="/privacy" element={<PrivacyPage />} />
         <Route path="/terms" element={<TermsPage />} />
 
-        {/* Protected Routes - Passing isPro globally */}
+        {/* Passing typed user to components */}
         <Route 
           path="/dashboard" 
           element={user ? <Dashboard user={user} isPro={isPro} /> : <Navigate to="/" replace />} 
         />
         <Route 
           path="/settings" 
-          element={user ? <SettingsPage user={user} isPro={isPro} /> : <Navigate to="/" replace />} 
+          element={user ? <SettingsPage /> : <Navigate to="/" replace />} 
         />
         <Route path="/help" element={user ? <HelpPage /> : <Navigate to="/" replace />} />
         <Route path="/docs" element={user ? <DocsPage /> : <Navigate to="/" replace />} />
-
-        {/* Subscription Management */}
         <Route 
           path="/subscription" 
           element={user ? <SubscriptionPage user={user} isPro={isPro} /> : <Navigate to="/" replace />} 
         />
 
-        {/* Fallback for undefined routes */}
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </BrowserRouter>

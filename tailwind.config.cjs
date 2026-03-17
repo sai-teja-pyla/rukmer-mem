@@ -2,9 +2,12 @@
 export default {
   content: [
     "./src/**/*.{js,jsx,ts,tsx}",
+    require('@tailwindcss/typography'),
   ],
   theme: {
     extend: {},
   },
-  plugins: [],
+  plugins: [
+    require('@tailwindcss/typography'),
+  ],
 }

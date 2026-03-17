@@ -1,7 +1,6 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
-@import "tailwindcss";
 
 
 /* Add this to smooth out the background color change */
@@ -66,4 +65,32 @@ input:-webkit-autofill:active {
 input::placeholder {
     color: #6b7280 !important; /* gray-500 */
     opacity: 1; /* Firefox fix */
+}
+
+/* Dashboard design tokens – refined, non-generic palette */
+.dashboard-app {
+  --dash-bg: 248 250 252;
+  --dash-bg-dark: 15 23 42;
+  --dash-surface: 255 255 255;
+  --dash-surface-dark: 30 41 59;
+  --dash-border: 226 232 240;
+  --dash-border-dark: 51 65 85;
+  --dash-accent: 15 118 110;
+  --dash-accent-hover: 13 148 136;
+  --dash-text: 15 23 42;
+  --dash-text-muted: 100 116 139;
+  --dash-text-dark: 248 250 252;
+  --dash-text-muted-dark: 148 163 184;
+  --dash-sidebar-bg: 241 245 249;
+  --dash-sidebar-bg-dark: 15 23 42;
+  --dash-glass: 255 255 255 / 0.72;
+  --dash-glass-dark: 15 23 42 / 0.6;
+}
+
+.custom-scrollbar::-webkit-scrollbar {
+  width: 6px;
+}
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background-color: #e2e8f0;
+  border-radius: 10px;
 }

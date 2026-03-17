@@ -29,6 +29,8 @@ Thumbs.db          # Windows
 firebase-debug.log
 
 
+
+
 service-account.json
 
 App1.jsx
@@ -43,3 +45,4 @@ server_FIXED.js
 api1.js
 src/services/debugProStatus.js
 src/services/proStatusSync.js
+firebase1.json

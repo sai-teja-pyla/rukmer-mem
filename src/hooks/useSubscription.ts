@@ -1,8 +1,9 @@
 import { useState, useEffect } from 'react';
 import { db } from '../firebase';
 import { collection, query, where, onSnapshot } from 'firebase/firestore';
+import { FirebaseError } from 'firebase/app';
 
-export function useSubscription(user) {
+export function useSubscription(user: any): { isPro: boolean; isLoading: boolean } {
   const [isPro, setIsPro] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
 
@@ -32,7 +33,7 @@ export function useSubscription(user) {
         // Fallback: Check backend if Firestore sync is delayed
         checkBackendProStatus(user.uid);
       }
-    }, (error) => {
+    }, (error: FirebaseError) => {
       console.warn("⚠️  Firestore subscription query failed:", error);
       setIsLoading(false);
       // Fallback to backend check
@@ -42,7 +43,7 @@ export function useSubscription(user) {
     return unsubscribe;
   }, [user]);
 
-  const checkBackendProStatus = async (userId) => {
+  const checkBackendProStatus = async (userId: string): Promise<void> => {
     try {
       const token = await user?.getIdToken();
       const response = await fetch(`http://localhost:5001/api/user-status/${userId}`, {
@@ -50,12 +51,12 @@ export function useSubscription(user) {
       });
       
       if (response.ok) {
-        const data = await response.json();
+        const data: any = await response.json();
         console.log("📊 Backend user status:", data);
         setIsPro(data.isPro);
       }
-    } catch (error) {
-      console.warn("Backend status check failed:", error);
+    } catch (error: any) {
+      console.warn("Backend status check failed:", error?.message || error);
     }
   };
 

@@ -2,9 +2,20 @@ import { useState, useEffect } from 'react';
 import { auth, db } from '../firebase';
 import { doc, setDoc, onSnapshot } from 'firebase/firestore';
 
+export interface UserSettings {
+  theme: string;
+  displayName?: string;
+  email?: string;
+  aiCreativity?: number;
+  notifications?: boolean;
+  plan?: string;
+  createdAt?: Date;
+  [key: string]: any;
+}
+
 export function useUserSettings() {
   // 1. INSTANT LOAD: Initialize state from LocalStorage to prevent flashing
-  const [settings, setSettings] = useState(() => {
+  const [settings, setSettings] = useState<UserSettings | null>(() => {
     const savedTheme = localStorage.getItem('appTheme');
     return { theme: savedTheme || 'light' }; // Default if nothing saved
   });
@@ -56,7 +67,7 @@ export function useUserSettings() {
   }, []);
 
   // 3. UPDATE FUNCTION
-  const updateSettings = async (newSettings) => {
+  const updateSettings = async (newSettings: Partial<UserSettings>) => {
     if (!auth.currentUser) return;
     
     // Optimistic Update: Update UI & LocalStorage instantly

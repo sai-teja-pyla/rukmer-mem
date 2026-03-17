@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { Eye, ArrowRight, User, Loader2, CheckCircle2 } from 'lucide-react';
+import { User as FirebaseUser } from 'firebase/auth';
 // IMPORT FIREBASE FUNCTIONS
 import { auth, googleProvider, db } from '../firebase';
 import { 
@@ -12,7 +13,11 @@ import {
 } from "firebase/auth";
 import { doc, setDoc, getDoc, serverTimestamp } from 'firebase/firestore';
 
-export default function LandingPage({ onLoginSuccess }) {
+interface LandingPageProps {
+  onLoginSuccess: (user: FirebaseUser) => void;
+}
+
+export default function LandingPage({ onLoginSuccess }: LandingPageProps) {
   const [isSignUp, setIsSignUp] = useState(false);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -22,7 +27,7 @@ export default function LandingPage({ onLoginSuccess }) {
   const [successMsg, setSuccessMsg] = useState('');
 
   // Helper: Sync User Data to Firestore
-  const syncUserToFirestore = async (user, nameOverride = null) => {
+  const syncUserToFirestore = async (user: FirebaseUser, nameOverride?: string) => {
     const userDocRef = doc(db, "users", user.uid);
     const userDoc = await getDoc(userDocRef);
 
@@ -55,19 +60,21 @@ export default function LandingPage({ onLoginSuccess }) {
         const refreshedUser = auth.currentUser;
 
         // C. Sync to Firestore Database
-        await syncUserToFirestore(refreshedUser, fullName);
-        
-        // D. Send Branded Verification Email
-        await sendEmailVerification(refreshedUser);
-        
-        onLoginSuccess(refreshedUser);
+        if (refreshedUser) {
+          await syncUserToFirestore(refreshedUser, fullName);
+          
+          // D. Send Branded Verification Email
+          await sendEmailVerification(refreshedUser);
+          
+          onLoginSuccess(refreshedUser);
+        }
       } else {
         // Standard Login
         const userCredential = await signInWithEmailAndPassword(auth, email, password);
         onLoginSuccess(userCredential.user);
       }
-    } catch (err) {
-      setError(err.message.replace('Firebase: ', ''));
+    } catch (err: any) {
+      setError((err?.message || 'An error occurred').replace('Firebase: ', ''));
     } finally {
       setLoading(false);
     }
@@ -85,9 +92,9 @@ export default function LandingPage({ onLoginSuccess }) {
         await syncUserToFirestore(user);
 
         onLoginSuccess(user);
-    } catch (error) {
+    } catch (error: any) {
         console.error(error);
-        setError("Google Sign-In Failed");
+        setError((error?.message || "Google Sign-In Failed"));
     }
   };
 
@@ -102,8 +109,8 @@ export default function LandingPage({ onLoginSuccess }) {
     try {
       await sendPasswordResetEmail(auth, email);
       setSuccessMsg("Reset link sent! Check your inbox.");
-    } catch (err) {
-      setError("Reset Error: " + err.message.replace('Firebase: ', ''));
+    } catch (err: any) {
+      setError("Reset Error: " + (err?.message || 'An error occurred').replace('Firebase: ', ''));
     }
   };
 

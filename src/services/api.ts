@@ -1,6 +1,6 @@
 import { auth } from '../firebase';
 
-const BASE_DOMAIN = (import.meta.env.VITE_API_URL || 'http://localhost:5001').replace(/\/$/, '');
+const BASE_DOMAIN = "https://rukmer-saas-service-361739908342.us-central1.run.app";
 
 // 🚨 THE BULLETPROOF LOCK: Forces React to wait for Firebase
 const waitForToken = () => {

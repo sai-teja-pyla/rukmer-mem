@@ -13,7 +13,9 @@ import {
   updatePassword 
 } from "firebase/auth";
 
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:5001/api';
+
+const API_BASE_URL = ((import.meta as any).env as any).VITE_GEMINI_API_KEY || 'http://localhost:5001/api';
+//const API_BASE_URL = "https://rukmer-saas-service-361739908342.us-central1.run.app";
 
 export default function SettingsPage() {
   const { settings, updateSettings, loading } = useUserSettings();
@@ -30,9 +32,10 @@ export default function SettingsPage() {
   const isDark = settings.theme === 'dark';
 
   // --- PASSWORD UPDATE LOGIC ---
-  const handlePasswordUpdate = async (e) => {
+  const handlePasswordUpdate = async (e: React.FormEvent) => {
     e.preventDefault();
     const user = auth.currentUser;
+    if (!user || !user.email) return alert("You must be logged in.");
     
     if (passwords.new !== passwords.confirm) {
       return alert("New passwords do not match.");
@@ -53,7 +56,7 @@ export default function SettingsPage() {
       
       alert("✅ Password updated successfully!");
       setPasswords({ current: '', new: '', confirm: '' }); // Reset form
-    } catch (error) {
+    } catch (error: any) {
       console.error("Password update error:", error);
       if (error.code === 'auth/wrong-password') {
         alert("❌ Current password is incorrect.");
@@ -80,6 +83,7 @@ export default function SettingsPage() {
         try {
           setIsDeleting(true);
           const user = auth.currentUser;
+          if (!user) return;
           const token = await user.getIdToken();
 
           if (feedback) {
@@ -101,7 +105,7 @@ export default function SettingsPage() {
           alert("Account successfully deleted.");
           window.location.href = "/";
           navigate('/'); 
-        } catch (error) {
+        } catch (error: any) {
           console.error("Delete Error:", error);
           alert(error.code === 'auth/requires-recent-login' ? "Security: Please re-log to delete account." : error.message);
         } finally {
