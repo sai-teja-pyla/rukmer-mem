@@ -124,7 +124,7 @@ export default function Dashboard({ user, isPro }: DashboardProps) {
                 const idToken = await auth.currentUser?.getIdToken();
                 console.log("📡 Fetching chat history for user:", user.uid);
                 
-                const response = await fetch(`http://localhost:5001/api/history?userId=${user.uid}`, {
+                const response = await fetch(`/api/history?userId=${user.uid}`, {
                     headers: {
                         'Authorization': `Bearer ${idToken}`
                     }
@@ -202,7 +202,7 @@ export default function Dashboard({ user, isPro }: DashboardProps) {
             }
         } else {
             // CONNECT LOGIC: Redirect to your backend to start OAuth
-            const backendUrl = 'http://localhost:5001';
+            const backendUrl = window.location.origin;
             
             // Special handling for Microsoft apps (Outlook, OneDrive & Teams)
             if (appId === 'outlook' || appId === 'onedrive' || appId === 'teams') {
@@ -315,7 +315,7 @@ export default function Dashboard({ user, isPro }: DashboardProps) {
         const idToken = await auth.currentUser?.getIdToken();
         
         // 🔥 CALL YOUR BACKEND INSTEAD OF GEMINI DIRECTLY
-        const response = await fetch('http://localhost:5001/api/ai/chat', {
+        const response = await fetch(`/api/ai/chat`, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
