@@ -19,6 +19,7 @@ import { ChatInput } from './ChatInput';
 import { WelcomeState } from './WelcomeState';
 import { MessageBubble } from './MessageBubble.tsx';
 import { useUserSettings } from '../hooks/useUserSettings';
+import UserDropdown from './UserDropdown';
 
 interface DashboardProps {
   user: UserProfile;
@@ -401,12 +402,11 @@ export default function Dashboard({ user, isPro }: DashboardProps) {
                         label="Settings" 
                         onClick={() => navigate('/settings')} 
                     />
-                    <div 
-                        className="w-8 h-8 rounded-full bg-slate-800 flex items-center justify-center text-slate-300 font-bold text-xs uppercase cursor-pointer hover:ring-2 hover:ring-indigo-500 transition-all border border-slate-700"
-                        onClick={() => navigate('/settings')}
-                    >
-                        {displayName.charAt(0)}
-                    </div>
+                    <UserDropdown 
+                        user={user} 
+                        isPro={isPro} 
+                        onUpgradeClick={() => setShowPricing(true)} 
+                    />
                 </div>
             </aside>
 

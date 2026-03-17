@@ -59,22 +59,18 @@ export default function UserDropdown({ user, onUpgradeClick, isPro }) {
       
       <button 
         onClick={() => setIsOpen(!isOpen)}
-        className={`flex items-center gap-2 p-1.5 rounded-full transition-all ${theme.hover}`}
+        className="flex items-center justify-center p-1 rounded-full transition-all hover:ring-2 hover:ring-indigo-500"
       >
         <div 
-          className={`h-8 w-8 rounded-full flex items-center justify-center text-white font-bold shadow-sm ${
-            isDark ? 'border border-gray-700' : 'border-2 border-white ring-1 ring-gray-200'
-          }`}
+          className="h-8 w-8 rounded-full flex items-center justify-center text-white font-bold text-xs shadow-sm border border-slate-700"
           style={{ background: 'linear-gradient(135deg, #7c3aed, #2563eb)' }} 
         >
           {initial}
         </div>
-        
-        <ChevronDown size={14} className={isDark ? "text-gray-400" : "text-gray-600"} />
       </button>
 
       {isOpen && (
-        <div className={`absolute right-0 mt-2 w-64 rounded-xl border shadow-2xl z-50 overflow-hidden animate-in fade-in zoom-in-95 duration-100 origin-top-right ${theme.menuBg}`}>
+        <div className={`absolute bottom-full left-0 mb-2 w-64 rounded-xl border shadow-2xl z-[100] overflow-hidden animate-in fade-in zoom-in-95 duration-100 origin-bottom-left ${theme.menuBg}`}>
           
           <div className={`px-4 py-4 border-b ${theme.divider} ${theme.headerBg}`}>
             <p className={`font-semibold truncate ${theme.text}`}>

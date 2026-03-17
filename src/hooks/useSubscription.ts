@@ -46,7 +46,7 @@ export function useSubscription(user: any): { isPro: boolean; isLoading: boolean
   const checkBackendProStatus = async (userId: string): Promise<void> => {
     try {
       const token = await user?.getIdToken();
-      const response = await fetch(`http://localhost:5001/api/user-status/${userId}`, {
+      const response = await fetch(`/api/user-status/${userId}`, {
         headers: { 'Authorization': `Bearer ${token}` }
       });
       

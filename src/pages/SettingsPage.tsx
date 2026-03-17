@@ -14,7 +14,7 @@ import {
 } from "firebase/auth";
 
 
-const API_BASE_URL = ((import.meta as any).env as any).VITE_GEMINI_API_KEY || 'http://localhost:5001/api';
+const API_BASE_URL = ((import.meta as any).env as any).VITE_API_URL || '';
 //const API_BASE_URL = "https://rukmer-saas-service-361739908342.us-central1.run.app";
 
 export default function SettingsPage() {
