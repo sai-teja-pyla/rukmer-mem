@@ -4,7 +4,7 @@
   "version": "1.0.0",
   "type": "module",
   "scripts": {
-    "start": "node server.ts",
+    "start": "tsx server.ts",
     "server": "nodemon --exec tsx server.ts",
     "dev": "vite",
     "build": "vite build",
@@ -37,7 +37,8 @@
     "react-markdown": "^10.1.0",
     "react-router-dom": "^7.13.0",
     "resend": "^6.9.2",
-    "stripe": "^20.3.1"
+    "stripe": "^20.3.1",
+    "tsx": "^4.21.0"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.1",
@@ -58,11 +59,11 @@
     "nodemon": "^3.1.11",
     "postcss": "^8.5.6",
     "tailwindcss": "^4.1.18",
-    "tsx": "^4.21.0",
+    "typescript": "^5.8.3",
     "vite": "^7.2.4"
   },
   "description": "This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.",
-  "main": "server.js",
+  "main": "server.ts",
   "keywords": [],
   "author": "",
   "license": "ISC"
