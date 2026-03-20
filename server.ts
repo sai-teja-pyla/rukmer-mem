@@ -11,8 +11,8 @@ dotenv.config({ path: path.join(__dirname, '.env') });
 // @ts-ignore
 import poolImport from './backend/config/db.js';
 import axios from 'axios';
-import { GoogleGenerativeAI } from "@google/generative-ai";
 import { google } from 'googleapis';
+import { VertexAI, HarmCategory, HarmBlockThreshold } from '@google-cloud/vertexai';
 import { oauth2Client, GOOGLE_SCOPES } from './backend/config/googleConfig.js';
 
 const pool = poolImport as any; 
@@ -20,12 +20,18 @@ import { Storage } from '@google-cloud/storage';
 import { sendWelcomeEmail } from './src/utils/mailer.js';
 import fs from 'fs';
 import admin from 'firebase-admin'; // 🚨 The Security Bouncer
+import { learnWorkspaceData, queryWorkspaceData, clearNamespace, fetchTeamsMessages } from './ingestionService.js';
+import { Pinecone } from '@pinecone-database/pinecone';
+import { ConfidentialClientApplication, InteractionRequiredAuthError, LogLevel } from '@azure/msal-node';
+
+const pinecone = new Pinecone({ apiKey: process.env.PINECONE_API_KEY! });
+const index = pinecone.index(process.env.PINECONE_INDEX_NAME!);
 
 //import { stripeWebhookHandler } from './backend/config/stripeController.js';
 
 
-const SLACK_CLIENT_ID = process.env.SLACK_CLIENT_ID ||'9849608649938.10629448222436';
-const SLACK_CLIENT_SECRET = process.env.SLACK_CLIENT_SECRET || 'cb6668a9774c3cf8a8327f8cb8fbf6ae';
+const SLACK_CLIENT_ID = process.env.SLACK_CLIENT_ID;
+const SLACK_CLIENT_SECRET = process.env.SLACK_CLIENT_SECRET;
 const FRONTEND_URL = process.env.FRONTEND_URL || 'http://localhost:5173/dashboard';
 const BACKEND_HOST = process.env.BACKEND_HOST || 'http://localhost:5001';
 const BACKEND_PORT = process.env.PORT || 8080;
@@ -36,36 +42,71 @@ const CURRENT_BACKEND_URL = IS_PROD ? 'https://app.rukmer.com' : 'http://localho
 const app: any = express();
 const PORT = (process.env.PORT || 8080) as number | string;
 
-async function refreshMicrosoftToken(userId: string, refreshToken: string) {
+// --- MSAL helpers for Microsoft token management ---
+const msalAppConfig = {
+  auth: {
+    clientId: process.env.MS_CLIENT_ID!,
+    authority: 'https://login.microsoftonline.com/common',
+    clientSecret: process.env.MS_CLIENT_SECRET!,
+  },
+  system: {
+    loggerOptions: {
+      loggerCallback: (_level: number, message: string) => { if (_level === LogLevel.Error) console.error('[MSAL]', message); },
+      logLevel: LogLevel.Error,
+    }
+  }
+};
+
+// Build a per-user MSAL app with Firestore-backed token cache
+async function createMsalClient(userId: string): Promise<ConfidentialClientApplication> {
+  const pca = new ConfidentialClientApplication(msalAppConfig);
+  const doc = await admin.firestore().collection('userTokens').doc(userId).get();
+  const cached = doc.data()?.msal_cache;
+  if (cached) pca.getTokenCache().deserialize(cached);
+  return pca;
+}
+
+// Persist the updated MSAL token cache (contains the refresh token) back to Firestore
+async function saveMsalCache(userId: string, pca: ConfidentialClientApplication): Promise<void> {
+  await admin.firestore().collection('userTokens').doc(userId).set(
+    { msal_cache: pca.getTokenCache().serialize() },
+    { merge: true }
+  );
+}
+
+// Returns a valid access token, silently refreshing via MSAL if needed.
+// Throws Error('RE_AUTH_REQUIRED') when the refresh token itself has expired.
+async function getMicrosoftAccessToken(userId: string): Promise<string> {
+  const pca = await createMsalClient(userId);
+  const accounts = await pca.getTokenCache().getAllAccounts();
+
+  if (accounts.length === 0) {
+    // Legacy user whose tokens were stored before MSAL was introduced.
+    // Return the raw token if it is still fresh; otherwise force re-auth.
+    const doc = await admin.firestore().collection('userTokens').doc(userId).get();
+    const t = doc.data()?.microsoft;
+    if (t?.access_token && t.expires_at && Date.now() < t.expires_at - 300_000) {
+      return t.access_token;
+    }
+    throw new Error('RE_AUTH_REQUIRED');
+  }
+
   try {
-    const data = new URLSearchParams({
-      client_id: process.env.MS_CLIENT_ID!,
-      grant_type: 'refresh_token',
-      refresh_token: refreshToken,
-      client_secret: process.env.MS_CLIENT_SECRET!
+    const result = await pca.acquireTokenSilent({
+      account: accounts[0],
+      scopes: ['https://graph.microsoft.com/.default'],
     });
-
-    const response = await axios.post(
-      'https://login.microsoftonline.com/common/oauth2/v2.0/token',
-      data.toString(), // Convert URLSearchParams to string
-      { headers: { 'Content-Type': 'application/x-www-form-urlencoded' } }
-    );
-
-    const { access_token, refresh_token: newRefreshToken } = response.data;
-
-    // Update Firestore so the NEXT request uses the fresh token
-    await admin.firestore().collection('userTokens').doc(userId).set({
-      microsoft: {
-        access_token,
-        refresh_token: newRefreshToken || refreshToken, // MS doesn't always send a new refresh token
-        expires_at: Date.now() + 3500 * 1000 // Tokens usually last 1 hour
-      }
-    }, { merge: true });
-
-    return access_token;
-  } catch (error: any) {
-    console.error("❌ Microsoft Refresh Failed:", error.response?.data || error.message);
-    return null;
+    await saveMsalCache(userId, pca);
+    return result!.accessToken;
+  } catch (err: any) {
+    if (err instanceof InteractionRequiredAuthError) {
+      // Refresh token expired (~90 days inactive) — user must log in again
+      await admin.firestore().collection('userConnections').doc(userId).set(
+        { microsoft_reauth_required: true }, { merge: true }
+      );
+      throw new Error('RE_AUTH_REQUIRED');
+    }
+    throw err;
   }
 }
 
@@ -94,6 +135,9 @@ const getAppContent = async (userId: string) => {
   const tokens = tokenDoc.data() as { google?: any; slack?: any; microsoft?: any } | undefined;
   let context = "";
 
+  // Clear all old vectors ONCE before re-ingesting everything
+  await clearNamespace(userId);
+
   // --- GMAIL ---
   if (tokens?.google && tokens.google.access_token) {
     try {
@@ -104,18 +148,55 @@ const getAppContent = async (userId: string) => {
       );
       auth.setCredentials(tokens.google);
       const gmail = google.gmail({ version: 'v1', auth });
-      const msgs = await gmail.users.messages.list({ userId: 'me', maxResults: 5 });
+      const msgs = await gmail.users.messages.list({ userId: 'me', maxResults: 25 });
       if (msgs.data.messages && msgs.data.messages.length > 0) {
         context += `\n📧 Gmail Emails:\n`;
-        for (const msg of msgs.data.messages) {
-          if (!msg.id) continue;
-          const fullMsg = await gmail.users.messages.get({ userId: 'me', id: msg.id as string });
-          const headers = (fullMsg.data.payload?.headers as any[] | undefined) || [];
+
+        // Helper to decode base64url encoded Gmail body parts
+        const decodeBody = (data: string) =>
+          Buffer.from(data.replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf-8');
+
+        // Recursively extract plain text from MIME parts
+        const extractBodyText = (payload: any): string => {
+          if (!payload) return '';
+          if (payload.mimeType === 'text/plain' && payload.body?.data) {
+            return decodeBody(payload.body.data);
+          }
+          if (payload.parts) {
+            for (const part of payload.parts) {
+              const result = extractBodyText(part);
+              if (result) return result;
+            }
+          }
+          return '';
+        };
+
+        for (const m of msgs.data.messages) {
+          const detail = await gmail.users.messages.get({ userId: 'me', id: m.id!, format: 'full' });
+          const headers = detail.data.payload?.headers || [];
           const subject = headers.find((h: any) => h.name === 'Subject')?.value || '(No subject)';
           const from = headers.find((h: any) => h.name === 'From')?.value || '(Unknown sender)';
-          const date = headers.find((h: any) => h.name === 'Date')?.value || '(Unknown date)';
-          const snippet = fullMsg.data.snippet || '(No preview)';
+          const date = headers.find((h: any) => h.name === 'Date')?.value || '';
+          const snippet = detail.data.snippet || '';
+          const bodyText = extractBodyText(detail.data.payload) || snippet;
+          // Skip notification-style emails that pollute the knowledge base
+          if (subject === 'Suren sent a message') continue;
+          // Truncate to avoid embedding too-large documents
+          const fullText = `Subject: ${subject}\nFrom: ${from}\nDate: ${date}\n\n${bodyText.substring(0, 2000)}`;
           context += `  - From: ${from} | Subject: ${subject} | Date: ${date}\n    Preview: ${snippet}\n`;
+
+          // RAG ingestion
+          try {
+            await learnWorkspaceData(fullText, userId, {
+              source: "gmail",
+              message_id: m.id,
+              from,
+              subject,
+              date
+            });
+          } catch (ragErr: any) {
+            console.warn("⚠️  Gmail RAG ingestion failed:", ragErr.message);
+          }
         }
       }
     } catch (err: any) {
@@ -127,28 +208,43 @@ const getAppContent = async (userId: string) => {
   if (tokens?.slack) {
     try {
       // First, get the list of channels
-      const channelsRes = await axios.get('https://slack.com/api/conversations.list', {
+      const channelsRes = await axios.get<any>('https://slack.com/api/conversations.list', {
         headers: { Authorization: `Bearer ${tokens.slack.accessToken}` },
-        params: { limit: 1, types: 'public_channel' }
+        params: { limit: 5, types: 'public_channel' }
       });
       
       if (channelsRes.data.ok && channelsRes.data.channels.length > 0) {
-        const channelId = channelsRes.data.channels[0].id;
-        const channelName = channelsRes.data.channels[0].name;
+        for (const channel of channelsRes.data.channels) {
+          const channelId = channel.id;
+          const channelName = channel.name;
         
-        // Then fetch history from that channel
-        const slackRes = await axios.get('https://slack.com/api/conversations.history', {
-          params: { channel: channelId, limit: 5 },
-          headers: { Authorization: `Bearer ${tokens.slack.accessToken}` }
-        });
+          // Fetch history from each channel
+          const slackRes = await axios.get<any>('https://slack.com/api/conversations.history', {
+            params: { channel: channelId, limit: 25 },
+            headers: { Authorization: `Bearer ${tokens.slack.accessToken}` }
+          });
         
-        if (slackRes.data.ok && slackRes.data.messages) {
-          context += `\n💬 Recent Slack Messages (${channelName} channel):\n`;
-          for (const msg of slackRes.data.messages) {
-            const text = msg.text || '(No text)';
-            const user = msg.user || '(Unknown user)';
-            const ts = new Date(msg.ts * 1000).toLocaleString();
-            context += `  - User: ${user} | Time: ${ts}\n    Message: ${text.substring(0, 100)}...\n`;
+          if (slackRes.data.ok && slackRes.data.messages) {
+            context += `\n💬 Slack (#${channelName}):\n`;
+            for (const msg of slackRes.data.messages) {
+              if (msg.text) {
+                context += `  - ${msg.text.substring(0, 200)}\n`;
+
+                // RAG ingestion
+                try {
+                  await learnWorkspaceData(msg.text, userId, {
+                    source: "slack",
+                    channel_id: channelId,
+                    sender_id: msg.user,
+                    message_id: msg.ts,
+                    timestamp: new Date(parseFloat(msg.ts) * 1000).toISOString(),
+                    link: `https://slack.com/archives/${channelId}/p${msg.ts.replace('.', '')}`
+                  });
+                } catch (ragErr: any) {
+                  console.warn("⚠️  Slack RAG ingestion failed:", ragErr.message);
+                }
+              }
+            }
           }
         }
       } else if (!channelsRes.data.ok) {
@@ -162,11 +258,9 @@ const getAppContent = async (userId: string) => {
   // --- OUTLOOK / MICROSOFT ---
   if (tokens?.microsoft) {
     try {
-      // Microsoft tokens have: access_token, refresh_token, expires_in, etc.
-      const accessToken = tokens.microsoft.access_token;
-      if (!accessToken) throw new Error("No access token in Microsoft tokens");
+      const accessToken = await getMicrosoftAccessToken(userId);
       
-      const outlookRes = await axios.get('https://graph.microsoft.com/v1.0/me/messages?$top=5&$select=subject,from,receivedDateTime,bodyPreview', {
+      const outlookRes = await axios.get<any>('https://graph.microsoft.com/v1.0/me/messages?$top=25&$select=subject,from,receivedDateTime,bodyPreview', {
         headers: { Authorization: `Bearer ${accessToken}` }
       });
       
@@ -178,51 +272,85 @@ const getAppContent = async (userId: string) => {
           const date = msg.receivedDateTime || '(Unknown date)';
           const preview = msg.bodyPreview || '(No preview)';
           context += `  - From: ${from} | Subject: ${subject} | Date: ${date}\n    Preview: ${preview}\n`;
+
+          // RAG ingestion
+          try {
+            const fullText = `Subject: ${subject}\nFrom: ${from}\nDate: ${date}\n\nContent: ${preview}`;
+            await learnWorkspaceData(fullText, userId, {
+              source: "outlook",
+              message_id: msg.id,
+              from,
+              subject,
+              date
+            });
+          } catch (ragErr: any) {
+            console.warn("⚠️  Outlook RAG ingestion failed:", ragErr.message);
+          }
         }
       }
     } catch (err: any) {
-      console.warn("⚠️  Outlook fetch failed:", err.message);
-      if (err.response?.data?.error) {
-        console.warn("   Error details:", err.response.data.error);
+      if (err.message === 'RE_AUTH_REQUIRED') {
+        console.warn("⚠️  Outlook: Microsoft re-authentication required for user:", userId);
+      } else {
+        console.warn("⚠️  Outlook fetch failed:", err.message);
+        if (err.response?.data?.error) console.warn("   Error details:", err.response.data.error);
       }
     }
   }
 
-  if (tokens?.microsoft && tokens.microsoft.access_token) { // Fetch teams if Microsoft token exists
+  if (tokens?.microsoft) { // Fetch teams if Microsoft token exists
     try {
-      // Check if teams is explicitly enabled in userConnections
+      const accessToken = await getMicrosoftAccessToken(userId);
+
+      // Check if teams channels are explicitly enabled in userConnections
       const connectionsDoc = await admin.firestore().collection('userConnections').doc(userId).get();
       const connections = connectionsDoc.data() || {} as any;
-      
-      if (!connections.teams) {
-        console.log("⏭️  Teams not enabled in userConnections, skipping teams fetch");
-      } else {
-        const accessToken = tokens.microsoft.access_token;
-        
+
+      if (connections.teams) {
         // 1. Get the list of Teams the user is in
-        const teamsRes = await axios.get('https://graph.microsoft.com/v1.0/me/joinedTeams', {
+        const teamsRes = await axios.get<any>('https://graph.microsoft.com/v1.0/me/joinedTeams', {
           headers: { Authorization: `Bearer ${accessToken}` }
         });
 
         if (teamsRes.data.value && teamsRes.data.value.length > 0) {
           context += `\n👥 Microsoft Teams:\n`;
-          
-          // Let's look at the first 2 teams to keep context concise
           for (const team of teamsRes.data.value.slice(0, 2)) {
             context += `  - Team: ${team.displayName}\n`;
-            
-            // Optional: Get channels for this team
-            const channelsRes = await axios.get(`https://graph.microsoft.com/v1.0/teams/${team.id}/channels`, {
+            const channelsRes = await axios.get<any>(`https://graph.microsoft.com/v1.0/teams/${team.id}/channels`, {
               headers: { Authorization: `Bearer ${accessToken}` }
             });
-            
             const channelNames = channelsRes.data.value.map((c: any) => c.displayName).join(', ');
             context += `    Channels: ${channelNames}\n`;
           }
         }
       }
+
+      // 2. Always fetch personal/group chat messages for ANY Microsoft user (requires Chat.Read scope)
+      try {
+        const teamsChats = await fetchTeamsMessages(accessToken);
+        for (const item of teamsChats) {
+          try {
+            await learnWorkspaceData(item.text, userId, {
+              source: item.metadata.source,
+              message_id: item.id,
+              chat_id: item.metadata.chatId,
+              sender_id: item.metadata.sender ?? 'unknown',
+              timestamp: item.metadata.date,
+            });
+          } catch (ragErr: any) {
+            console.warn('⚠️  Teams chat RAG ingestion failed:', ragErr.message);
+          }
+        }
+        console.log(`✅ Teams: ingested ${teamsChats.length} chat messages`);
+      } catch (chatErr: any) {
+        console.warn('⚠️  Teams chat fetch failed:', chatErr.response?.data?.error?.message ?? chatErr.message);
+      }
     } catch (err: any) {
-      console.warn("⚠️  Teams fetch failed:", err.message);
+      if (err.message === 'RE_AUTH_REQUIRED') {
+        console.warn("⚠️  Teams: Microsoft re-authentication required for user:", userId);
+      } else {
+        console.warn("⚠️  Teams fetch failed:", err.message);
+      }
     }
   }
 
@@ -280,42 +408,51 @@ const authenticateUser = async (req: any, res: any, next: any): Promise<void> =>
     }
 };
 
-// --- SERVER-SIDE GEMINI HELPER ---
+// --- SERVER-SIDE VERTEX AI HELPER ---
+const vertexAI = new VertexAI({
+    project: process.env.GOOGLE_CLOUD_PROJECT || 'rukmer-saas',
+    location: 'us-central1',
+    googleAuthOptions: process.env.NODE_ENV !== 'production'
+        ? { keyFilename: path.join(process.cwd(), 'service-account.json') }
+        : undefined
+});
+
 async function callGemini(prompt: string): Promise<string> {
     try {
-        const apiKey = process.env.VITE_GEMINI_API_KEY || process.env.GEMINI_API_KEY;
-        console.log("🔑 API Key debug:", apiKey ? `${apiKey.substring(0, 10)}... (length: ${apiKey.length})` : "NOT SET");
-        console.log("🔑 Key char codes:", apiKey ? [...apiKey].map(c => c.charCodeAt(0)).slice(0, 5).join(',') : "N/A");
-        if (!apiKey) throw new Error('Missing GEMINI_API_KEY in server .env');
-        
-        const genAI = new GoogleGenerativeAI(apiKey);
-        const model = genAI.getGenerativeModel({ 
-            model: "gemini-3.1-flash-lite-preview",
-            // 🧠 UPDATED INSTRUCTION: More personality, less "bot"
-            systemInstruction: `You are Rukmer, a friendly and intelligent workplace sidekick. 
-            Your vibe is supportive, grounded, and slightly witty—like a helpful teammate, not a rigid robot.
-            
-            GUIDELINES:
-            - Use natural language and contractions (e.g., "I've" instead of "I have").
-            - Be concise but warm. 
-            - If you find something in the data, present it helpfully (e.g., "I took a look at your Slack and found...").
-            - If you don't know something, be honest but encouraging.`
+        const model = vertexAI.getGenerativeModel({
+            model: 'gemini-2.5-pro',
+            safetySettings: [
+              {
+                category: HarmCategory.HARM_CATEGORY_HARASSMENT,
+                threshold: HarmBlockThreshold.BLOCK_NONE,
+              },
+            ],
+            systemInstruction: {
+                role: 'system',
+                parts: [{ text: `You are Rukmer, a AI friendly and intelligent workplace sidekick. 
+                Your vibe is supportive, grounded, and slightly witty—like a helpful teammate, not a rigid robot.
+                
+                GUIDELINES:
+                - Use natural language and contractions (e.g., "I've" instead of "I have").
+                - Be concise but warm. 
+                - If you find something in the data, present it helpfully (e.g., "I took a look at your Slack and found...").
+                - If you don't know something, be honest but encouraging.` }]
+            },
         });
-        
-        // 🌡️ ADDED CONFIG: Higher temperature (0.7-0.8) makes it more "human"
+
         const result = await model.generateContent({
             contents: [{ role: 'user', parts: [{ text: prompt }] }],
             generationConfig: {
                 temperature: 0.8,
                 topP: 0.95,
-                maxOutputTokens: 1024,
+                maxOutputTokens: 2048,
             }
         });
 
-        const response = await result.response;
-        return response.text();
+        const text = result.response.candidates?.[0]?.content?.parts?.[0]?.text;
+        return text || "I'm having trouble thinking of a response right now.";
     } catch (error: any) {
-        console.error("🚨 Gemini API Error:", error.message || error);
+        console.error("🚨 Vertex AI Error:", error.message || error);
         return "Hey, I'm hitting a tiny snag processing that. Mind trying again in a second?";
     }
 }
@@ -332,65 +469,103 @@ app.get('/', (req: any, res: any): void => {
 app.post('/api/ai/chat', authenticateUser, async (req: any, res: any) => {
   try {
     const { userId, prompt, message } = req.body;
-    const userMessage = prompt || message;  // Support both 'prompt' and 'message' fields
+    const userMessage = prompt || message;
+    const orgId = userId || req.user.uid;
 
-    if (!userMessage) {
-      return res.status(400).json({ error: "No prompt or message provided" });
-    }
+    if (!userMessage) return res.status(400).json({ error: "Empty message" });
 
-    console.log("🤖 AI Chat Request from user:", userId);
+    console.log("🤖 Knowledgeable Chat Request from:", orgId);
 
-    // 1. ORCHESTRATION: Fetch context from all connected apps
-    // This is where you call the helper functions we built earlier
-    let context = "";
+    // 1. RETRIEVAL: Search Pinecone for relevant facts
+    let workspaceContext = "";
     try {
-      context = await getAppContent(userId);
-      console.log("✅ App context fetched successfully", context);
-    } catch (contextErr: any) {
-      console.warn("⚠️  Could not fetch app context:", contextErr.message);
-      context = "(No connected apps data available)";
+      workspaceContext = await queryWorkspaceData(userMessage, orgId);
+      if (workspaceContext) {
+        console.log("✅ Found relevant facts in Pinecone.");
+      } else {
+        console.log("ℹ️ No relevant workspace facts found.");
+      }
+    } catch (searchErr: any) {
+      console.warn("⚠️ Vector search failed:", searchErr.message);
     }
 
-    // 2. PROMPT ENGINEERING
-    const systemInstruction = `You are Rukmer AI. Use the provided context from Slack and Email to answer.`;
+    // 2. AUGMENTED PROMPT: Ground Gemini in the facts
     const finalPrompt = `
-  Context: You are talking to a user who has connected their workspace apps.
-  Current Context from Apps: ${context}
-  
-  User's Question: ${userMessage}
-  
-  (Instruction: Respond like a helpful peer. If the context is empty, politely ask them to connect an app so you can be more useful!)
-`;
+      You are Rukmer, a high-level AI Workspace Assistant, a supportive, grounded, and slightly witty workplace sidekick. 
+      Your goal is to help the user manage their work using the provided context from their Gmail, Google Drive, Outlook, OneDrive, Teams and Slack.
+      
+      Below is the RELEVANT CONTEXT found in the user's connected apps (Slack/Gmail/Outlook/OneDrive/Google Drive/Teams). 
+      Use this context to answer the user's question accurately.
+      
+      CONTEXT:
+      ${workspaceContext || "No specific data found for this query in connected apps."}
+      
+      USER QUESTION: 
+      ${userMessage}
+      
+      INSTRUCTION: 
+      - If the context contains the answer, cite it (e.g., "Slack says..." or "Based on that email from...").
+      - Use natural, helpful language. Avoid sounding like a robot.
+      - If you can't find the answer in the context, be honest: "I don't see anything about that in your Slack or Gmail yet."
+      - Keep it under 3-4 sentences unless the user asks for a long explanation.
+      - If the user asks you to WRITE or DRAFT an email/message, use the retrieved context to make it accurate.
+      - If the information is missing, ask for the specific detail, but don't refuse to write the draft.
+      - Always maintain a professional yet helpful tone.
+      - If you find a relevant thread, reference it (e.g., "Based on your last thread with <Name>...").
+    `;
 
-    // 3. AI GENERATION
-    console.log("🔄 Calling Gemini API...");
+    // 3. GENERATION
     const aiResponse = await callGemini(finalPrompt);
-    console.log("✅ Gemini response received");
 
-    // 4. PERSISTENCE: Save the interaction to your PostgreSQL 'chats' table
-    try {
-      const insertResult = await pool.query(
-        "INSERT INTO chats (user_id, user_message, ai_reply) VALUES ($1, $2, $3) RETURNING id, created_at",
-        [userId, userMessage, aiResponse]
-      );
-      console.log("✅ Chat saved to database");
-      const chatId = insertResult.rows[0].id;
-      const createdAt = insertResult.rows[0].created_at;
-      res.json({ 
-        reply: aiResponse,
-        chatId: chatId,
-        createdAt: createdAt
-      });
-    } catch (dbErr: any) {
-      console.warn("⚠️  Could not save to database:", dbErr.message);
-      // Still return the response even if database save fails
-      res.json({ reply: aiResponse });
-    }
+    // 4. PERSISTENCE
+    const insertResult = await pool.query(
+      "INSERT INTO chats (user_id, user_message, ai_reply) VALUES ($1, $2, $3) RETURNING id, created_at",
+      [orgId, userMessage, aiResponse]
+    );
+
+    res.json({ 
+      reply: aiResponse,
+      chatId: insertResult.rows[0].id,
+      createdAt: insertResult.rows[0].created_at 
+    });
+
   } catch (err: any) {
-    console.error("❌ AI Chat Error:", err?.message || err);
-    res.status(500).json({ error: "Chat failed: " + (err?.message || "Unknown error") });
+    console.error("❌ RAG Chat Error:", err.message);
+    res.status(500).json({ error: "Brain freeze! Try again in a second." });
   }
 });
+
+// POST /api/ingest — manually trigger RAG ingestion for a user's connected apps
+app.post('/api/ingest', authenticateUser, async (req: any, res: any): Promise<void> => {
+  const orgId: string = req.user.uid;
+  console.log(`🚀 Manual ingest triggered for: ${orgId}`);
+  try {
+    const context = await getAppContent(orgId);
+    const chunkCount = context ? context.split('\n').filter(Boolean).length : 0;
+    console.log(`✅ Ingest complete for ${orgId}. Approx lines synced: ${chunkCount}`);
+    res.json({ success: true, message: `Workspace data synced successfully.` });
+  } catch (err: any) {
+    console.error(`❌ Ingest failed for ${orgId}:`, err.message);
+    res.status(500).json({ error: 'Ingestion failed. Check server logs.' });
+  }
+});
+
+// DEV ONLY — trigger ingest by passing userId directly (no auth token needed)
+// Remove this endpoint before deploying to production
+if (process.env.NODE_ENV !== 'production') {
+  app.post('/api/dev/ingest', async (req: any, res: any): Promise<void> => {
+    const { userId } = req.body;
+    if (!userId) { res.status(400).json({ error: 'userId is required in the request body' }); return; }
+    console.log(`🛠️  DEV ingest triggered for: ${userId}`);
+    try {
+      await getAppContent(userId);
+      res.json({ success: true, message: `Dev ingest complete for ${userId}` });
+    } catch (err: any) {
+      console.error(`❌ Dev ingest failed:`, err.message);
+      res.status(500).json({ error: err.message });
+    }
+  });
+}
 
 app.get('/api/history', authenticateUser, async (req: any, res: any): Promise<void> => {
   const { userId } = req.query;
@@ -548,7 +723,7 @@ app.get('/api/auth/slack/callback', async (req: any, res: any): Promise<void> =>
         const redirectUri = `${CURRENT_BACKEND_URL}/api/auth/slack/callback`;
 
         // Exchange the code for an Access Token
-        const tokenResponse = await axios.post('https://slack.com/api/oauth.v2.access', null, {
+        const tokenResponse = await axios.post<any>('https://slack.com/api/oauth.v2.access', null, {
             params: {
                 client_id: SLACK_CLIENT_ID,
                 client_secret: SLACK_CLIENT_SECRET,
@@ -587,6 +762,8 @@ await admin.firestore().collection('userTokens').doc(userId).set({
 
         console.log(`✅ Green light turned on for user: ${userId}`);
 
+        // Fire-and-forget RAG ingestion so Pinecone is populated immediately after connecting
+        getAppContent(userId).catch((e: any) => console.warn('⚠️ Post-Slack ingest failed:', e.message));
 
         // Send the user back to the dashboard
         res.redirect(`${FRONTEND_URL}?connection=success`);
@@ -614,7 +791,7 @@ const userData = userTokenDoc.data() as { slack: { accessToken: string } };
 const slackToken = userData.slack.accessToken;
 
         // 2. Call Slack's API to get conversations
-        const response = await axios.get('https://slack.com/api/conversations.history', {
+        const response = await axios.get<any>('https://slack.com/api/conversations.history', {
             params: { channel: channelId, limit: 20 },
             headers: { 'Authorization': `Bearer ${slackToken}` }
         });
@@ -638,7 +815,7 @@ app.get('/api/slack/channels', authenticateUser, async (req: any, res: any) => {
         const userTokenDoc = await admin.firestore().collection('userTokens').doc(userId).get();
         const userData = userTokenDoc.data() as { slack: { accessToken: string } };
         
-        const response = await axios.get('https://slack.com/api/conversations.list', {
+        const response = await axios.get<any>('https://slack.com/api/conversations.list', {
             headers: { 'Authorization': `Bearer ${userData.slack.accessToken}` },
             params: { types: 'public_channel,private_channel' }
         });
@@ -722,6 +899,9 @@ app.get('/api/auth/google/callback', async (req: any, res: any) => {
       [type]: true, // Assuming GDrive/GCS are grouped for your UI
     }, { merge: true });
 
+    // Fire-and-forget RAG ingestion so Pinecone is populated immediately after connecting
+    getAppContent(userId).catch((e: any) => console.warn('⚠️ Post-Google ingest failed:', e.message));
+
     res.redirect(`${FRONTEND_URL}?connection=success`);
   } catch (error) {
     res.redirect(`${FRONTEND_URL}?error=google_failed`);
@@ -742,10 +922,10 @@ app.get('/api/auth/microsoft', (req: any, res: any) => {
   const state = Buffer.from(JSON.stringify({ userId, type })).toString('base64');
   
   // Define scopes - MUST include 'openid' according to Azure AD v2.0 requirements
-  let scope = 'openid profile email offline_access Team.ReadBasic.All Channel.ReadBasic.All Group.Read.All'; 
+  let scope = 'openid profile email offline_access Chat.Read Team.ReadBasic.All Channel.ReadBasic.All Group.Read.All'; 
   if (type === 'outlook') scope += ' Mail.Read';
   if (type === 'onedrive') scope += ' Files.Read.All';
-  if (type === 'teams') scope += ' Team.ReadBasic.All Channel.ReadBasic.All Group.Read.All';
+  if (type === 'teams') scope += ' Chat.Read Team.ReadBasic.All Channel.ReadBasic.All Group.Read.All';
 
   const root = 'https://login.microsoftonline.com/common/oauth2/v2.0/authorize';
   const redirectUri = `${CURRENT_BACKEND_URL}/api/auth/microsoft/callback`;
@@ -778,39 +958,45 @@ app.get('/api/auth/microsoft/callback', async (req: any, res: any) => {
   try {
     const { userId, type } = JSON.parse(Buffer.from(state as string, 'base64').toString('ascii'));
 
-    // Exchange code for tokens - using proper form encoding
-    const tokenData: Record<string, string> = {
-      client_id: process.env.MS_CLIENT_ID || '',
-      client_secret: process.env.MS_CLIENT_SECRET || '',
-      code: code as string,
-      grant_type: 'authorization_code',
-      redirect_uri: `${CURRENT_BACKEND_URL}/api/auth/microsoft/callback`
-    };
-
     console.log("🔄 Exchanging auth code for tokens...", {
       client_id: process.env.MS_CLIENT_ID?.substring(0, 5) + "...",
       has_secret: !!process.env.MS_CLIENT_SECRET,
       has_code: !!code
     });
 
-    const response = await axios.post(
-      'https://login.microsoftonline.com/common/oauth2/v2.0/token',
-      new URLSearchParams(tokenData),
-      { headers: { 'Content-Type': 'application/x-www-form-urlencoded' } }
-    );
+    // Exchange code for tokens using MSAL (auto-populates the token cache with refresh token)
+    const pca = await createMsalClient(userId);
+    const msalScopes = (['openid', 'profile', 'email', 'offline_access', 'Chat.Read'] as string[])
+      .concat(type === 'outlook' ? ['Mail.Read'] : [])
+      .concat(type === 'onedrive' ? ['Files.Read.All'] : [])
+      .concat(['Team.ReadBasic.All', 'Channel.ReadBasic.All', 'Group.Read.All']);
+
+    const result = await pca.acquireTokenByCode({
+      code: code as string,
+      scopes: msalScopes,
+      redirectUri: `${CURRENT_BACKEND_URL}/api/auth/microsoft/callback`,
+    });
 
     console.log("✅ Token exchange successful!");
-    const tokens = response.data;
 
-    // Save to Firestore
+    // Persist MSAL cache to Firestore (contains the refresh token)
+    await saveMsalCache(userId, pca);
+
+    // Also persist the raw access token + expiry for legacy compatibility
     await admin.firestore().collection('userTokens').doc(userId).set({
-      microsoft: tokens 
+      microsoft: {
+        access_token: result!.accessToken,
+        expires_at: result!.expiresOn ? result!.expiresOn.getTime() : Date.now() + 3500_000,
+      }
     }, { merge: true });
 
     // Turn on the specific green light
     await admin.firestore().collection('userConnections').doc(userId).set({
       [type]: true 
     }, { merge: true });
+
+    // Fire-and-forget RAG ingestion so Pinecone is populated immediately after connecting
+    getAppContent(userId).catch((e: any) => console.warn('⚠️ Post-Microsoft ingest failed:', e.message));
 
     res.redirect(`${FRONTEND_URL}?connection=success`);
   } catch (error: any) {
@@ -830,7 +1016,7 @@ app.get('/api/teams/channels', authenticateUser, async (req: any, res: any) => {
         }
 
         // Fetch teams first
-        const teamsResponse = await axios.get('https://graph.microsoft.com/v1.0/me/joinedTeams', {
+        const teamsResponse = await axios.get<any>('https://graph.microsoft.com/v1.0/me/joinedTeams', {
             headers: { 'Authorization': `Bearer ${userData.microsoft.access_token}` }
         });
 
@@ -856,6 +1042,94 @@ app.get('/api/auth/teams', (req: any, res: any) => {
   const { userId } = req.query;
   res.redirect(`/api/auth/microsoft?userId=${userId}&type=teams`);
 });
+
+// DEV ONLY — test Teams chat message access for a given userId
+if (process.env.NODE_ENV !== 'production') {
+  app.get('/api/debug/teams-chat', async (req: any, res: any) => {
+    const userId = (req.query.userId as string) || 'hnaJEx4Bf7ghikvHZZYqq4XjizA2';
+    try {
+      const accessToken = await getMicrosoftAccessToken(userId);
+      const headers = { Authorization: `Bearer ${accessToken}` };
+
+      // Step 1: List all chats the user is part of
+      const chatsRes = await axios.get<any>('https://graph.microsoft.com/v1.0/me/chats?$top=5', { headers });
+      const chats: any[] = chatsRes.data.value ?? [];
+
+      if (chats.length === 0) {
+        return res.json({ status: 'no_chats', message: 'No chats found for this user.' });
+      }
+
+      // Step 2: Attempt to read messages from each chat
+      const results = await Promise.all(chats.map(async (chat: any) => {
+        try {
+          const msgRes = await axios.get<any>(
+            `https://graph.microsoft.com/v1.0/me/chats/${chat.id}/messages?$top=3`,
+            { headers }
+          );
+          const messages = msgRes.data.value ?? [];
+          return {
+            chatId: chat.id,
+            chatType: chat.chatType,
+            topic: chat.topic ?? '(no topic)',
+            messageCount: messages.length,
+            status: messages.length > 0 ? '✅ messages_readable' : '❌ empty_or_blocked',
+            preview: messages[0]?.body?.content?.substring(0, 120) ?? null,
+          };
+        } catch (e: any) {
+          return {
+            chatId: chat.id,
+            chatType: chat.chatType,
+            topic: chat.topic ?? '(no topic)',
+            status: '❌ permission_denied',
+            error: e.response?.data?.error?.code ?? e.message,
+          };
+        }
+      }));
+
+      res.json({ userId, totalChats: chats.length, results });
+    } catch (err: any) {
+      if (err.message === 'RE_AUTH_REQUIRED') {
+        return res.status(401).json({ error: 'RE_AUTH_REQUIRED — user must reconnect Microsoft account.' });
+      }
+      res.status(500).json({ error: err.response?.data?.error ?? err.message });
+    }
+  });
+}
+
+app.get('/api/debug/pinecone-stats', async (req: any, res: any) => {
+  try {
+    const stats = await index.describeIndexStats();
+    res.json({
+      message: "Pinecone Connectivity Successful",
+      stats: stats,
+      namespaces: stats.namespaces // This shows every orgId and their vector count
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: "Could not connect to Pinecone", details: err.message });
+  }
+});
+
+app.get('/api/debug/pinecone-check', async (req: any, res: any) => {
+  try {
+    const stats = await index.describeIndexStats();
+    
+    // This tells us exactly which 'drawers' (namespaces) have data
+    const namespaces = stats.namespaces || {};
+    const targetNamespace = "hnaJEx4Bf7ghikvHZZYqq4XjizA2"; // Your specific ID
+    
+    res.json({
+      indexDimension: stats.dimension,
+      totalVectors: stats.totalRecordCount,
+      allNamespaces: namespaces,
+      targetFound: !!namespaces[targetNamespace],
+      targetCount: namespaces[targetNamespace]?.recordCount || 0,
+      suggestion: stats.dimension !== 768 ? "DIMENSION MISMATCH: Index should be 768" : "Check Ingestion"
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 
 app.get('/{*any}', (req: any, res: any): void => {
     if (req.path.startsWith('/api')) return res.status(404).json({ error: 'API route not found' });

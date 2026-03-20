@@ -46,3 +46,5 @@ api1.js
 src/services/debugProStatus.js
 src/services/proStatusSync.js
 firebase1.json
+test-rag.ts
+geminiService.ts

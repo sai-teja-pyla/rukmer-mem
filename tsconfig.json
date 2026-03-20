@@ -16,8 +16,8 @@
     "jsx": "react-jsx",
     "strict": true,
     "noEmit": true,
-    "types": ["node", "express", "@types/express"]
+    "types": ["node"]
   },
-  "include": ["src", "server.ts", "backend"],
+  "include": ["src", "server.ts", "ingestionService.ts", "backend"],
   "references": [{ "path": "./tsconfig.node.json" }]
 }

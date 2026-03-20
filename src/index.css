@@ -1,96 +1,95 @@
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+@import "tailwindcss";
 
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
 
-/* Add this to smooth out the background color change */
-body {
-  transition: background-color 0.3s ease-in-out, color 0.3s ease-in-out;
-  margin: 0;
-  padding: 0;
-}
-
-/* Force dark mode background on the body itself */
-body.dark-mode {
-  background-color: #0f0f0f; /* Matches your dashboard dark bg */
-  color: #e5e7eb;
-}
-
-/* Force light mode background */
-body.light-mode {
-  background-color: #f8fafc; /* Matches your dashboard light bg */
-  color: #0f172a;
-}
-
-/* Force the root to react to your theme */
 :root {
-  color-scheme: light; /* Default */
+  --teams: 139, 92, 246;
+  --outlook: 59, 130, 246;
+  --accent: 99, 102, 241;
 }
 
-/* When the .dark class is active on <html> or <body> */
-.dark {
-  color-scheme: dark;
+html, body, #root {
+  height: 100%;
+  margin: 0;
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'SF Pro Display', sans-serif;
+  -webkit-font-smoothing: antialiased;
 }
 
-/* Final Scrollbar Override for Webkit (Chrome/Edge/Safari) */
-::-webkit-scrollbar {
-  width: 8px; /* Slightly wider for better interaction */
+body {
+  background:
+    radial-gradient(ellipse 1100px 600px at 10% 20%, rgba(var(--teams), 0.08), transparent 55%),
+    radial-gradient(ellipse 900px 500px at 90% 80%, rgba(var(--outlook), 0.06), transparent 55%),
+    linear-gradient(165deg, #f4f5f7 0%, #eceef1 50%, #e4e6ea 100%);
+  background-attachment: fixed;
 }
 
-::-webkit-scrollbar-track {
-  background: transparent !important; /* Forces the background to be invisible */
+/* ── Liquid Glass (light) ── */
+.liquid-glass {
+  backdrop-filter: blur(40px) saturate(1.4);
+  -webkit-backdrop-filter: blur(40px) saturate(1.4);
+  background: rgba(255, 255, 255, 0.45);
+  background-image: linear-gradient(
+    135deg,
+    rgba(255, 255, 255, 0.55) 0%,
+    rgba(255, 255, 255, 0.22) 100%
+  );
+  border: 1px solid rgba(255, 255, 255, 0.35);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.10),
+              inset 0 1px 0 rgba(255, 255, 255, 0.25);
 }
 
-.dark ::-webkit-scrollbar-thumb {
-  background-color: #333333; /* Matches your Rukmer AI border color */
-  border-radius: 10px;
-  border: 2px solid #111111; /* Adds a "gap" look around the thumb */
+/* ── Liquid Glass (dark) ── */
+.liquid-glass-dark {
+  backdrop-filter: blur(40px) saturate(1.4);
+  -webkit-backdrop-filter: blur(40px) saturate(1.4);
+  background: rgba(11, 17, 32, 0.75);
+  background-image: linear-gradient(
+    135deg,
+    rgba(255, 255, 255, 0.06) 0%,
+    rgba(255, 255, 255, 0.02) 100%
+  );
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.10),
+              inset 0 1px 0 rgba(255, 255, 255, 0.25);
 }
 
-.dark ::-webkit-scrollbar-thumb:hover {
-  background-color: #444444;
+/* ── Inner glow utility ── */
+.shadow-inner-glow {
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.10),
+              inset 0 0 30px rgba(255, 255, 255, 0.06),
+              inset 0 1px 0 rgba(255, 255, 255, 0.25);
 }
 
-/* FORCE CHROME AUTOFILL TO BE WHITE BACKGROUND & BLACK TEXT */
-input:-webkit-autofill,
-input:-webkit-autofill:hover, 
-input:-webkit-autofill:focus, 
-input:-webkit-autofill:active {
-    -webkit-box-shadow: 0 0 0 30px white inset !important;
-    -webkit-text-fill-color: black !important;
-    transition: background-color 5000s ease-in-out 0s;
+/* ── Glass shadows ── */
+.shadow-glass {
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.10),
+              inset 0 1px 0 rgba(255, 255, 255, 0.25);
+}
+.shadow-glass-hover {
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.16),
+              inset 0 1px 0 rgba(255, 255, 255, 0.35);
 }
 
-/* Ensure placeholder stays gray */
-input::placeholder {
-    color: #6b7280 !important; /* gray-500 */
-    opacity: 1; /* Firefox fix */
+/* ── Skeleton shimmer ── */
+@keyframes shimmer {
+  0% { background-position: -400px 0; }
+  100% { background-position: 400px 0; }
 }
 
-/* Dashboard design tokens – refined, non-generic palette */
-.dashboard-app {
-  --dash-bg: 248 250 252;
-  --dash-bg-dark: 15 23 42;
-  --dash-surface: 255 255 255;
-  --dash-surface-dark: 30 41 59;
-  --dash-border: 226 232 240;
-  --dash-border-dark: 51 65 85;
-  --dash-accent: 15 118 110;
-  --dash-accent-hover: 13 148 136;
-  --dash-text: 15 23 42;
-  --dash-text-muted: 100 116 139;
-  --dash-text-dark: 248 250 252;
-  --dash-text-muted-dark: 148 163 184;
-  --dash-sidebar-bg: 241 245 249;
-  --dash-sidebar-bg-dark: 15 23 42;
-  --dash-glass: 255 255 255 / 0.72;
-  --dash-glass-dark: 15 23 42 / 0.6;
+.skeleton-block {
+  border-radius: 0.75rem;
+  background: linear-gradient(
+    90deg,
+    rgba(255, 255, 255, 0.0) 0%,
+    rgba(255, 255, 255, 0.5) 50%,
+    rgba(255, 255, 255, 0.0) 100%
+  );
+  background-size: 400px 100%;
+  animation: shimmer 1.8s infinite linear;
 }
 
-.custom-scrollbar::-webkit-scrollbar {
-  width: 6px;
-}
-.custom-scrollbar::-webkit-scrollbar-thumb {
-  background-color: #e2e8f0;
-  border-radius: 10px;
-}
+/* ── Custom scrollbar ── */
+.custom-scrollbar::-webkit-scrollbar { width: 5px; }
+.custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
+.custom-scrollbar::-webkit-scrollbar-thumb { background: rgba(0, 0, 0, 0.10); border-radius: 3px; }
+.custom-scrollbar::-webkit-scrollbar-thumb:hover { background: rgba(0, 0, 0, 0.18); }

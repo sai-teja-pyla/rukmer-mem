@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useRef, useEffect } from 'react';
 import { Send, Loader2, PlusCircle } from 'lucide-react';
 
 interface ChatInputProps {
@@ -6,7 +6,7 @@ interface ChatInputProps {
     onChange: (value: string) => void;
     onSend: () => void;
     loading?: boolean;
-    onAttach?: () => void; // If provided, the Plus icon will show
+    onAttach?: () => void;
     placeholder?: string;
     showDisclaimer?: boolean;
 }
@@ -20,10 +20,19 @@ export function ChatInput({
     placeholder = "Message Rukmer AI...",
     showDisclaimer = false
 }: ChatInputProps) {
-    
-    const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+    // Auto-resize textarea as content grows (max ~5 lines)
+    useEffect(() => {
+        const el = textareaRef.current;
+        if (!el) return;
+        el.style.height = 'auto';
+        el.style.height = Math.min(el.scrollHeight, 160) + 'px';
+    }, [value]);
+
+    const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
         if (e.key === 'Enter' && !e.shiftKey) {
-            e.preventDefault(); // Prevents a new line if you ever switch to a textarea
+            e.preventDefault(); // Enter sends; Shift+Enter falls through to insert newline
             if (!loading && value.trim()) {
                 onSend();
             }
@@ -32,35 +41,38 @@ export function ChatInput({
 
     return (
         <div className="w-full">
-            <div className="relative flex items-center bg-white border border-slate-200 rounded-full shadow-[0_2px_15px_-3px_rgba(0,0,0,0.07),0_10px_20px_-2px_rgba(0,0,0,0.04)] focus-within:border-indigo-300 focus-within:ring-4 focus-within:ring-indigo-50 transition-all p-1.5">
+            <div className="relative flex items-end gap-2 bg-white border border-slate-200 rounded-2xl shadow-[0_2px_15px_-3px_rgba(0,0,0,0.07),0_10px_20px_-2px_rgba(0,0,0,0.04)] focus-within:border-indigo-300 focus-within:ring-4 focus-within:ring-indigo-50 transition-all p-2">
                 
                 {/* Optional Attachment Button */}
                 {onAttach && (
                     <button 
                         onClick={onAttach} 
-                        className="p-3 text-slate-400 hover:text-indigo-600 transition-colors ml-1"
+                        className="p-2 text-slate-400 hover:text-indigo-600 transition-colors self-end mb-0.5 shrink-0"
                         title="Upload file"
                     >
                         <PlusCircle size={22} />
                     </button>
                 )}
 
-                {/* Main Input Field */}
-                <input 
-                    className={`w-full py-3.5 outline-none text-slate-700 bg-transparent font-medium ${onAttach ? 'px-2' : 'pl-5 pr-14'}`} 
+                {/* Multiline Textarea — Shift+Enter = new line, Enter = send */}
+                <textarea
+                    ref={textareaRef}
+                    rows={1}
+                    className="w-full py-2.5 pl-3 pr-1 outline-none text-slate-700 bg-transparent font-medium resize-none leading-relaxed"
+                    style={{ maxHeight: '160px', overflowY: 'auto' }}
                     placeholder={placeholder}
                     value={value}
                     onChange={(e) => onChange(e.target.value)}
                     onKeyDown={handleKeyDown}
                 />
 
-                {/* Send Button */}
+                {/* Send Button — solid indigo */}
                 <button 
                     disabled={loading || !value.trim()} 
                     onClick={onSend} 
-                    className={`p-2.5 bg-slate-50 text-slate-400 rounded-full hover:bg-indigo-50 hover:text-indigo-600 disabled:opacity-50 transition-all ${!onAttach ? 'absolute right-2' : 'mr-1'}`}
+                    className="self-end mb-0.5 p-2.5 bg-indigo-600 text-white rounded-xl hover:bg-indigo-700 active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed transition-all shadow-sm shrink-0"
                 >
-                    {loading ? <Loader2 size={20} className="animate-spin" /> : <Send size={20} />}
+                    {loading ? <Loader2 size={18} className="animate-spin" /> : <Send size={18} />}
                 </button>
             </div>
 
