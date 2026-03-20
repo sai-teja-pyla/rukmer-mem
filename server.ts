@@ -358,7 +358,21 @@ const getAppContent = async (userId: string) => {
 };
 
 // --- 3. Static Files & CORS ---
-app.use(express.static(path.join(process.cwd(), 'dist')));
+// Hashed assets (JS/CSS) — cache aggressively since filenames change on each build
+app.use('/assets', express.static(path.join(process.cwd(), 'dist', 'assets'), {
+    maxAge: '1y',
+    immutable: true,
+}));
+// Everything else (index.html etc.) — never cache so browsers always get the latest build
+app.use(express.static(path.join(process.cwd(), 'dist'), {
+    etag: true,
+    lastModified: true,
+    setHeaders: (res: any, filePath: string) => {
+        if (filePath.endsWith('.html')) {
+            res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+        }
+    },
+}));
 
 app.use((req: any, res: any, next: any): void => {
     const allowedOrigins = [
@@ -1133,6 +1147,7 @@ app.get('/api/debug/pinecone-check', async (req: any, res: any) => {
 
 app.get('/{*any}', (req: any, res: any): void => {
     if (req.path.startsWith('/api')) return res.status(404).json({ error: 'API route not found' });
+    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
     res.sendFile(path.join(__dirname, 'dist', 'index.html'));
 });
 
