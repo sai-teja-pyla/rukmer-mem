@@ -32,12 +32,12 @@ const index = pinecone.index(process.env.PINECONE_INDEX_NAME!);
 
 const SLACK_CLIENT_ID = process.env.SLACK_CLIENT_ID;
 const SLACK_CLIENT_SECRET = process.env.SLACK_CLIENT_SECRET;
-const FRONTEND_URL = process.env.FRONTEND_URL || 'http://localhost:5173/dashboard';
 const BACKEND_HOST = process.env.BACKEND_HOST || 'http://localhost:5001';
 const BACKEND_PORT = process.env.PORT || 8080;
 
 const IS_PROD = process.env.NODE_ENV === 'production';
 const CURRENT_BACKEND_URL = IS_PROD ? 'https://app.rukmer.com' : 'http://localhost:5001';
+const FRONTEND_URL = process.env.FRONTEND_URL || (IS_PROD ? 'https://app.rukmer.com/dashboard' : 'http://localhost:5173/dashboard');
 
 const app: any = express();
 const PORT = (process.env.PORT || 8080) as number | string;
