@@ -533,7 +533,7 @@ export default function Dashboard({ user, isPro }: DashboardProps) {
 
   // ===================== RENDER =====================
   return (
-    <div className="flex h-screen overflow-hidden font-[Inter]">
+    <div className="flex overflow-hidden font-[Inter]" style={{ height: '100dvh' }}>
 
       {/* ──────── NAV RAIL ──────── */}
       <motion.aside
@@ -662,7 +662,7 @@ export default function Dashboard({ user, isPro }: DashboardProps) {
       </AnimatePresence>
 
       {/* ──────── MAIN CONTENT ──────── */}
-      <main className="flex-1 flex flex-col overflow-hidden m-2 ml-1.5 rounded-[1.75rem] liquid-glass shadow-inner-glow">
+      <main className="flex-1 flex flex-col min-h-0 overflow-hidden m-2 ml-1.5 rounded-[1.75rem] liquid-glass shadow-inner-glow">
         <AnimatePresence mode="wait">
 
           {/* ======== HOME VIEW ======== */}
@@ -673,9 +673,10 @@ export default function Dashboard({ user, isPro }: DashboardProps) {
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: -20 }}
               transition={spring}
-              className="flex-1 flex flex-col h-full overflow-hidden"
+              className="flex-1 flex flex-col min-h-0"
             >
-              <div className="flex-1 overflow-y-auto flex flex-col items-center justify-center px-6 pt-10 pb-16">
+              <div className="flex-1 overflow-y-auto flex flex-col items-center px-6 pt-10 pb-16">
+                <div className="my-auto" />
                 <motion.div
                   initial={{ opacity: 0, scale: 0.96 }}
                   animate={{ opacity: 1, scale: 1 }}
@@ -716,7 +717,7 @@ export default function Dashboard({ user, isPro }: DashboardProps) {
                     transition={{ ...spring, delay: 0.25 }}
                     className="text-gray-500 text-base md:text-lg mb-10 font-medium text-center"
                   >
-                    Your agentic workspace — search across Teams, Outlook & more.
+                    Your agentic workspace - search across Teams, Outlook & more.
                   </motion.p>
 
                   {/* Quick-Action Bento Cards */}
@@ -762,6 +763,7 @@ export default function Dashboard({ user, isPro }: DashboardProps) {
                     setChatInput(prompt);
                   }} />
                 </motion.div>
+                <div className="my-auto" />
               </div>
 
               {/* Bottom Input — Home View */}
@@ -905,38 +907,51 @@ const GlassRailItem = ({ icon, label, active, badge, onClick }: any) => (
 );
 
 const GlassInput = ({ value, onChange, onSend, loading, onAttach, placeholder }: any) => {
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const hasContent = value.trim().length > 0;
+
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); onSend(); }
   };
 
+  // Auto-resize textarea
+  useEffect(() => {
+    const el = textareaRef.current;
+    if (!el) return;
+    el.style.height = 'auto';
+    el.style.height = Math.min(el.scrollHeight, 200) + 'px';
+  }, [value]);
+
   return (
-    <div className="relative flex items-center gap-2 rounded-2xl bg-white/50 backdrop-blur-2xl border border-white/40 shadow-glass px-3 py-1.5 focus-within:border-violet-300/60 focus-within:shadow-glass-hover transition-all">
+    <div className="relative flex items-end gap-2 rounded-2xl bg-white/50 backdrop-blur-2xl border border-white/40 shadow-glass px-3 py-1.5 focus-within:border-violet-300/60 focus-within:shadow-glass-hover transition-all">
       {onAttach && (
-        <button onClick={onAttach} className="p-2 rounded-xl text-gray-400 hover:text-gray-600 hover:bg-white/40 transition-all">
+        <button onClick={onAttach} className="p-2 mb-0.5 rounded-xl text-gray-400 hover:text-gray-600 hover:bg-white/40 transition-all">
           <Paperclip size={18} />
         </button>
       )}
-      <input
-        type="text"
+      <textarea
+        ref={textareaRef}
+        rows={1}
         value={value}
         onChange={(e) => onChange(e.target.value)}
         onKeyDown={handleKeyDown}
         placeholder={placeholder}
-        className="flex-1 bg-transparent text-sm text-gray-800 placeholder:text-gray-400 focus:outline-none py-2.5"
+        className="flex-1 bg-transparent text-sm text-gray-800 placeholder:text-gray-400 focus:outline-none py-2.5 resize-none max-h-[200px] overflow-y-auto custom-scrollbar"
       />
-      <motion.button
-        whileHover={{ scale: 1.05 }}
-        whileTap={{ scale: 0.92 }}
+      <button
         onClick={onSend}
-        disabled={loading || !value.trim()}
-        className={`p-2.5 rounded-xl flex items-center justify-center transition-all ${
-          value.trim()
-            ? 'bg-gradient-to-br from-violet-500 to-blue-500 text-white shadow-md shadow-violet-300/30'
-            : 'bg-gray-100/50 text-gray-300'
-        }`}
+        disabled={loading || !hasContent}
+        style={{
+          background: hasContent
+            ? 'linear-gradient(to bottom right, #8b5cf6, #3b82f6)'
+            : 'rgba(229, 231, 235, 0.6)',
+          color: hasContent ? '#fff' : '#9ca3af',
+          boxShadow: hasContent ? '0 4px 6px rgba(139, 92, 246, 0.3)' : 'none',
+        }}
+        className="p-2.5 mb-0.5 rounded-xl flex items-center justify-center transition-all shrink-0"
       >
         {loading ? <Loader2 size={16} className="animate-spin" /> : <Send size={16} />}
-      </motion.button>
+      </button>
     </div>
   );
 };

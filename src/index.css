@@ -8,6 +8,10 @@
   --accent: 99, 102, 241;
 }
 
+html {
+  scrollbar-gutter: stable; /* Reserve scrollbar space in Chrome so layout never shifts */
+}
+
 html, body, #root {
   height: 100%;
   margin: 0;
