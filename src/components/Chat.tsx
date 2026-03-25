@@ -135,7 +135,6 @@ export default function Chat() {
             onChange={setInput}
             onSend={handleSendMessage}
             loading={isLoading}
-            onKeyPress={handleKeyPress}
           />
         </div>
       </div>

@@ -48,3 +48,4 @@ src/services/proStatusSync.js
 firebase1.json
 test-rag.ts
 geminiService.ts
+src/components/Chat.tsx

@@ -49,7 +49,7 @@ const getToken = async (): Promise<string> => {
 /**
  * Sends a chat message to the backend with streaming support.
  */
-export const sendChatMessage = async (data) => {
+export const sendChatMessage = async (data: Record<string, any>) => {
     try {
         const endpoint = `${BASE_DOMAIN}/api/ai/chat`; // ✅ Correct endpoint
         const token = await getToken();
@@ -112,7 +112,7 @@ export const sendChatMessage = async (data) => {
 /**
  * Fetches chat history.
  */
-export const fetchChatHistory = async (userId) => { 
+export const fetchChatHistory = async (userId: string) => { 
     try {
         if (!userId) return [];
 
@@ -138,7 +138,7 @@ export const fetchChatHistory = async (userId) => {
 /**
  * Hides chat history.
  */
-export const hideChatHistory = async (userId) => { 
+export const hideChatHistory = async (userId: string) => { 
     try {
         const endpoint = `${BASE_DOMAIN}/api/chat/hide`;
         const token = await getToken();
