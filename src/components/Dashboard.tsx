@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect, useMemo } from 'react';
-import { useSearchParams, useNavigate } from 'react-router-dom';
+import { useSearchParams, useNavigate, useParams } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   Loader2, X, Plus, Home, Settings, MessageSquare, Plug, Clock,
@@ -17,6 +17,7 @@ import type { UserProfile } from '../types';
 import { ChatHistory } from './ChatHistory';
 import { WelcomeState } from './WelcomeState';
 import { MessageBubble } from './MessageBubble.tsx';
+import { AnimatedLogo } from './AnimatedLogo';
 import { useUserSettings } from '../hooks/useUserSettings';
 import UserDropdown from './UserDropdown';
 
@@ -62,6 +63,7 @@ const AVAILABLE_APPS = [
 
 export default function Dashboard({ user, isPro }: DashboardProps) {
   const navigate = useNavigate();
+  const { chatId: urlChatId } = useParams();
   const [searchParams, setSearchParams] = useSearchParams();
   const { settings } = useUserSettings();
   const displayName = settings?.displayName || user?.name || 'Guest';
@@ -77,10 +79,16 @@ export default function Dashboard({ user, isPro }: DashboardProps) {
   });
   const [chatInput, setChatInput] = useState('');
   const [chatLoading, setChatLoading] = useState(false);
+  const [isStreaming, setIsStreaming] = useState(false);
 
   const [mediaItems, setMediaItems] = useState<any[]>([]);
   const [report, setReport] = useState<any>(null);
   const [reportId, setReportId] = useState<string | null>(null);
+  const [sessionId, setSessionId] = useState<string | null>(() => {
+    // ⚡ Restore session ID from storage to keep same session across refreshes
+    const saved = sessionStorage.getItem('rukmer_session_id');
+    return saved || null;
+  });
   const [pastReports, setPastReports] = useState<any[]>([]);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -114,21 +122,64 @@ export default function Dashboard({ user, isPro }: DashboardProps) {
     const fetchChatHistory = async () => {
       try {
         const idToken = await auth.currentUser?.getIdToken();
-        const response = await fetch(`/api/history?userId=${user.uid}`, {
+        console.log("🔄 Fetching chat history for user:", user.uid);
+        
+        const response = await fetch(`/api/history`, {
           headers: { 'Authorization': `Bearer ${idToken}` }
         });
-        if (!response.ok) throw new Error(`Failed: ${response.status}`);
+        
+        if (!response.ok) {
+          console.error("❌ Failed to fetch history:", response.status);
+          throw new Error(`Failed: ${response.status}`);
+        }
+        
         const chats = await response.json();
-        const formatted = chats.map((chat: any) => ({
-          id: chat.id,
-          title: chat.user_message?.substring(0, 50) || 'Chat',
-          userMessage: chat.user_message,
-          aiReply: chat.ai_reply,
-          date: new Date(chat.created_at)
-        }));
+        console.log("📨 Received", chats?.length || 0, "chat messages from backend");
+        
+        if (!chats || chats.length === 0) {
+          console.warn("⚠️ No chats found in database");
+          setPastReports([]);
+          return;
+        }
+        
+        // ⚡ Group chats by sessionId to reconstruct sessions
+        const sessionMap = new Map<string, any>();
+        
+        chats.forEach((chat: any) => {
+          // Use session_id if available, otherwise use chat id as fallback
+          const sessionId = chat.session_id || `legacy_${chat.id}`;
+          
+          if (!sessionMap.has(sessionId)) {
+            // First message in this session
+            sessionMap.set(sessionId, {
+              id: String(chat.id),
+              sessionId: sessionId,
+              title: chat.title || chat.user_message?.substring(0, 50) || 'Chat',
+              userMessage: chat.user_message,
+              aiReply: chat.ai_reply,
+              date: new Date(chat.created_at),
+              messageCount: 1
+            });
+          } else {
+            // Subsequent messages in this session: update with latest message
+            const existing = sessionMap.get(sessionId)!;
+            existing.id = String(chat.id);
+            existing.userMessage = chat.user_message;
+            existing.aiReply = chat.ai_reply;
+            existing.date = new Date(chat.created_at);
+            existing.messageCount = (existing.messageCount || 1) + 1;
+          }
+        });
+        
+        // Convert map to array and sort by date (newest first)
+        const formatted = Array.from(sessionMap.values())
+          .sort((a, b) => b.date.getTime() - a.date.getTime());
+        
+        console.log("✅ Loaded", formatted.length, "sessions from history");
         setPastReports(formatted);
       } catch (error) {
-        console.error('Error fetching chat history:', error);
+        console.error('❌ Error fetching chat history:', error);
+        setPastReports([]);
       }
     };
     fetchChatHistory();
@@ -150,17 +201,28 @@ export default function Dashboard({ user, isPro }: DashboardProps) {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [chatMessages]);
 
+  // If a chatId is in the URL and history is loaded, open that chat automatically
+  useEffect(() => {
+    if (urlChatId && pastReports.length > 0 && reportId !== urlChatId) {
+      loadReportById(urlChatId);
+    }
+  }, [urlChatId, pastReports]);
+
   // --- DATA ---
   const groupedHistory = useMemo(() => {
-    const groups: Record<string, any[]> = { 'TODAY': [], 'YESTERDAY': [], 'PREVIOUS 7 DAYS': [] };
+    const groups: Record<string, any[]> = { 'TODAY': [], 'YESTERDAY': [], 'PREVIOUS 7 DAYS': [], 'OLDER': [] };
     const now = new Date();
     const yesterday = new Date(); yesterday.setDate(now.getDate() - 1);
     const sevenDaysAgo = new Date(); sevenDaysAgo.setDate(now.getDate() - 7);
     pastReports.forEach(r => {
       const d = r.date instanceof Date ? r.date : new Date(r.date);
-      if (d.toDateString() === now.toDateString()) groups['TODAY'].push(r);
+      if (isNaN(d.getTime())) {
+        // Invalid date — put in TODAY as fallback
+        groups['TODAY'].push(r);
+      } else if (d.toDateString() === now.toDateString()) groups['TODAY'].push(r);
       else if (d.toDateString() === yesterday.toDateString()) groups['YESTERDAY'].push(r);
       else if (d >= sevenDaysAgo) groups['PREVIOUS 7 DAYS'].push(r);
+      else groups['OLDER'].push(r);
     });
     return groups;
   }, [pastReports]);
@@ -193,13 +255,51 @@ export default function Dashboard({ user, isPro }: DashboardProps) {
   };
 
   const resetSession = () => {
+    // ⚡ Generate a new session ID for the next conversation
+    const newSessionId = Math.random().toString(36).substring(2, 11);
     setMediaItems([]);
     setReport(null);
     setReportId(null);
+    setSessionId(newSessionId);
     setChatMessages([]);
     setActiveSidebar('none');
     setCurrentView('home');
     sessionStorage.removeItem('rukmer_chat_messages');
+    sessionStorage.setItem('rukmer_session_id', newSessionId);
+    navigate('/dashboard');
+  };
+
+  // ⚡ Handle renaming a chat (persists to DB)
+  const handleRenameChat = async (chatId: string, newTitle: string) => {
+    setPastReports(prev =>
+      prev.map(r =>
+        r.id === chatId ? { ...r, title: newTitle } : r
+      )
+    );
+    if (reportId === chatId) {
+      setReport((prev: any) => (prev ? { ...prev, title: newTitle } : null));
+    }
+    try {
+      const idToken = await auth.currentUser?.getIdToken();
+      await fetch('/api/chat/rename', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${idToken}` },
+        body: JSON.stringify({ chatId, title: newTitle })
+      });
+    } catch (err) {
+      console.error('Failed to persist rename:', err);
+    }
+  };
+
+  // ⚡ Handle deleting a chat
+  const handleDeleteChat = (chatId: string) => {
+    // Remove from history
+    setPastReports(prev => prev.filter(r => r.id !== chatId));
+    
+    // If the deleted chat is currently open, go back to home
+    if (reportId === chatId) {
+      resetSession();
+    }
   };
 
   const loadReportById = async (id: string | number) => {
@@ -207,16 +307,23 @@ export default function Dashboard({ user, isPro }: DashboardProps) {
       const idStr = String(id);
       const chatRecord = pastReports.find(r => String(r.id) === idStr);
       if (chatRecord) {
+        // ⚡ Restore the session ID so we can continue in the same conversation
+        setSessionId(chatRecord.sessionId);
+        sessionStorage.setItem('rukmer_session_id', chatRecord.sessionId);
         setReportId(idStr);
         setReport(chatRecord);
         setActiveSidebar('none');
-        const allMessages = [...pastReports]
+        navigate(`/dashboard/${idStr}`, { replace: true });
+        
+        // ⚡ Load all messages from this session (find all records with same sessionId)
+        const sessionMessages = pastReports
+          .filter(r => r.sessionId === chatRecord.sessionId)
           .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime())
           .flatMap(r => [
             { role: 'user', content: r.userMessage },
             { role: 'assistant', content: r.aiReply }
           ]);
-        setChatMessages(allMessages);
+        setChatMessages(sessionMessages);
         setCurrentView('chat');
       } else {
         const docSnap = await getDoc(doc(db, "reports", idStr));
@@ -235,55 +342,194 @@ export default function Dashboard({ user, isPro }: DashboardProps) {
     }
   };
 
-  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (!e.target.files) return;
     const files = Array.from(e.target.files);
-    if (mediaItems.length + files.length > 10) return alert("Max 10 files allowed.");
-    const newItems = files.map(file => ({
-      id: Math.random().toString(36).substr(2, 9),
-      file,
-      preview: URL.createObjectURL(file),
-      type: file.type.split('/')[0],
-      name: file.name
-    }));
+    // Reset input so same file can be re-selected
+    e.target.value = '';
+    if (mediaItems.length + files.length > 10) return alert('Max 10 files allowed.');
+
+    const readFile = (file: File): Promise<{ id: string; name: string; mimeType: string; type: string; data: string; preview: string }> =>
+      new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => {
+          const result = reader.result as string;
+          // result is "data:<mimeType>;base64,<data>" for readAsDataURL
+          const base64 = result.split(',')[1];
+          const isImage = file.type.startsWith('image/');
+          resolve({
+            id: Math.random().toString(36).substr(2, 9),
+            name: file.name,
+            mimeType: file.type || 'application/octet-stream',
+            type: isImage ? 'image' : 'document',
+            data: base64,
+            preview: isImage ? result : '', // only images get a preview URL
+          });
+        };
+        reader.onerror = reject;
+        reader.readAsDataURL(file);
+      });
+
+    const newItems = await Promise.all(files.map(readFile));
     setMediaItems(prev => [...prev, ...newItems]);
     setCurrentView('chat');
   };
 
   const sendChatMessage = async (overrideMessage: string | null = null) => {
-    const msg = overrideMessage || chatInput;
-    if (!msg.trim() || chatLoading) return;
-    setChatInput('');
-    setChatLoading(true);
-    setCurrentView('chat');
-    setChatMessages(prev => [...prev, { role: 'user', content: msg }]);
-    try {
-      const idToken = await auth.currentUser?.getIdToken();
-      const response = await fetch(`/api/ai/chat`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${idToken}` },
-        body: JSON.stringify({ userId: user.uid, prompt: msg })
-      });
-      if (!response.ok) {
-        const err = await response.json();
-        throw new Error(err.error || 'Backend failed');
-      }
-      const data = await response.json();
-      const aiReply = data.reply || data.ai_reply;
-      setChatMessages(prev => [...prev, { role: 'assistant', content: aiReply }]);
-      setPastReports(prev => [{
-        id: data.chatId || Math.random().toString(36).substr(2, 9),
-        title: msg.substring(0, 50),
-        userMessage: msg,
-        aiReply,
-        date: data.createdAt ? new Date(data.createdAt) : new Date()
-      }, ...prev]);
-    } catch {
-      setChatMessages(prev => [...prev, { role: 'assistant', content: "Rukmer encountered an issue connecting." }]);
-    } finally {
-      setChatLoading(false);
+  const msg = overrideMessage || chatInput;
+  if (!msg.trim() || chatLoading) return;
+  
+  // ⚡ Generate a session ID if we don't have one (first message in conversation)
+  let currentSessionId = sessionId;
+  if (!currentSessionId) {
+    currentSessionId = Math.random().toString(36).substring(2, 11);
+    setSessionId(currentSessionId);
+    sessionStorage.setItem('rukmer_session_id', currentSessionId);
+  }
+  
+  setChatInput('');
+  setChatLoading(true);
+  setCurrentView('chat');
+  
+  // Snapshot files to send, then clear the attachment tray
+  const attachedFiles = mediaItems.map(item => ({ name: item.name, mimeType: item.mimeType, type: item.type, data: item.data }));
+  setMediaItems([]);
+
+  // ⚡ Add ONLY the user message. Assistant message will be added on first chunk.
+  setChatMessages(prev => [
+    ...prev,
+    { role: 'user', content: msg, attachments: attachedFiles.map(f => ({ name: f.name, type: f.type })) }
+  ]);
+
+  try {
+    const idToken = await auth.currentUser?.getIdToken();
+    const response = await fetch(`/api/ai/chat`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${idToken}` },
+      body: JSON.stringify({ userId: user.uid, prompt: msg, sessionId: currentSessionId, files: attachedFiles })
+    });
+
+    if (!response.ok || !response.body) {
+      throw new Error('Backend failed');
     }
-  };
+
+    // Read the streaming response
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder('utf-8');
+    let aiReply = '';
+    let buffer = '';
+    let finalChatId = '';
+    let finalDate = new Date();
+    let hasReceivedFirstChunk = false; // ⚡ Track when AI response starts
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      // Decode the stream chunk and handle potential fragmentation
+      buffer += decoder.decode(value, { stream: true });
+      const parts = buffer.split('\n\n');
+      buffer = parts.pop() || ''; // Keep incomplete chunks in the buffer
+
+      for (const part of parts) {
+        if (part.startsWith('data: ')) {
+          try {
+            const dataStr = part.replace('data: ', '');
+            const data = JSON.parse(dataStr);
+
+            if (data.error) {
+               aiReply = data.error;
+               if (!hasReceivedFirstChunk) {
+                 setChatMessages(prev => [...prev, { role: 'assistant', content: aiReply }]);
+                 hasReceivedFirstChunk = true;
+               }
+            } else if (data.text) {
+              aiReply += data.text;
+              
+              // ⚡ First chunk: add message and turn off TypingIndicator
+              if (!hasReceivedFirstChunk) {
+                setChatMessages(prev => [...prev, { role: 'assistant', content: aiReply }]);
+                setChatLoading(false);
+                setIsStreaming(true);
+                hasReceivedFirstChunk = true;
+              } else {
+                // ⚡ Subsequent chunks: update the last message
+                setChatMessages(prev => {
+                  const newMsgs = [...prev];
+                  newMsgs[newMsgs.length - 1] = { role: 'assistant', content: aiReply };
+                  return newMsgs;
+                });
+              }
+            } else if (data.done) {
+              // Capture the DB details sent at the very end
+              finalChatId = data.chatId;
+              if (data.createdAt) finalDate = new Date(data.createdAt);
+            }
+          } catch (e) {
+            console.error("Error parsing stream chunk", e);
+          }
+        }
+      }
+    }
+
+    // Flush any remaining data in the buffer after the stream ends
+    if (buffer.trim()) {
+      const remaining = buffer.trim();
+      if (remaining.startsWith('data: ')) {
+        try {
+          const data = JSON.parse(remaining.replace('data: ', ''));
+          if (data.done) {
+            finalChatId = data.chatId;
+            if (data.createdAt) finalDate = new Date(data.createdAt);
+          }
+        } catch (e) { /* ignore */ }
+      }
+    }
+
+    // ⚡ Update history: either create new session or add to existing one
+    setPastReports(prev => {
+      const existingIdx = prev.findIndex(r => r.sessionId === currentSessionId);
+      if (existingIdx !== -1) {
+        // Session exists: update it with new messages
+        const updated = [...prev];
+        updated[existingIdx] = {
+          ...updated[existingIdx],
+          userMessage: msg,
+          aiReply,
+          messageCount: (updated[existingIdx].messageCount || 1) + 1,
+          date: finalDate
+        };
+        return updated;
+      } else {
+        // New session: add to front of history
+        const newId = String(finalChatId || crypto.randomUUID());
+        // Update URL to the new chat's ID if we don't have one yet
+        if (!reportId) {
+          setReportId(newId);
+          navigate(`/dashboard/${newId}`, { replace: true });
+        }
+        return [{
+          id: newId,
+          sessionId: currentSessionId,
+          title: msg.substring(0, 50),
+          userMessage: msg,
+          aiReply,
+          messageCount: 1,
+          date: finalDate
+        }, ...prev];
+      }
+    });
+
+  } catch (err) {
+    // ⚡ Only add error message if AI response hasn't started
+    if (chatMessages[chatMessages.length - 1]?.role !== 'assistant') {
+      setChatMessages(prev => [...prev, { role: 'assistant', content: "Rukmer encountered an issue connecting." }]);
+    }
+  } finally {
+    setChatLoading(false);
+    setIsStreaming(false);
+  }
+};
 
   // ===================== RENDER =====================
   return (
@@ -302,7 +548,7 @@ export default function Dashboard({ user, isPro }: DashboardProps) {
         }}
       >
         <div className="w-11 h-11 rounded-2xl bg-white/10 backdrop-blur-xl flex items-center justify-center mb-7 border border-white/10 shadow-lg">
-          <img src="/dash-logo.png" alt="Rukmer" className="w-7 h-7 object-contain brightness-0 invert" />
+          <img src="/hexagon.png" alt="Rukmer" className="w-7 h-7 object-contain" />
         </div>
 
         <nav className="flex flex-col gap-2.5 w-full px-2.5">
@@ -347,6 +593,8 @@ export default function Dashboard({ user, isPro }: DashboardProps) {
               groupedHistory={groupedHistory}
               activeChatId={reportId}
               onSelectChat={loadReportById}
+              onRenameChat={handleRenameChat}
+              onDeleteChat={handleDeleteChat}
               onClose={() => setActiveSidebar('none')}
             />
           </motion.div>
@@ -439,9 +687,18 @@ export default function Dashboard({ user, isPro }: DashboardProps) {
                     initial={{ opacity: 0, y: 10 }}
                     animate={{ opacity: 1, y: 0 }}
                     transition={{ ...spring, delay: 0.15 }}
-                    className="w-14 h-14 rounded-3xl bg-gradient-to-br from-[#0f1729] to-[#1a2654] flex items-center justify-center shadow-xl shadow-blue-900/20 mb-6 border border-white/10"
+                    className="relative flex items-center justify-center mb-6"
                   >
-                    <img src="/dash-logo.png" alt="Rukmer" className="w-8 h-8 object-contain brightness-0 invert" />
+                    <div className="absolute w-16 h-16 rounded-3xl bg-gradient-to-br from-violet-500/30 to-cyan-500/20 blur-xl" />
+                    <div
+                      className="relative w-14 h-14 rounded-3xl flex items-center justify-center border border-violet-400/20"
+                      style={{
+                        background: 'linear-gradient(135deg, rgba(109,40,217,0.3) 0%, rgba(15,23,41,0.85) 60%, rgba(6,182,212,0.1) 100%)',
+                        boxShadow: '0 0 28px rgba(139,92,246,0.3), inset 0 1px 0 rgba(255,255,255,0.07)',
+                      }}
+                    >
+                      <AnimatedLogo state="idle" className="w-9 h-9" />
+                    </div>
                   </motion.div>
 
                   <motion.h1
@@ -538,9 +795,6 @@ export default function Dashboard({ user, isPro }: DashboardProps) {
               {/* Chat Header */}
               <header className="h-14 border-b border-white/20 flex items-center justify-between px-6 shrink-0 backdrop-blur-xl">
                 <div className="flex items-center gap-3">
-                  <div className="w-7 h-7 rounded-xl bg-gradient-to-br from-[#0f1729] to-[#1a2654] flex items-center justify-center border border-white/10">
-                    <img src="/dash-logo.png" alt="Rukmer" className="w-4 h-4 object-contain brightness-0 invert" />
-                  </div>
                   <h3 className="font-bold text-gray-700 text-sm">{report?.projectName || "New Session"}</h3>
                 </div>
                 <motion.button
@@ -556,16 +810,20 @@ export default function Dashboard({ user, isPro }: DashboardProps) {
               {/* Messages */}
               <div className="flex-1 overflow-y-auto p-6 space-y-6 custom-scrollbar">
                 <AnimatePresence>
-                  {chatMessages.map((m, i) => (
-                    <motion.div
-                      key={i}
-                      initial={{ opacity: 0, y: 16, scale: 0.97 }}
-                      animate={{ opacity: 1, y: 0, scale: 1 }}
-                      transition={{ ...spring, delay: 0.02 * Math.min(i, 5) }}
-                    >
-                      <MessageBubble message={m} />
-                    </motion.div>
-                  ))}
+                  {chatMessages.map((m, i) => {
+                    const isLastAssistant = m.role === 'assistant' && !chatMessages.slice(i + 1).some((x: any) => x.role === 'assistant');
+                    const aiState = chatLoading ? 'thinking' : (isStreaming ? 'typing' : 'idle');
+                    return (
+                      <motion.div
+                        key={i}
+                        initial={{ opacity: 0, y: 16, scale: 0.97 }}
+                        animate={{ opacity: 1, y: 0, scale: 1 }}
+                        transition={{ ...spring, delay: 0.02 * Math.min(i, 5) }}
+                      >
+                        <MessageBubble message={m} aiState={aiState} isLastAssistant={isLastAssistant} />
+                      </motion.div>
+                    );
+                  })}
                 </AnimatePresence>
                 {chatLoading && <GlassTypingIndicator />}
                 <div ref={chatEndRef} />
@@ -577,8 +835,15 @@ export default function Dashboard({ user, isPro }: DashboardProps) {
                   {mediaItems.length > 0 && (
                     <div className="flex gap-2 overflow-x-auto p-2 rounded-2xl bg-white/30 backdrop-blur-xl border border-white/20">
                       {mediaItems.map((item) => (
-                        <div key={item.id} className="relative w-14 h-14 rounded-xl overflow-hidden border border-white/30 shrink-0 shadow-sm">
-                          <img src={item.preview} className="w-full h-full object-cover" alt="upload" />
+                        <div key={item.id} className="relative w-14 h-14 rounded-xl overflow-hidden border border-white/30 shrink-0 shadow-sm bg-slate-100 flex items-center justify-center">
+                          {item.type === 'image' ? (
+                            <img src={item.preview} className="w-full h-full object-cover" alt={item.name} />
+                          ) : (
+                            <div className="flex flex-col items-center justify-center w-full h-full p-1">
+                              <Paperclip size={16} className="text-slate-500" />
+                              <span className="text-[8px] text-slate-500 truncate w-full text-center mt-0.5 px-0.5">{item.name.split('.').pop()?.toUpperCase()}</span>
+                            </div>
+                          )}
                           <button
                             onClick={() => setMediaItems(prev => prev.filter(i => i.id !== item.id))}
                             className="absolute top-0.5 right-0.5 bg-black/40 backdrop-blur-sm text-white rounded-full p-0.5 hover:bg-red-500 transition-colors"
@@ -605,7 +870,7 @@ export default function Dashboard({ user, isPro }: DashboardProps) {
         </AnimatePresence>
       </main>
 
-      <input ref={fileInputRef} type="file" multiple className="hidden" onChange={handleFileUpload} />
+      <input ref={fileInputRef} type="file" multiple accept="image/*,.pdf,.txt,.md,.csv,.json,.doc,.docx,.xls,.xlsx,.ppt,.pptx" className="hidden" onChange={handleFileUpload} />
       {showPricing && <PricingModal isOpen={showPricing} onClose={() => setShowPricing(false)} onCheckout={() => {}} />}
     </div>
   );
@@ -683,8 +948,8 @@ const GlassTypingIndicator = () => (
     transition={{ type: "spring", stiffness: 300, damping: 25 }}
     className="flex justify-start"
   >
-    <div className="w-8 h-8 rounded-xl bg-gradient-to-br from-[#0f1729] to-[#1a2654] flex items-center justify-center shrink-0 mr-3 mt-1 shadow-md border border-white/10">
-      <img src="/dash-logo.png" alt="Rukmer" className="w-4 h-4 object-contain brightness-0 invert" />
+    <div className="mr-3 mt-1">
+      <AnimatedLogo state="thinking" className="w-8 h-8" />
     </div>
     <div className="bg-white/50 backdrop-blur-2xl border border-white/30 p-4 rounded-2xl rounded-tl-lg flex items-center gap-3 shadow-glass">
       <Loader2 className="animate-spin text-blue-600" size={16} />

@@ -443,14 +443,15 @@ async function callGemini(prompt: string): Promise<string> {
             ],
             systemInstruction: {
                 role: 'system',
-                parts: [{ text: `You are Rukmer, a AI friendly and intelligent workplace sidekick. 
-                Your vibe is supportive, grounded, and slightly witty—like a helpful teammate, not a rigid robot.
-                
-                GUIDELINES:
-                - Use natural language and contractions (e.g., "I've" instead of "I have").
-                - Be concise but warm. 
-                - If you find something in the data, present it helpfully (e.g., "I took a look at your Slack and found...").
-                - If you don't know something, be honest but encouraging.` }]
+                parts: [{ text: `You are Rukmer AI, the intelligent infrastructure and knowledge engine for this enterprise.
+  Your purpose is to synthesize fragmented workspace data into a single, verifiable source of truth.
+  
+  CRITICAL ENTERPRISE GUIDELINES:
+  1. ZERO KNOWLEDGE DRIFT: Base your answers STRICTLY on the provided Workspace Context. If the answer is not in the context, explicitly state: "I cannot verify this based on the current workspace data." Do not guess.
+  2. MANDATORY CITATIONS: You MUST cite your sources for every factual claim. Use brackets to cite the source and date. 
+     Example: "The Q3 budget is $50k [Source: Slack #general - Oct 12] and was approved by Sarah [Source: Gmail - Oct 14]."
+  3. MULTI-MODAL AWARENESS: If the user uploads an image or video, analyze it deeply and cross-reference it with the text context provided.
+  4. FORMATTING: Use professional Markdown (tables, bold text, bullet points) to make complex data instantly readable.` }]
             },
         });
 
@@ -481,71 +482,137 @@ app.get('/', (req: any, res: any): void => {
 // Apply auth only to protected routes
 // server.ts
 app.post('/api/ai/chat', authenticateUser, async (req: any, res: any) => {
+  const { userId, prompt, message, sessionId, files } = req.body;
+  const userMessage = prompt || message;
+  const orgId = userId || req.user.uid;
+  const currentSessionId = sessionId || Math.random().toString(36).substring(2, 11);
+  const attachedFiles: Array<{ name: string; mimeType: string; type: string; data: string }> = Array.isArray(files) ? files : [];
+
+  if (!userMessage) return res.status(400).json({ error: "Empty message" });
+
+  console.log("🤖 Knowledgeable Chat Request from:", orgId, "Session:", currentSessionId, "Files:", attachedFiles.length);
+
+  // 1. SET UP STREAMING HEADERS
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+  res.setHeader('X-Accel-Buffering', 'no'); // Disable buffering for faster streaming
+
+  // Gemini-supported MIME types for inline multimodal data
+  const INLINE_MIME_TYPES = new Set([
+    'image/jpeg', 'image/png', 'image/gif', 'image/webp',
+    'video/mp4', 'video/mpeg', 'video/quicktime', 'video/avi', 'video/webm', 'video/3gpp',
+    'audio/mp3', 'audio/mpeg', 'audio/wav', 'audio/flac', 'audio/aac', 'audio/ogg',
+    'application/pdf',
+    'text/plain', 'text/csv', 'text/markdown', 'text/html', 'application/json',
+  ]);
+
   try {
-    const { userId, prompt, message } = req.body;
-    const userMessage = prompt || message;
-    const orgId = userId || req.user.uid;
-
-    if (!userMessage) return res.status(400).json({ error: "Empty message" });
-
-    console.log("🤖 Knowledgeable Chat Request from:", orgId);
-
-    // 1. RETRIEVAL: Search Pinecone for relevant facts
+    // 2. RETRIEVAL (Pinecone) with timeout
     let workspaceContext = "";
     try {
-      workspaceContext = await queryWorkspaceData(userMessage, orgId);
-      if (workspaceContext) {
-        console.log("✅ Found relevant facts in Pinecone.");
-      } else {
-        console.log("ℹ️ No relevant workspace facts found.");
-      }
+      const searchPromise = queryWorkspaceData(userMessage, orgId);
+      const timeoutPromise = new Promise((_, reject) => 
+        setTimeout(() => reject(new Error('Search timeout')), 5000)
+      );
+      workspaceContext = await Promise.race([searchPromise, timeoutPromise]) as string;
     } catch (searchErr: any) {
-      console.warn("⚠️ Vector search failed:", searchErr.message);
+      console.warn("⚠️ Vector search failed or timed out:", searchErr.message);
     }
 
-    // 2. AUGMENTED PROMPT: Ground Gemini in the facts
-    const finalPrompt = `
-      You are Rukmer, a high-level AI Workspace Assistant, a supportive, grounded, and slightly witty workplace sidekick. 
-      Your goal is to help the user manage their work using the provided context from their Gmail, Google Drive, Outlook, OneDrive, Teams and Slack.
-      
-      Below is the RELEVANT CONTEXT found in the user's connected apps (Slack/Gmail/Outlook/OneDrive/Google Drive/Teams). 
-      Use this context to answer the user's question accurately.
-      
-      CONTEXT:
-      ${workspaceContext || "No specific data found for this query in connected apps."}
-      
-      USER QUESTION: 
-      ${userMessage}
-      
-      INSTRUCTION: 
-      - If the context contains the answer, cite it (e.g., "Slack says..." or "Based on that email from...").
-      - Use natural, helpful language. Avoid sounding like a robot.
-      - If you can't find the answer in the context, be honest: "I don't see anything about that in your Slack or Gmail yet."
-      - Keep it under 3-4 sentences unless the user asks for a long explanation.
-      - If the user asks you to WRITE or DRAFT an email/message, use the retrieved context to make it accurate.
-      - If the information is missing, ask for the specific detail, but don't refuse to write the draft.
-      - Always maintain a professional yet helpful tone.
-      - If you find a relevant thread, reference it (e.g., "Based on your last thread with <Name>...").
-    `;
+    // 3. FETCH SESSION HISTORY for multi-turn continuity
+    let sessionHistory: Array<{ role: string; parts: Array<{ text: string }> }> = [];
+    try {
+      const histResult = await pool.query(
+        `SELECT user_message, ai_reply FROM chats
+         WHERE user_id = $1 AND session_id = $2
+         ORDER BY created_at ASC LIMIT 10`,
+        [req.user.uid, currentSessionId]
+      );
+      for (const row of histResult.rows) {
+        sessionHistory.push({ role: 'user',  parts: [{ text: row.user_message }] });
+        sessionHistory.push({ role: 'model', parts: [{ text: row.ai_reply }] });
+      }
+    } catch (histErr: any) {
+      console.warn("⚠️ Could not fetch session history:", histErr.message);
+    }
 
-    // 3. GENERATION
-    const aiResponse = await callGemini(finalPrompt);
+    // 4. BUILD MULTIMODAL PARTS
+    // All Gemini-compatible files (images, PDFs, video, audio, text) go in as inlineData
+    const fileParts = attachedFiles
+      .filter(f => f.data && INLINE_MIME_TYPES.has(f.mimeType))
+      .map(f => ({ inlineData: { mimeType: f.mimeType, data: f.data } }));
 
-    // 4. PERSISTENCE
-    const insertResult = await pool.query(
-      "INSERT INTO chats (user_id, user_message, ai_reply) VALUES ($1, $2, $3) RETURNING id, created_at",
-      [orgId, userMessage, aiResponse]
-    );
+    // Note unsupported file types so the model is still aware of them
+    const unsupportedFileNote = attachedFiles
+      .filter(f => !INLINE_MIME_TYPES.has(f.mimeType))
+      .map(f => `[Attached file (cannot be read inline): ${f.name}]`)
+      .join('\n');
 
-    res.json({ 
-      reply: aiResponse,
-      chatId: insertResult.rows[0].id,
-      createdAt: insertResult.rows[0].created_at 
+    const systemPrompt = `You are Rukmer, an AI Workspace Assistant. Help the user using the provided workspace context and any attached files (images, documents, PDFs, etc.).
+
+WORKSPACE CONTEXT:
+${workspaceContext || "No relevant workspace data found for this query."}
+${unsupportedFileNote ? `\nATTACHED FILES (unsupported for inline reading):\n${unsupportedFileNote}` : ''}
+${fileParts.length > 0 ? `\n${fileParts.length} file(s) have been provided inline — analyze them as part of your response.` : ''}
+
+USER QUESTION:
+${userMessage}
+
+Keep your response concise, accurate, and natural.`;
+
+    const textPart = { text: systemPrompt };
+    const userParts: any[] = [textPart, ...fileParts];
+
+    // 5. GENERATION (STREAMING) with full conversation history
+    const model = vertexAI.getGenerativeModel({
+      model: 'gemini-2.5-flash',
+      generationConfig: { 
+        temperature: 0.7,
+        topP: 0.9,
+        maxOutputTokens: 2000
+      }
     });
+
+    const resultStream = await model.generateContentStream({
+      contents: [...sessionHistory, { role: 'user', parts: userParts }],
+    });
+
+    let fullResponse = "";
+    
+    // Stream chunks back to the frontend one by one
+    for await (const chunk of resultStream.stream) {
+      const chunkText = chunk.candidates?.[0]?.content?.parts?.[0]?.text || "";
+      if (chunkText) {
+        fullResponse += chunkText;
+        res.write(`data: ${JSON.stringify({ text: chunkText })}\n\n`);
+      }
+    }
+
+    // 5. PERSISTENCE
+    let insertResult;
+    try {
+      insertResult = await pool.query(
+        "INSERT INTO chats (user_id, user_message, ai_reply, session_id) VALUES ($1, $2, $3, $4) RETURNING id, created_at",
+        [req.user.uid, userMessage, fullResponse, currentSessionId]
+      );
+    } catch (insertErr: any) {
+      // Fallback: session_id column might not exist yet
+      console.warn("⚠️ INSERT with session_id failed, trying without:", insertErr.message);
+      insertResult = await pool.query(
+        "INSERT INTO chats (user_id, user_message, ai_reply) VALUES ($1, $2, $3) RETURNING id, created_at",
+        [req.user.uid, userMessage, fullResponse]
+      );
+    }
+
+    // Send final payload with Database IDs
+    res.write(`data: ${JSON.stringify({ done: true, chatId: insertResult.rows[0].id, createdAt: insertResult.rows[0].created_at })}\n\n`);
+    res.end();
 
   } catch (err: any) {
     console.error("❌ RAG Chat Error:", err.message);
-    res.status(500).json({ error: "Brain freeze! Try again in a second." });
+    res.write(`data: ${JSON.stringify({ error: "Brain freeze! Try again in a second." })}\n\n`);
+    res.end();
   }
 });
 
@@ -582,14 +649,33 @@ if (process.env.NODE_ENV !== 'production') {
 }
 
 app.get('/api/history', authenticateUser, async (req: any, res: any): Promise<void> => {
-  const { userId } = req.query;
   try {
-    const result = await pool.query(
-      `SELECT * FROM chats WHERE user_id = $1 AND is_active = TRUE ORDER BY created_at DESC LIMIT 30`,
+    // ⚡ Use authenticated user ID, not query parameter
+    const userId = req.user.uid;
+    console.log("📋 Fetching history for user:", userId);
+    
+    if (!userId) {
+      console.error("❌ No user ID found in request");
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+    
+    let result;
+
+    result = await pool.query(
+      `SELECT id, user_id, user_message, ai_reply, session_id, title, created_at
+       FROM chats
+       WHERE user_id = $1
+       ORDER BY created_at DESC
+       LIMIT 200`,
       [userId]
     );
+
+    console.log("✅ Found", result.rows.length, "chat messages for user:", userId);
+    
     res.json(result.rows);
   } catch (err: any) {
+    console.error("❌ History fetch error:", err?.message || err);
+    console.error("Stack trace:", err?.stack);
     res.status(500).json({ error: err?.message || 'Unknown error' });
   }
 });
@@ -634,6 +720,26 @@ app.get('/api/storage/files', authenticateUser, async (req: any, res: any): Prom
         res.json(fileList);
     } catch (error: any) {
         res.status(500).json({ error: "Failed to fetch files: " + (error?.message || error) });
+    }
+});
+
+app.put('/api/chat/rename', authenticateUser, async (req: any, res: any): Promise<void> => {
+    const { chatId, title } = req.body;
+    if (!chatId || !title) return res.status(400).json({ error: 'chatId and title are required' });
+    try {
+      // Try with title column first, create it if missing
+      try {
+        await pool.query('UPDATE chats SET title = $1 WHERE id = $2 AND user_id = $3', [title, chatId, req.user.uid]);
+      } catch (colErr: any) {
+        if (colErr.message?.includes('column "title"')) {
+          await pool.query('ALTER TABLE chats ADD COLUMN title VARCHAR(200)');
+          await pool.query('UPDATE chats SET title = $1 WHERE id = $2 AND user_id = $3', [title, chatId, req.user.uid]);
+        } else throw colErr;
+      }
+      res.json({ success: true });
+    } catch (err: any) {
+      console.error('❌ Rename error:', err.message);
+      res.status(500).json({ error: err?.message || 'Unknown error' });
     }
 });
 
@@ -1155,6 +1261,33 @@ app.get('/{*any}', (req: any, res: any): void => {
 app.listen(PORT, '0.0.0.0', () => {
     console.log(`🚀 Rukmer Backend on port ${PORT}`);
     pool.query("SELECT 1")
-        .then(() => console.log("✅ PostgreSQL Connected"))
+        .then(async () => {
+            console.log("✅ PostgreSQL Connected");
+            // Ensure schema columns exist
+            await pool.query(`
+                ALTER TABLE chats ADD COLUMN IF NOT EXISTS session_id VARCHAR(36);
+                ALTER TABLE chats ADD COLUMN IF NOT EXISTS title VARCHAR(200);
+            `);
+            console.log("✅ Schema columns verified (session_id, title)");
+
+            // Migrate id column from integer to UUID (one-time, safe to re-run)
+            const colCheck = await pool.query(`
+                SELECT data_type FROM information_schema.columns 
+                WHERE table_name = 'chats' AND column_name = 'id'
+            `);
+            if (colCheck.rows.length > 0 && colCheck.rows[0].data_type !== 'uuid') {
+                console.log("🔄 Migrating chats.id from integer to UUID...");
+                await pool.query(`CREATE EXTENSION IF NOT EXISTS "pgcrypto"`);
+                await pool.query(`
+                    ALTER TABLE chats 
+                      ALTER COLUMN id DROP DEFAULT,
+                      ALTER COLUMN id SET DATA TYPE UUID USING (gen_random_uuid()),
+                      ALTER COLUMN id SET DEFAULT gen_random_uuid()
+                `);
+                console.log("✅ chats.id migrated to UUID");
+            } else {
+                console.log("✅ chats.id is already UUID");
+            }
+        })
         .catch((err: any) => console.error("❌ DB Error:", err?.message || err));
 });

@@ -1,5 +1,7 @@
 import React from 'react';
 import ReactMarkdown from 'react-markdown';
+import { Paperclip } from 'lucide-react';
+import { AnimatedLogo, AIState } from './AnimatedLogo';
 
 // Define the shape of our message data
 export interface ChatMessage {
@@ -7,22 +9,27 @@ export interface ChatMessage {
     content: string;
     image?: string;
     gallery?: any[];
+    attachments?: Array<{ name: string; type: string }>;
 }
 
 interface MessageBubbleProps {
     message: ChatMessage;
+    aiState?: AIState;
+    isLastAssistant?: boolean;
 }
 
-export function MessageBubble({ message }: MessageBubbleProps) {
+export function MessageBubble({ message, aiState = 'idle', isLastAssistant = false }: MessageBubbleProps) {
     const isUser = message.role === 'user';
+    // Only animate the last assistant message; others stay idle
+    const logoState = (!isUser && isLastAssistant) ? aiState : 'idle';
 
     return (
         <div className={`flex ${isUser ? 'justify-end' : 'justify-start'} animate-in fade-in slide-in-from-bottom-2 mb-4`}>
             
-            {/* Assistant Avatar */}
+            {/* Assistant Avatar — Animated Logo */}
             {!isUser && (
-                <div className="w-8 h-8 rounded-full bg-indigo-600 flex items-center justify-center shrink-0 mr-4 mt-1 shadow-sm">
-                    <span className="text-white text-xs font-bold font-mono">R</span>
+                <div className="mr-3 mt-1">
+                    <AnimatedLogo state={logoState} className="w-8 h-8" />
                 </div>
             )}
             
@@ -58,6 +65,16 @@ export function MessageBubble({ message }: MessageBubbleProps) {
                 )}
 
                 {/*Use ReactMarkdown here instead of a plain div */}
+                {/* Attachments badge */}
+                {message.attachments && message.attachments.length > 0 && (
+                    <div className="flex flex-wrap gap-1.5 mb-2">
+                        {message.attachments.map((att, i) => (
+                            <span key={i} className="inline-flex items-center gap-1 text-[11px] bg-slate-200 text-slate-600 px-2 py-0.5 rounded-full">
+                                <Paperclip size={10} />{att.name}
+                            </span>
+                        ))}
+                    </div>
+                )}
                 <div className="prose prose-sm max-w-none prose-slate">
                     <ReactMarkdown>
                         {message.content}

@@ -112,7 +112,7 @@ export default function App() {
 
         {/* Passing typed user to components */}
         <Route 
-          path="/dashboard" 
+          path="/dashboard/:chatId?" 
           element={user ? <Dashboard user={user} isPro={isPro} /> : <Navigate to="/" replace />} 
         />
         <Route 

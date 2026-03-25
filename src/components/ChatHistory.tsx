@@ -1,5 +1,5 @@
-import React from 'react';
-import { MessageSquare, X } from 'lucide-react';
+import React, { useState } from 'react';
+import { MessageSquare, X, MoreVertical, Trash2, Edit2 } from 'lucide-react';
 
 interface HistoryItem {
   id: string;
@@ -12,14 +12,21 @@ interface ChatHistoryProps {
   activeChatId: string | null;
   onSelectChat: (id: string) => void;
   onClose: () => void;
+  onRenameChat?: (id: string, newTitle: string) => void;
+  onDeleteChat?: (id: string) => void;
 }
 
 export function ChatHistory({
   groupedHistory,
   activeChatId,
   onSelectChat,
-  onClose
+  onClose,
+  onRenameChat,
+  onDeleteChat
 }: ChatHistoryProps) {
+  const [openMenuId, setOpenMenuId] = useState<string | null>(null);
+  const [renamingId, setRenamingId] = useState<string | null>(null);
+  const [renameText, setRenameText] = useState('');
   
   return (
     <div className="w-[280px] bg-[#0B1120] border-r border-slate-800/80 flex flex-col z-40 animate-in slide-in-from-left duration-200 shadow-2xl h-full">
@@ -47,27 +54,104 @@ export function ChatHistory({
                       {/* History Items */}
                       {items.map((item) => {
                           const isActive = activeChatId === item.id;
+                          const isRenaming = renamingId === item.id;
                           
                           return (
-                              <button 
-                                  key={item.id} 
-                                  onClick={() => onSelectChat(item.id)} 
-                                  className={`w-full flex items-center gap-3 py-2 rounded-xl text-sm transition-all text-left group ${
-                                      isActive 
-                                          ? 'text-indigo-400 bg-indigo-500/10 px-3 -mx-3' // Highlight active chat
-                                          : 'text-slate-300 hover:text-white'
-                                  }`}
-                              >
-                                  <MessageSquare 
-                                      size={16} 
-                                      className={`shrink-0 ${
+                              <div key={item.id} className="relative group">
+                                {isRenaming ? (
+                                  // Rename Input Field
+                                  <div className="flex gap-2 p-2 bg-slate-700/50 rounded-xl">
+                                    <input
+                                      autoFocus
+                                      type="text"
+                                      value={renameText}
+                                      onChange={(e) => setRenameText(e.target.value)}
+                                      onKeyDown={(e) => {
+                                        if (e.key === 'Enter') {
+                                          if (onRenameChat && renameText.trim()) {
+                                            onRenameChat(item.id, renameText);
+                                          }
+                                          setRenamingId(null);
+                                        } else if (e.key === 'Escape') {
+                                          setRenamingId(null);
+                                        }
+                                      }}
+                                      onBlur={() => {
+                                        if (onRenameChat && renameText.trim()) {
+                                          onRenameChat(item.id, renameText);
+                                        }
+                                        setRenamingId(null);
+                                      }}
+                                      className="flex-1 bg-slate-600 text-white text-xs px-2 py-1 rounded border border-slate-500 focus:outline-none focus:border-indigo-400"
+                                      placeholder="Enter new name..."
+                                    />
+                                  </div>
+                                ) : (
+                                  <button 
+                                      onClick={() => onSelectChat(item.id)} 
+                                      className={`w-full flex items-center gap-3 py-2 px-3 rounded-xl text-sm transition-all text-left group ${
                                           isActive 
-                                              ? 'text-indigo-400' 
-                                              : 'text-slate-500 group-hover:text-slate-400'
-                                      }`} 
-                                  />
-                                  <span className="truncate pr-2 font-medium">{item.title}</span>
-                              </button>
+                                              ? 'text-indigo-400 bg-indigo-500/10' 
+                                              : 'text-slate-300 hover:text-white hover:bg-slate-700/30'
+                                      }`}
+                                  >
+                                      <MessageSquare 
+                                          size={16} 
+                                          className={`shrink-0 ${
+                                              isActive 
+                                                  ? 'text-indigo-400' 
+                                                  : 'text-slate-500 group-hover:text-slate-400'
+                                          }`} 
+                                      />
+                                      <div className="flex-1 min-w-0">
+                                        <span className="truncate font-medium block">{item.title}</span>
+                                        {item.messageCount && item.messageCount > 1 && (
+                                          <span className="text-[10px] text-slate-500">{item.messageCount} messages</span>
+                                        )}
+                                      </div>
+                                      
+                                      {/* Three-dot Menu Button */}
+                                      <button
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          setOpenMenuId(openMenuId === item.id ? null : item.id);
+                                        }}
+                                        className="opacity-0 group-hover:opacity-100 transition-opacity p-1 hover:bg-slate-600/50 rounded"
+                                      >
+                                        <MoreVertical size={14} className="text-slate-400" />
+                                      </button>
+                                  </button>
+                                )}
+                                
+                                {/* Context Menu */}
+                                {openMenuId === item.id && !isRenaming && (
+                                  <div className="absolute right-0 top-full mt-1 w-max bg-slate-800 border border-slate-700 rounded-lg shadow-lg z-50">
+                                    <button
+                                      onClick={() => {
+                                        setRenamingId(item.id);
+                                        setRenameText(item.title);
+                                        setOpenMenuId(null);
+                                      }}
+                                      className="w-full flex items-center gap-2 px-3 py-2 text-xs text-slate-300 hover:text-white hover:bg-slate-700 transition-colors first:rounded-t-lg"
+                                    >
+                                      <Edit2 size={12} />
+                                      Rename
+                                    </button>
+                                    <button
+                                      onClick={() => {
+                                        if (onDeleteChat) {
+                                          onDeleteChat(item.id);
+                                        }
+                                        setOpenMenuId(null);
+                                      }}
+                                      className="w-full flex items-center gap-2 px-3 py-2 text-xs text-red-400 hover:text-red-300 hover:bg-red-500/10 transition-colors last:rounded-b-lg border-t border-slate-700"
+                                    >
+                                      <Trash2 size={12} />
+                                      Delete
+                                    </button>
+                                  </div>
+                                )}
+                              </div>
                           );
                       })}
                   </div>
