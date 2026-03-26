@@ -547,10 +547,7 @@ export default function Dashboard({ user, isPro }: DashboardProps) {
     <div className="flex overflow-hidden font-[Inter]" style={{ height: '100dvh' }}>
 
       {/* ──────── NAV RAIL ──────── */}
-      <motion.aside
-        initial={{ x: -72, opacity: 0 }}
-        animate={{ x: 0, opacity: 1 }}
-        transition={spring}
+      <aside
         className="w-[76px] flex flex-col items-center py-5 z-50 shrink-0 m-2 mr-0 rounded-[1.75rem]"
         style={{
           background: 'linear-gradient(180deg, #0f1729 0%, #162042 40%, #1a2654 100%)',
@@ -584,7 +581,7 @@ export default function Dashboard({ user, isPro }: DashboardProps) {
             onClick={() => navigate('/settings')} />
           <UserDropdown user={user} isPro={isPro} onUpgradeClick={() => setShowPricing(true)} />
         </div>
-      </motion.aside>
+      </aside>
 
       {/* ──────── HISTORY DRAWER ──────── */}
       <AnimatePresence>
@@ -675,33 +672,18 @@ export default function Dashboard({ user, isPro }: DashboardProps) {
 
       {/* ──────── MAIN CONTENT ──────── */}
       <main className="flex-1 flex flex-col min-h-0 overflow-hidden m-2 ml-1.5 rounded-[1.75rem] liquid-glass shadow-inner-glow">
-        <AnimatePresence mode="wait">
 
           {/* ======== HOME VIEW ======== */}
           {currentView === 'home' && (
-            <motion.div
+            <div
               key="home"
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -20 }}
-              transition={spring}
               className="flex-1 flex flex-col min-h-0"
             >
               <div className="flex-1 overflow-y-auto flex flex-col items-center px-6 pt-10 pb-16">
                 <div className="my-auto" />
-                <motion.div
-                  initial={{ opacity: 0, scale: 0.96 }}
-                  animate={{ opacity: 1, scale: 1 }}
-                  transition={{ ...spring, delay: 0.1 }}
-                  className="w-full max-w-3xl flex flex-col items-center"
-                >
+                <div className="w-full max-w-3xl flex flex-col items-center">
                   {/* Greeting Logo */}
-                  <motion.div
-                    initial={{ opacity: 0, y: 10 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    transition={{ ...spring, delay: 0.15 }}
-                    className="relative flex items-center justify-center mb-6"
-                  >
+                  <div className="relative flex items-center justify-center mb-6">
                     <div className="absolute w-16 h-16 rounded-3xl bg-gradient-to-br from-violet-500/30 to-cyan-500/20 blur-xl" />
                     <div
                       className="relative w-14 h-14 rounded-3xl flex items-center justify-center border border-violet-400/20"
@@ -712,33 +694,18 @@ export default function Dashboard({ user, isPro }: DashboardProps) {
                     >
                       <AnimatedLogo state="idle" className="w-9 h-9" />
                     </div>
-                  </motion.div>
+                  </div>
 
-                  <motion.h1
-                    initial={{ opacity: 0, y: 10 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    transition={{ ...spring, delay: 0.2 }}
-                    className="text-3xl md:text-4xl font-extrabold text-gray-800 mb-2 tracking-tight text-center"
-                  >
+                  <h1 className="text-3xl md:text-4xl font-extrabold text-gray-800 mb-2 tracking-tight text-center">
                     {getGreeting()}, {displayName.split(' ')[0]}
-                  </motion.h1>
+                  </h1>
 
-                  <motion.p
-                    initial={{ opacity: 0, y: 10 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    transition={{ ...spring, delay: 0.25 }}
-                    className="text-gray-500 text-base md:text-lg mb-10 font-medium text-center"
-                  >
+                  <p className="text-gray-500 text-base md:text-lg mb-10 font-medium text-center">
                     Your agentic workspace - search across Teams, Outlook & more.
-                  </motion.p>
+                  </p>
 
                   {/* Quick-Action Bento Cards */}
-                  <motion.div
-                    initial={{ opacity: 0, y: 20 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    transition={{ ...spring, delay: 0.3 }}
-                    className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 w-full mb-8"
-                  >
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 w-full mb-8">
                     <QuickActionCard
                       title="Teams Search"
                       description="Find conversations & threads"
@@ -747,7 +714,7 @@ export default function Dashboard({ user, isPro }: DashboardProps) {
                       iconColor="text-violet-500"
                       icon={<MessageSquare size={20} />}
                       onClick={() => sendChatMessage("Search my Teams messages for recent project updates")}
-                      delay={0.35}
+                      delay={0}
                     />
                     <QuickActionCard
                       title="Email Digest"
@@ -757,7 +724,7 @@ export default function Dashboard({ user, isPro }: DashboardProps) {
                       iconColor="text-blue-500"
                       icon={<Search size={20} />}
                       onClick={() => sendChatMessage("Summarize my unread emails from today")}
-                      delay={0.4}
+                      delay={0}
                     />
                     <QuickActionCard
                       title="Web Research"
@@ -767,14 +734,14 @@ export default function Dashboard({ user, isPro }: DashboardProps) {
                       iconColor="text-gray-500"
                       icon={<ArrowRight size={20} />}
                       onClick={() => sendChatMessage("Research the latest trends in AI agents for 2026")}
-                      delay={0.45}
+                      delay={0}
                     />
-                  </motion.div>
+                  </div>
 
                   <WelcomeState onAction={(prompt) => {
                     setChatInput(prompt);
                   }} />
-                </motion.div>
+                </div>
                 <div className="my-auto" />
               </div>
 
@@ -793,52 +760,39 @@ export default function Dashboard({ user, isPro }: DashboardProps) {
                   </p>
                 </div>
               </div>
-            </motion.div>
+            </div>
           )}
 
           {/* ======== CHAT VIEW ======== */}
           {currentView === 'chat' && (
-            <motion.div
+            <div
               key="chat"
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -20 }}
-              transition={spring}
               className="flex-1 flex flex-col h-full"
             >
               {/* Chat Header */}
-              <header className="h-14 border-b border-white/20 flex items-center justify-between px-6 shrink-0 backdrop-blur-xl">
+              <header className="h-14 border-b border-white/20 flex items-center justify-between px-6 shrink-0">
                 <div className="flex items-center gap-3">
                   <h3 className="font-bold text-gray-700 text-sm">{report?.projectName || "New Session"}</h3>
                 </div>
-                <motion.button
-                  whileHover={{ scale: 1.02 }}
-                  whileTap={{ scale: 0.98 }}
+                <button
                   onClick={resetSession}
                   className="text-gray-400 hover:text-blue-600 px-3 py-1.5 text-sm font-semibold flex items-center gap-2 transition-colors rounded-xl hover:bg-blue-50/50"
                 >
                   <Plus size={15} /> New Chat
-                </motion.button>
+                </button>
               </header>
 
               {/* Messages */}
               <div className="flex-1 overflow-y-auto p-6 space-y-6 custom-scrollbar">
-                <AnimatePresence>
                   {chatMessages.map((m, i) => {
                     const isLastAssistant = m.role === 'assistant' && !chatMessages.slice(i + 1).some((x: any) => x.role === 'assistant');
                     const aiState = chatLoading ? 'thinking' : (isStreaming ? 'typing' : 'idle');
                     return (
-                      <motion.div
-                        key={i}
-                        initial={{ opacity: 0, y: 16, scale: 0.97 }}
-                        animate={{ opacity: 1, y: 0, scale: 1 }}
-                        transition={{ ...spring, delay: 0.02 * Math.min(i, 5) }}
-                      >
+                      <div key={i}>
                         <MessageBubble message={m} aiState={aiState} isLastAssistant={isLastAssistant} />
-                      </motion.div>
+                      </div>
                     );
                   })}
-                </AnimatePresence>
                 {chatLoading && <GlassTypingIndicator />}
                 <div ref={chatEndRef} />
               </div>
@@ -847,7 +801,7 @@ export default function Dashboard({ user, isPro }: DashboardProps) {
               <div className="p-4 border-t border-white/20">
                 <div className="max-w-4xl mx-auto flex flex-col gap-2">
                   {mediaItems.length > 0 && (
-                    <div className="flex gap-2 overflow-x-auto p-2 rounded-2xl bg-white/30 backdrop-blur-xl border border-white/20">
+                    <div className="flex gap-2 overflow-x-auto p-2 rounded-2xl bg-white/30 border border-white/20">
                       {mediaItems.map((item) => (
                         <div key={item.id} className="relative w-14 h-14 rounded-xl overflow-hidden border border-white/30 shrink-0 shadow-sm bg-slate-100 flex items-center justify-center">
                           {item.type === 'image' ? (
@@ -860,7 +814,7 @@ export default function Dashboard({ user, isPro }: DashboardProps) {
                           )}
                           <button
                             onClick={() => setMediaItems(prev => prev.filter(i => i.id !== item.id))}
-                            className="absolute top-0.5 right-0.5 bg-black/40 backdrop-blur-sm text-white rounded-full p-0.5 hover:bg-red-500 transition-colors"
+                            className="absolute top-0.5 right-0.5 bg-black/40 text-white rounded-full p-0.5 hover:bg-red-500 transition-colors"
                           >
                             <X size={10} />
                           </button>
@@ -878,11 +832,10 @@ export default function Dashboard({ user, isPro }: DashboardProps) {
                   />
                 </div>
               </div>
-            </motion.div>
+            </div>
           )}
 
-        </AnimatePresence>
-      </main>
+        </main>
 
       <input ref={fileInputRef} type="file" multiple accept="image/*,.pdf,.txt,.md,.csv,.json,.doc,.docx,.xls,.xlsx,.ppt,.pptx" className="hidden" onChange={handleFileUpload} />
       {showPricing && <PricingModal isOpen={showPricing} onClose={() => setShowPricing(false)} onCheckout={() => {}} />}
@@ -896,9 +849,7 @@ export default function Dashboard({ user, isPro }: DashboardProps) {
 // ============================================================================
 
 const GlassRailItem = ({ icon, label, active, badge, onClick }: any) => (
-  <motion.button
-    whileHover={{ scale: 1.06 }}
-    whileTap={{ scale: 0.94 }}
+  <button
     onClick={onClick}
     className={`relative flex flex-col items-center justify-center w-[52px] h-[52px] mx-auto gap-1 rounded-2xl transition-all ${
       active
@@ -915,7 +866,7 @@ const GlassRailItem = ({ icon, label, active, badge, onClick }: any) => (
         {badge}
       </span>
     )}
-  </motion.button>
+  </button>
 );
 
 const GlassInput = ({ value, onChange, onSend, loading, onAttach, placeholder }: any) => {
@@ -969,36 +920,26 @@ const GlassInput = ({ value, onChange, onSend, loading, onAttach, placeholder }:
 };
 
 const GlassTypingIndicator = () => (
-  <motion.div
-    initial={{ opacity: 0, y: 10 }}
-    animate={{ opacity: 1, y: 0 }}
-    transition={{ type: "spring", stiffness: 300, damping: 25 }}
-    className="flex justify-start"
-  >
+  <div className="flex justify-start">
     <div className="mr-3 mt-1">
       <AnimatedLogo state="thinking" className="w-8 h-8" />
     </div>
-    <div className="bg-white/50 backdrop-blur-md border border-white/30 p-4 rounded-2xl rounded-tl-lg flex items-center gap-3 shadow-glass">
+    <div className="bg-white/50 border border-white/30 p-4 rounded-2xl rounded-tl-lg flex items-center gap-3 shadow-glass">
       <Loader2 className="animate-spin text-blue-600" size={16} />
       <span className="text-sm text-gray-500 font-medium">Rukmer is thinking…</span>
     </div>
-  </motion.div>
+  </div>
 );
 
-const QuickActionCard = ({ title, description, gradient, borderColor, iconColor, icon, onClick, delay }: any) => (
-  <motion.button
-    initial={{ opacity: 0, y: 16, scale: 0.95 }}
-    animate={{ opacity: 1, y: 0, scale: 1 }}
-    transition={{ type: "spring", stiffness: 320, damping: 28, delay }}
-    whileHover={{ y: -3, scale: 1.01 }}
-    whileTap={{ scale: 0.98 }}
+const QuickActionCard = ({ title, description, gradient, borderColor, iconColor, icon, onClick }: any) => (
+  <button
     onClick={onClick}
-    className={`text-left p-5 rounded-[1.75rem] bg-gradient-to-br ${gradient} backdrop-blur-xl border ${borderColor} shadow-glass hover:shadow-glass-hover transition-shadow`}
+    className={`text-left p-5 rounded-[1.75rem] bg-gradient-to-br ${gradient} border ${borderColor} shadow-glass hover:shadow-glass-hover transition-shadow hover:-translate-y-0.5`}
   >
-    <div className={`w-10 h-10 rounded-2xl bg-white/60 backdrop-blur-sm flex items-center justify-center mb-3 ${iconColor}`}>
+    <div className={`w-10 h-10 rounded-2xl bg-white/60 flex items-center justify-center mb-3 ${iconColor}`}>
       {icon}
     </div>
     <h3 className="font-bold text-gray-800 text-sm mb-1">{title}</h3>
     <p className="text-xs text-gray-500 leading-relaxed">{description}</p>
-  </motion.button>
+  </button>
 );

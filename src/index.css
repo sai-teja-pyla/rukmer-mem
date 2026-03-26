@@ -24,29 +24,24 @@ body {
     radial-gradient(ellipse 1100px 600px at 10% 20%, rgba(var(--teams), 0.08), transparent 55%),
     radial-gradient(ellipse 900px 500px at 90% 80%, rgba(var(--outlook), 0.06), transparent 55%),
     linear-gradient(165deg, #f4f5f7 0%, #eceef1 50%, #e4e6ea 100%);
-  background-attachment: fixed;
 }
 
-/* ── Liquid Glass (light) ── */
+/* ── Liquid Glass (light) — opaque background, no backdrop-filter ── */
 .liquid-glass {
-  backdrop-filter: blur(16px) saturate(1.4);
-  -webkit-backdrop-filter: blur(16px) saturate(1.4);
-  background: rgba(255, 255, 255, 0.45);
+  background: rgba(255, 255, 255, 0.82);
   background-image: linear-gradient(
     135deg,
-    rgba(255, 255, 255, 0.55) 0%,
-    rgba(255, 255, 255, 0.22) 100%
+    rgba(255, 255, 255, 0.9) 0%,
+    rgba(255, 255, 255, 0.7) 100%
   );
   border: 1px solid rgba(255, 255, 255, 0.35);
   box-shadow: 0 8px 32px rgba(0, 0, 0, 0.10),
               inset 0 1px 0 rgba(255, 255, 255, 0.25);
 }
 
-/* ── Liquid Glass (dark) ── */
+/* ── Liquid Glass (dark) — opaque background, no backdrop-filter ── */
 .liquid-glass-dark {
-  backdrop-filter: blur(16px) saturate(1.4);
-  -webkit-backdrop-filter: blur(16px) saturate(1.4);
-  background: rgba(11, 17, 32, 0.75);
+  background: rgba(11, 17, 32, 0.92);
   background-image: linear-gradient(
     135deg,
     rgba(255, 255, 255, 0.06) 0%,
@@ -60,7 +55,6 @@ body {
 /* ── Inner glow utility ── */
 .shadow-inner-glow {
   box-shadow: 0 8px 32px rgba(0, 0, 0, 0.10),
-              inset 0 0 30px rgba(255, 255, 255, 0.06),
               inset 0 1px 0 rgba(255, 255, 255, 0.25);
 }
 

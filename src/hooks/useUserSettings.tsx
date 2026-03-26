@@ -1,4 +1,5 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useContext, createContext, useCallback } from 'react';
+import type { ReactNode } from 'react';
 import { auth, db } from '../firebase';
 import { doc, setDoc, onSnapshot } from 'firebase/firestore';
 
@@ -13,18 +14,30 @@ export interface UserSettings {
   [key: string]: any;
 }
 
-export function useUserSettings() {
-  // 1. INSTANT LOAD: Initialize state from LocalStorage to prevent flashing
+interface SettingsContextValue {
+  settings: UserSettings | null;
+  updateSettings: (newSettings: Partial<UserSettings>) => Promise<void>;
+  loading: boolean;
+}
+
+const SettingsContext = createContext<SettingsContextValue>({
+  settings: null,
+  updateSettings: async () => {},
+  loading: true,
+});
+
+/**
+ * Mount this ONCE near the top of your component tree (e.g. in App.tsx).
+ * It creates a single Firestore onSnapshot listener shared by every consumer.
+ */
+export function UserSettingsProvider({ children }: { children: ReactNode }) {
   const [settings, setSettings] = useState<UserSettings | null>(() => {
     const savedTheme = localStorage.getItem('appTheme');
-    return { theme: savedTheme || 'light' }; // Default if nothing saved
+    return { theme: savedTheme || 'light' };
   });
-  
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    // Use auth.currentUser directly — no extra auth listener needed.
-    // App.tsx already drives auth state; we just need the Firestore snapshot.
     const user = auth.currentUser;
     if (!user) {
       setSettings(null);
@@ -58,26 +71,29 @@ export function useUserSettings() {
     return () => unsubscribeSnapshot();
   }, []);
 
-  // 3. UPDATE FUNCTION
-  const updateSettings = async (newSettings: Partial<UserSettings>) => {
+  const updateSettings = useCallback(async (newSettings: Partial<UserSettings>) => {
     if (!auth.currentUser) return;
-    
-    // Optimistic Update: Update UI & LocalStorage instantly
     setSettings(prev => {
-        const updated = { ...prev, ...newSettings };
-        if (newSettings.theme) {
-            localStorage.setItem('appTheme', newSettings.theme);
-        }
-        return updated;
+      const updated = { ...prev, ...newSettings };
+      if (newSettings.theme) localStorage.setItem('appTheme', newSettings.theme);
+      return updated;
     });
-
     try {
-        const userRef = doc(db, "users", auth.currentUser.uid);
-        await setDoc(userRef, newSettings, { merge: true });
+      const userRef = doc(db, "users", auth.currentUser.uid);
+      await setDoc(userRef, newSettings, { merge: true });
     } catch (error) {
-        console.error("Error updating settings:", error);
+      console.error("Error updating settings:", error);
     }
-  };
+  }, []);
 
-  return { settings, updateSettings, loading };
+  return (
+    <SettingsContext.Provider value={{ settings, updateSettings, loading }}>
+      {children}
+    </SettingsContext.Provider>
+  );
+}
+
+/** Read settings from the shared context — zero extra listeners. */
+export function useUserSettings() {
+  return useContext(SettingsContext);
 }

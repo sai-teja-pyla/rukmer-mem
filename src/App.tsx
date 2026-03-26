@@ -21,7 +21,7 @@ import { initAnalytics } from './hooks/analytics';
 import { UserProfile } from './types'; 
 
 // Hook Import
-import { useUserSettings } from './hooks/useUserSettings';
+import { useUserSettings, UserSettingsProvider } from './hooks/useUserSettings';
 
 export default function App() {
   // 2. DEFINE STATE WITH TYPES
@@ -102,6 +102,7 @@ export default function App() {
   };
 
   return (
+    <UserSettingsProvider>
     <BrowserRouter>
       <Routes>
         <Route path="/" element={!user ? <LandingPage onLoginSuccess={handleLoginSuccess} /> : <Navigate to="/dashboard" replace />} />
@@ -129,5 +130,6 @@ export default function App() {
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </BrowserRouter>
+    </UserSettingsProvider>
   );
 }
