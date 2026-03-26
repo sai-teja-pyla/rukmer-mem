@@ -87,21 +87,24 @@ export function ChatHistory({
                                     />
                                   </div>
                                 ) : (
-                                  <button 
-                                      onClick={() => onSelectChat(item.id)} 
-                                      className={`w-full flex items-center gap-3 py-2 px-3 rounded-xl text-sm transition-all text-left group ${
-                                          isActive 
-                                              ? 'text-indigo-400 bg-indigo-500/10' 
+                                  <div
+                                      className={`w-full flex items-center gap-3 py-2 px-3 rounded-xl text-sm transition-all cursor-pointer group ${
+                                          isActive
+                                              ? 'text-indigo-400 bg-indigo-500/10'
                                               : 'text-slate-300 hover:text-white hover:bg-slate-700/30'
                                       }`}
+                                      onClick={() => onSelectChat(item.id)}
+                                      role="button"
+                                      tabIndex={0}
+                                      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') onSelectChat(item.id); }}
                                   >
-                                      <MessageSquare 
-                                          size={16} 
+                                      <MessageSquare
+                                          size={16}
                                           className={`shrink-0 ${
-                                              isActive 
-                                                  ? 'text-indigo-400' 
+                                              isActive
+                                                  ? 'text-indigo-400'
                                                   : 'text-slate-500 group-hover:text-slate-400'
-                                          }`} 
+                                          }`}
                                       />
                                       <div className="flex-1 min-w-0">
                                         <span className="truncate font-medium block">{item.title}</span>
@@ -109,8 +112,8 @@ export function ChatHistory({
                                           <span className="text-[10px] text-slate-500">{item.messageCount} messages</span>
                                         )}
                                       </div>
-                                      
-                                      {/* Three-dot Menu Button */}
+
+                                      {/* Three-dot Menu Button — sibling, not child of another button */}
                                       <button
                                         onClick={(e) => {
                                           e.stopPropagation();
@@ -120,7 +123,7 @@ export function ChatHistory({
                                       >
                                         <MoreVertical size={14} className="text-slate-400" />
                                       </button>
-                                  </button>
+                                  </div>
                                 )}
                                 
                                 {/* Context Menu */}

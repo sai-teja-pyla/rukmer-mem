@@ -150,7 +150,7 @@ export default function Dashboard({ user, isPro }: DashboardProps) {
           const sessionId = chat.session_id || `legacy_${chat.id}`;
           
           if (!sessionMap.has(sessionId)) {
-            // First message in this session
+            // First message encountered for this session (newest, since rows are DESC)
             sessionMap.set(sessionId, {
               id: String(chat.id),
               sessionId: sessionId,
@@ -158,16 +158,20 @@ export default function Dashboard({ user, isPro }: DashboardProps) {
               userMessage: chat.user_message,
               aiReply: chat.ai_reply,
               date: new Date(chat.created_at),
-              messageCount: 1
+              messageCount: 1,
+              messages: [
+                { role: 'user', content: chat.user_message },
+                { role: 'assistant', content: chat.ai_reply }
+              ]
             });
           } else {
-            // Subsequent messages in this session: update with latest message
+            // Older message for the same session: prepend to maintain chronological order
             const existing = sessionMap.get(sessionId)!;
-            existing.id = String(chat.id);
-            existing.userMessage = chat.user_message;
-            existing.aiReply = chat.ai_reply;
-            existing.date = new Date(chat.created_at);
             existing.messageCount = (existing.messageCount || 1) + 1;
+            existing.messages.unshift(
+              { role: 'user', content: chat.user_message },
+              { role: 'assistant', content: chat.ai_reply }
+            );
           }
         });
         
@@ -315,16 +319,34 @@ export default function Dashboard({ user, isPro }: DashboardProps) {
         setActiveSidebar('none');
         navigate(`/dashboard/${idStr}`, { replace: true });
         
-        // ⚡ Load all messages from this session (find all records with same sessionId)
-        const sessionMessages = pastReports
-          .filter(r => r.sessionId === chatRecord.sessionId)
-          .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime())
-          .flatMap(r => [
-            { role: 'user', content: r.userMessage },
-            { role: 'assistant', content: r.aiReply }
-          ]);
-        setChatMessages(sessionMessages);
         setCurrentView('chat');
+        // Show cached messages immediately for instant display
+        setChatMessages(chatRecord.messages?.length > 0
+          ? chatRecord.messages
+          : [
+              { role: 'user', content: chatRecord.userMessage },
+              { role: 'assistant', content: chatRecord.aiReply }
+            ]
+        );
+        // Fetch full session history from backend to ensure ALL messages are shown
+        try {
+          const idToken = await auth.currentUser?.getIdToken();
+          const sessionRes = await fetch(`/api/history/session/${encodeURIComponent(chatRecord.sessionId)}`, {
+            headers: { 'Authorization': `Bearer ${idToken}` }
+          });
+          if (sessionRes.ok) {
+            const rows = await sessionRes.json();
+            if (rows.length > 0) {
+              const allMessages = rows.flatMap((r: any) => [
+                { role: 'user', content: r.user_message },
+                { role: 'assistant', content: r.ai_reply }
+              ]);
+              setChatMessages(allMessages);
+            }
+          }
+        } catch (fetchErr) {
+          console.warn('⚠️ Could not refresh session messages from backend:', fetchErr);
+        }
       } else {
         const docSnap = await getDoc(doc(db, "reports", idStr));
         if (docSnap.exists()) {
@@ -497,6 +519,11 @@ export default function Dashboard({ user, isPro }: DashboardProps) {
           userMessage: msg,
           aiReply,
           messageCount: (updated[existingIdx].messageCount || 1) + 1,
+          messages: [
+            ...(updated[existingIdx].messages || []),
+            { role: 'user', content: msg },
+            { role: 'assistant', content: aiReply }
+          ],
           date: finalDate
         };
         return updated;
@@ -515,6 +542,10 @@ export default function Dashboard({ user, isPro }: DashboardProps) {
           userMessage: msg,
           aiReply,
           messageCount: 1,
+          messages: [
+            { role: 'user', content: msg },
+            { role: 'assistant', content: aiReply }
+          ],
           date: finalDate
         }, ...prev];
       }
@@ -550,6 +581,7 @@ export default function Dashboard({ user, isPro }: DashboardProps) {
         <div className="w-11 h-11 rounded-2xl bg-white/10 backdrop-blur-xl flex items-center justify-center mb-7 border border-white/10 shadow-lg">
           <img src="/hexagon.png" alt="Rukmer" className="w-7 h-7 object-contain" />
         </div>
+        <h5 className="text-white font-bold text-sm tracking-tight">Beta</h5>
 
         <nav className="flex flex-col gap-2.5 w-full px-2.5">
           <GlassRailItem icon={<Home size={20} />} label="Home"
@@ -803,7 +835,7 @@ export default function Dashboard({ user, isPro }: DashboardProps) {
                   whileHover={{ scale: 1.02 }}
                   whileTap={{ scale: 0.98 }}
                   onClick={resetSession}
-                  className="text-gray-400 hover:text-violet-600 px-3 py-1.5 text-sm font-semibold flex items-center gap-2 transition-colors rounded-xl hover:bg-violet-50/50"
+                  className="text-gray-400 hover:text-blue-600 px-3 py-1.5 text-sm font-semibold flex items-center gap-2 transition-colors rounded-xl hover:bg-blue-50/50"
                 >
                   <Plus size={15} /> New Chat
                 </motion.button>

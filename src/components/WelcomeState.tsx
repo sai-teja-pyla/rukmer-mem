@@ -10,13 +10,13 @@ export function WelcomeState({ onAction }: WelcomeStateProps) {
         { 
             icon: <Plug size={22} className="text-indigo-500" />, 
             title: "Connect a new app", 
-            prompt: "Integrate Salesforce, Slack, or Jira", 
+            prompt: "Integrate Outlook, Gmail, or Slack", 
             color: "text-indigo-500 bg-indigo-50" 
         },
         { 
             icon: <BarChart2 size={22} className="text-emerald-500" />, 
             title: "Analyze my sales data", 
-            prompt: "Get insights on Q3 performance", 
+            prompt: "Get insights on Q performance", 
             color: "text-emerald-500 bg-emerald-50" 
         },
         { 

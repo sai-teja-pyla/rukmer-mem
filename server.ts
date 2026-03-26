@@ -130,13 +130,37 @@ if (!admin.apps.length) {
     admin.initializeApp(adminConfig);
 }
 
-const getAppContent = async (userId: string) => {
+// --- Last-sync helpers (stored in Firestore so they survive server restarts) ---
+async function getLastSyncAt(userId: string): Promise<Date | null> {
+  try {
+    const doc = await admin.firestore().collection('syncMeta').doc(userId).get();
+    const ts = doc.data()?.lastSyncAt;
+    return ts ? new Date(ts) : null;
+  } catch { return null; }
+}
+async function setLastSyncAt(userId: string): Promise<void> {
+  try {
+    await admin.firestore().collection('syncMeta').doc(userId).set(
+      { lastSyncAt: new Date().toISOString() }, { merge: true }
+    );
+  } catch (e: any) { console.warn('⚠️ Could not update lastSyncAt:', e.message); }
+}
+
+// Tracks which users have an in-progress background sync to avoid duplicates
+const syncInProgress = new Set<string>();
+
+const getAppContent = async (userId: string, sinceDate?: Date) => {
+  const isIncremental = !!sinceDate;
+  console.log(`🔄 getAppContent for ${userId} | mode: ${isIncremental ? `incremental since ${sinceDate!.toISOString()}` : 'full sync'}`);
+
   const tokenDoc = await admin.firestore().collection('userTokens').doc(userId).get();
   const tokens = tokenDoc.data() as { google?: any; slack?: any; microsoft?: any } | undefined;
   let context = "";
 
-  // Clear all old vectors ONCE before re-ingesting everything
-  await clearNamespace(userId);
+  // On a full sync, wipe old vectors first. On incremental, upsert only adds new ones.
+  if (!isIncremental) {
+    await clearNamespace(userId);
+  }
 
   // --- GMAIL ---
   if (tokens?.google && tokens.google.access_token) {
@@ -148,7 +172,10 @@ const getAppContent = async (userId: string) => {
       );
       auth.setCredentials(tokens.google);
       const gmail = google.gmail({ version: 'v1', auth });
-      const msgs = await gmail.users.messages.list({ userId: 'me', maxResults: 25 });
+      // For incremental syncs, only fetch messages newer than the last sync
+      const gmailParams: any = { userId: 'me', maxResults: isIncremental ? 50 : 25 };
+      if (sinceDate) gmailParams.q = `after:${Math.floor(sinceDate.getTime() / 1000)}`;
+      const msgs = await gmail.users.messages.list(gmailParams);
       if (msgs.data.messages && msgs.data.messages.length > 0) {
         context += `\n📧 Gmail Emails:\n`;
 
@@ -218,9 +245,11 @@ const getAppContent = async (userId: string) => {
           const channelId = channel.id;
           const channelName = channel.name;
         
-          // Fetch history from each channel
+          // Fetch history from each channel (incremental: only messages after last sync)
+          const slackHistParams: any = { channel: channelId, limit: isIncremental ? 200 : 25 };
+          if (sinceDate) slackHistParams.oldest = String(sinceDate.getTime() / 1000);
           const slackRes = await axios.get<any>('https://slack.com/api/conversations.history', {
-            params: { channel: channelId, limit: 25 },
+            params: slackHistParams,
             headers: { Authorization: `Bearer ${tokens.slack.accessToken}` }
           });
         
@@ -260,9 +289,15 @@ const getAppContent = async (userId: string) => {
     try {
       const accessToken = await getMicrosoftAccessToken(userId);
       
-      const outlookRes = await axios.get<any>('https://graph.microsoft.com/v1.0/me/messages?$top=25&$select=subject,from,receivedDateTime,bodyPreview', {
-        headers: { Authorization: `Bearer ${accessToken}` }
-      });
+      // For incremental syncs, filter to only messages received after the last sync date
+      const outlookTop = isIncremental ? 50 : 25;
+      const outlookDateFilter = sinceDate
+        ? `&$filter=receivedDateTime ge ${sinceDate.toISOString()}`
+        : '';
+      const outlookRes = await axios.get<any>(
+        `https://graph.microsoft.com/v1.0/me/messages?$top=${outlookTop}&$select=subject,from,receivedDateTime,bodyPreview${outlookDateFilter}`,
+        { headers: { Authorization: `Bearer ${accessToken}` } }
+      );
       
       if (outlookRes.data.value && outlookRes.data.value.length > 0) {
         context += `\n📬 Outlook Emails:\n`;
@@ -327,7 +362,7 @@ const getAppContent = async (userId: string) => {
 
       // 2. Always fetch personal/group chat messages for ANY Microsoft user (requires Chat.Read scope)
       try {
-        const teamsChats = await fetchTeamsMessages(accessToken);
+        const teamsChats = await fetchTeamsMessages(accessToken, sinceDate);
         for (const item of teamsChats) {
           try {
             await learnWorkspaceData(item.text, userId, {
@@ -354,6 +389,9 @@ const getAppContent = async (userId: string) => {
     }
   }
 
+  // Persist the sync timestamp so incremental syncs know where to resume from
+  await setLastSyncAt(userId);
+  console.log(`✅ Sync complete for ${userId} (${isIncremental ? 'incremental' : 'full'})`);
   return context || "(No connected apps or no data available)";
 };
 
@@ -481,6 +519,48 @@ app.get('/', (req: any, res: any): void => {
 
 // Apply auth only to protected routes
 // server.ts
+// ─── Rukmer System Instruction ─────────────────────────────────────────────
+const RUKMER_SYSTEM_INSTRUCTION = `You are Rukmer, an expert AI assistant with comprehensive knowledge across all domains: science, technology, software engineering, mathematics, medicine, law, finance, history, language, creative writing, and more.
+
+## Core Behaviour
+- Think before you answer. For complex questions, reason through the problem step-by-step before giving your final answer.
+- Be accurate above all else. Never fabricate facts, statistics, names, URLs, papers, or citations. If you are uncertain, say so explicitly and offer to help find the answer.
+- Give complete, thorough answers that fully address the question — do not truncate or say "I'll stop here for brevity."
+- Build on the conversation. The full conversation history is available to you. Reference and continue prior threads naturally ("As we discussed...", "Building on your earlier point..."). Never repeat what you already said unless the user asks.
+- Anticipate follow-ups. When useful, proactively offer next steps, related information, or clarifying questions.
+
+## Capabilities
+You are fully capable of:
+- Answering any factual or knowledge-based question from your training
+- Writing, reviewing, and debugging code in any programming language — always use fenced code blocks with the language identifier
+- Solving mathematical problems step-by-step — show all working
+- Analysing documents, images, PDFs, spreadsheets, and data files the user attaches
+- Writing professional emails, reports, essays, summaries, and creative content
+- Explaining any concept at any level of depth, from beginner to expert
+- Strategic planning, decision analysis, brainstorming, and problem-solving
+- Translating text between languages with high accuracy
+
+## Using Workspace Context (RAG)
+When verified data retrieved from the user's connected workspace apps (Gmail, Slack, Teams, Outlook, Drive, etc.) is provided below, follow these rules:
+- Treat retrieved data as ground truth for questions about the user's own data.
+- Quote or reference specific detail from it (names, dates, subjects, message content).
+- If the retrieved data directly answers the question, lead with that answer and cite the source.
+- If the retrieved data is only partially relevant, use it to supplement your answer.
+- If NO workspace context is provided, answer entirely from your own broad knowledge — do not mention the absence of workspace data.
+
+## Response Format
+- Use Markdown formatting: headers (##, ###), bullet points, numbered lists, bold/italic, tables, and code blocks as appropriate.
+- Match response length to the depth the question requires — brief for simple questions, detailed for complex ones.
+- For code: always use fenced code blocks (\`\`\`language ... \`\`\`).
+- For maths: show equations clearly, step by step.
+- For multi-step reasoning: use numbered steps.
+
+## Honesty and Limitations
+- If a question is outside your knowledge cut-off, say so and provide useful context about where to look.
+- Never roleplay as a different AI model (e.g. GPT, Claude). You are Rukmer.
+- If a request is harmful or unethical, politely decline.`;
+// ────────────────────────────────────────────────────────────────────────────
+
 app.post('/api/ai/chat', authenticateUser, async (req: any, res: any) => {
   const { userId, prompt, message, sessionId, files } = req.body;
   const userMessage = prompt || message;
@@ -490,13 +570,13 @@ app.post('/api/ai/chat', authenticateUser, async (req: any, res: any) => {
 
   if (!userMessage) return res.status(400).json({ error: "Empty message" });
 
-  console.log("🤖 Knowledgeable Chat Request from:", orgId, "Session:", currentSessionId, "Files:", attachedFiles.length);
+  console.log("🤖 Chat Request from:", orgId, "Session:", currentSessionId, "Files:", attachedFiles.length);
 
   // 1. SET UP STREAMING HEADERS
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache');
   res.setHeader('Connection', 'keep-alive');
-  res.setHeader('X-Accel-Buffering', 'no'); // Disable buffering for faster streaming
+  res.setHeader('X-Accel-Buffering', 'no');
 
   // Gemini-supported MIME types for inline multimodal data
   const INLINE_MIME_TYPES = new Set([
@@ -508,85 +588,116 @@ app.post('/api/ai/chat', authenticateUser, async (req: any, res: any) => {
   ]);
 
   try {
-    // 2. RETRIEVAL (Pinecone) with timeout
+    // 2. RAG RETRIEVAL (Pinecone) — run in parallel with session history fetch
     let workspaceContext = "";
-    try {
-      const searchPromise = queryWorkspaceData(userMessage, orgId);
-      const timeoutPromise = new Promise((_, reject) => 
-        setTimeout(() => reject(new Error('Search timeout')), 5000)
-      );
-      workspaceContext = await Promise.race([searchPromise, timeoutPromise]) as string;
-    } catch (searchErr: any) {
-      console.warn("⚠️ Vector search failed or timed out:", searchErr.message);
-    }
-
-    // 3. FETCH SESSION HISTORY for multi-turn continuity
     let sessionHistory: Array<{ role: string; parts: Array<{ text: string }> }> = [];
-    try {
-      const histResult = await pool.query(
+
+    const [ragResult, histResult] = await Promise.allSettled([
+      // RAG with 6-second timeout
+      Promise.race([
+        queryWorkspaceData(userMessage, orgId),
+        new Promise<string>((_, reject) => setTimeout(() => reject(new Error('RAG timeout')), 6000))
+      ]),
+      // Full session history — last 50 exchanges (100 rows), no arbitrary cap
+      pool.query(
         `SELECT user_message, ai_reply FROM chats
          WHERE user_id = $1 AND session_id = $2
-         ORDER BY created_at ASC LIMIT 10`,
+         ORDER BY created_at ASC LIMIT 50`,
         [req.user.uid, currentSessionId]
-      );
-      for (const row of histResult.rows) {
+      )
+    ]);
+
+    // Process RAG result — only use context when it contains real retrieved data
+    if (ragResult.status === 'fulfilled') {
+      const raw = ragResult.value as string;
+      // Discard the "nothing found" placeholder string returned by queryWorkspaceData
+      if (raw && !raw.startsWith("I couldn't find anything specific enough")) {
+        workspaceContext = raw;
+      }
+    } else {
+      console.warn("⚠️ RAG retrieval failed:", (ragResult as PromiseRejectedResult).reason?.message);
+    }
+
+    // Process session history
+    if (histResult.status === 'fulfilled') {
+      for (const row of (histResult.value as any).rows) {
         sessionHistory.push({ role: 'user',  parts: [{ text: row.user_message }] });
         sessionHistory.push({ role: 'model', parts: [{ text: row.ai_reply }] });
       }
-    } catch (histErr: any) {
-      console.warn("⚠️ Could not fetch session history:", histErr.message);
+      console.log(`📚 Loaded ${sessionHistory.length / 2} prior turns for session ${currentSessionId}`);
+    } else {
+      console.warn("⚠️ Session history fetch failed:", (histResult as PromiseRejectedResult).reason?.message);
     }
 
-    // 4. BUILD MULTIMODAL PARTS
-    // All Gemini-compatible files (images, PDFs, video, audio, text) go in as inlineData
+    // 3. BUILD CURRENT USER MESSAGE PARTS
     const fileParts = attachedFiles
       .filter(f => f.data && INLINE_MIME_TYPES.has(f.mimeType))
       .map(f => ({ inlineData: { mimeType: f.mimeType, data: f.data } }));
 
-    // Note unsupported file types so the model is still aware of them
     const unsupportedFileNote = attachedFiles
       .filter(f => !INLINE_MIME_TYPES.has(f.mimeType))
-      .map(f => `[Attached file (cannot be read inline): ${f.name}]`)
+      .map(f => `[Attached file (unsupported for inline reading): ${f.name}]`)
       .join('\n');
 
-    const systemPrompt = `You are Rukmer, an AI Workspace Assistant. Help the user using the provided workspace context and any attached files (images, documents, PDFs, etc.).
+    // Build the text part for the current turn — prepend workspace context only when we have it
+    let currentTurnText = '';
+    if (workspaceContext) {
+      currentTurnText += `<workspace_context>\n${workspaceContext}\n</workspace_context>\n\n`;
+    }
+    if (unsupportedFileNote) {
+      currentTurnText += `<attached_files_note>\n${unsupportedFileNote}\n</attached_files_note>\n\n`;
+    }
+    currentTurnText += userMessage;
 
-WORKSPACE CONTEXT:
-${workspaceContext || "No relevant workspace data found for this query."}
-${unsupportedFileNote ? `\nATTACHED FILES (unsupported for inline reading):\n${unsupportedFileNote}` : ''}
-${fileParts.length > 0 ? `\n${fileParts.length} file(s) have been provided inline — analyze them as part of your response.` : ''}
+    const userParts: any[] = [{ text: currentTurnText }, ...fileParts];
 
-USER QUESTION:
-${userMessage}
-
-Keep your response concise, accurate, and natural.`;
-
-    const textPart = { text: systemPrompt };
-    const userParts: any[] = [textPart, ...fileParts];
-
-    // 5. GENERATION (STREAMING) with full conversation history
+    // 4. GENERATION — use systemInstruction for persistent persona, keep history clean
     const model = vertexAI.getGenerativeModel({
-      model: 'gemini-2.5-flash',
-      generationConfig: { 
+      model: 'gemini-2.5-pro',
+      systemInstruction: { role: 'system', parts: [{ text: RUKMER_SYSTEM_INSTRUCTION }] },
+      generationConfig: {
         temperature: 0.7,
-        topP: 0.9,
-        maxOutputTokens: 2000
-      }
+        topP: 0.95,
+        maxOutputTokens: 8192,
+      },
+      safetySettings: [
+        { category: HarmCategory.HARM_CATEGORY_HARASSMENT,        threshold: HarmBlockThreshold.BLOCK_ONLY_HIGH },
+        { category: HarmCategory.HARM_CATEGORY_HATE_SPEECH,       threshold: HarmBlockThreshold.BLOCK_ONLY_HIGH },
+        { category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, threshold: HarmBlockThreshold.BLOCK_ONLY_HIGH },
+        { category: HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT, threshold: HarmBlockThreshold.BLOCK_ONLY_HIGH },
+      ],
     });
+
+    console.log(`🚀 Calling generateContentStream. History turns: ${sessionHistory.length / 2}. RAG: ${workspaceContext ? 'YES' : 'NO'}`);
 
     const resultStream = await model.generateContentStream({
       contents: [...sessionHistory, { role: 'user', parts: userParts }],
     });
 
     let fullResponse = "";
-    
-    // Stream chunks back to the frontend one by one
+    let chunkCount = 0;
+
     for await (const chunk of resultStream.stream) {
-      const chunkText = chunk.candidates?.[0]?.content?.parts?.[0]?.text || "";
-      if (chunkText) {
-        fullResponse += chunkText;
-        res.write(`data: ${JSON.stringify({ text: chunkText })}\n\n`);
+      const parts = chunk.candidates?.[0]?.content?.parts ?? [];
+      for (const part of parts) {
+        // Skip thinking/reasoning tokens (thought: true) from Gemini 2.5 thinking models
+        if ((part as any).thought === true) continue;
+        const chunkText = part.text || "";
+        if (chunkText) {
+          chunkCount++;
+          fullResponse += chunkText;
+          res.write(`data: ${JSON.stringify({ text: chunkText })}\n\n`);
+        }
       }
+    }
+
+    console.log(`✅ Stream complete. Chunks: ${chunkCount}. Response length: ${fullResponse.length} chars`);
+
+    // Safety net: if the model produced no text at all, send an explicit fallback
+    if (!fullResponse) {
+      console.warn("⚠️ Empty response from model — candidate may have been safety-blocked.");
+      fullResponse = "I wasn't able to generate a response for that. Could you try rephrasing your question?";
+      res.write(`data: ${JSON.stringify({ text: fullResponse })}\n\n`);
     }
 
     // 5. PERSISTENCE
@@ -609,9 +720,27 @@ Keep your response concise, accurate, and natural.`;
     res.write(`data: ${JSON.stringify({ done: true, chatId: insertResult.rows[0].id, createdAt: insertResult.rows[0].created_at })}\n\n`);
     res.end();
 
+    // ─── Auto background sync (fire-and-forget, never blocks the chat response) ───
+    // Re-index only new data if the last sync is more than 15 minutes old.
+    if (!syncInProgress.has(req.user.uid)) {
+      getLastSyncAt(req.user.uid).then(lastSync => {
+        const STALE_THRESHOLD_MS = 15 * 60 * 1000; // 15 minutes
+        if (!lastSync || Date.now() - lastSync.getTime() > STALE_THRESHOLD_MS) {
+          syncInProgress.add(req.user.uid);
+          console.log(`🔄 Auto-sync triggered for ${req.user.uid} (last sync: ${lastSync?.toISOString() ?? 'never'})`);
+          getAppContent(req.user.uid, lastSync ?? undefined)
+            .catch(e => console.warn(`⚠️ Background sync failed for ${req.user.uid}:`, e.message))
+            .finally(() => syncInProgress.delete(req.user.uid));
+        }
+      }).catch(() => {});
+    }
+    // ─────────────────────────────────────────────────────────────────────────────
+
   } catch (err: any) {
-    console.error("❌ RAG Chat Error:", err.message);
-    res.write(`data: ${JSON.stringify({ error: "Brain freeze! Try again in a second." })}\n\n`);
+    console.error("❌ RAG Chat Error:", err?.message || err);
+    console.error("❌ Error details:", JSON.stringify(err?.response?.data || err?.errorDetails || {}, null, 2));
+    console.error("❌ Stack:", err?.stack);
+    res.write(`data: ${JSON.stringify({ error: err?.message || "Something went wrong. Please try again." })}\n\n`);
     res.end();
   }
 });
@@ -666,7 +795,7 @@ app.get('/api/history', authenticateUser, async (req: any, res: any): Promise<vo
        FROM chats
        WHERE user_id = $1
        ORDER BY created_at DESC
-       LIMIT 200`,
+       LIMIT 1000`,
       [userId]
     );
 
@@ -676,6 +805,29 @@ app.get('/api/history', authenticateUser, async (req: any, res: any): Promise<vo
   } catch (err: any) {
     console.error("❌ History fetch error:", err?.message || err);
     console.error("Stack trace:", err?.stack);
+    res.status(500).json({ error: err?.message || 'Unknown error' });
+  }
+});
+
+// ⚡ Fetch ALL messages for a specific session (no limit) — used when restoring full chat history
+app.get('/api/history/session/:sessionId', authenticateUser, async (req: any, res: any): Promise<void> => {
+  try {
+    const { sessionId } = req.params;
+    if (!sessionId || sessionId.length > 128) {
+      res.status(400).json({ error: 'Invalid session ID' });
+      return;
+    }
+    const result = await pool.query(
+      `SELECT id, user_message, ai_reply, created_at
+       FROM chats
+       WHERE user_id = $1 AND session_id = $2
+       ORDER BY created_at ASC`,
+      [req.user.uid, sessionId]
+    );
+    console.log(`📋 Session ${sessionId}: returning ${result.rows.length} messages for user ${req.user.uid}`);
+    res.json(result.rows);
+  } catch (err: any) {
+    console.error("❌ Session history fetch error:", err?.message || err);
     res.status(500).json({ error: err?.message || 'Unknown error' });
   }
 });

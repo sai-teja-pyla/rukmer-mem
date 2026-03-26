@@ -202,7 +202,7 @@ export async function queryWorkspaceData(query: string, orgId: string) {
   return context || "";
 }
 
-export async function fetchTeamsMessages(accessToken: string) {
+export async function fetchTeamsMessages(accessToken: string, sinceDate?: Date) {
   // 1. Get all Chat IDs first (limit 20, covers most users)
   const chatsResponse = await axios.get<any>(
     'https://graph.microsoft.com/v1.0/me/chats?$top=20',
@@ -214,10 +214,13 @@ export async function fetchTeamsMessages(accessToken: string) {
   for (const chat of chatsResponse.data.value) {
     // 2. Get messages for each specific Chat ID — wrapped per-chat so one failure doesn't abort all
     try {
-      const messagesResponse = await axios.get<any>(
-        `https://graph.microsoft.com/v1.0/me/chats/${chat.id}/messages?$top=20`,
-        { headers: { Authorization: `Bearer ${accessToken}` } }
-      );
+      // For incremental syncs, filter server-side with $filter to avoid downloading old messages
+      const messagesUrl = sinceDate
+        ? `https://graph.microsoft.com/v1.0/me/chats/${chat.id}/messages?$top=50&$filter=createdDateTime ge ${sinceDate.toISOString()}`
+        : `https://graph.microsoft.com/v1.0/me/chats/${chat.id}/messages?$top=20`;
+      const messagesResponse = await axios.get<any>(messagesUrl, {
+        headers: { Authorization: `Bearer ${accessToken}` }
+      });
 
       // 3. Save to Pinecone with cleaned text and a unique source name
       for (const msg of messagesResponse.data.value) {
