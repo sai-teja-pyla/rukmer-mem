@@ -779,32 +779,34 @@ if (process.env.NODE_ENV !== 'production') {
 
 app.get('/api/history', authenticateUser, async (req: any, res: any): Promise<void> => {
   try {
-    // ⚡ Use authenticated user ID, not query parameter
     const userId = req.user.uid;
-    console.log("📋 Fetching history for user:", userId);
-    
-    if (!userId) {
-      console.error("❌ No user ID found in request");
-      return res.status(401).json({ error: 'Unauthorized' });
-    }
-    
-    let result;
+    if (!userId) { res.status(401).json({ error: 'Unauthorized' }); return; }
 
-    result = await pool.query(
-      `SELECT id, user_id, user_message, ai_reply, session_id, title, created_at
-       FROM chats
-       WHERE user_id = $1
+    // Return ONE lightweight row per session (the most recent message).
+    // We deliberately exclude ai_reply to keep the payload tiny — full message
+    // bodies are fetched on demand via /api/history/session/:sessionId.
+    const result = await pool.query(
+      `SELECT id, session_id,
+              COALESCE(title, LEFT(user_message, 60)) AS title,
+              created_at,
+              message_count
+       FROM (
+         SELECT id, session_id, title, user_message, created_at,
+                COUNT(*) OVER (PARTITION BY session_id) AS message_count,
+                ROW_NUMBER() OVER (PARTITION BY session_id ORDER BY created_at DESC) AS rn
+         FROM chats
+         WHERE user_id = $1 AND hidden IS NOT TRUE
+       ) sub
+       WHERE rn = 1
        ORDER BY created_at DESC
-       LIMIT 1000`,
+       LIMIT 500`,
       [userId]
     );
 
-    console.log("✅ Found", result.rows.length, "chat messages for user:", userId);
-    
+    console.log("✅ History sessions for", userId, ":", result.rows.length);
     res.json(result.rows);
   } catch (err: any) {
     console.error("❌ History fetch error:", err?.message || err);
-    console.error("Stack trace:", err?.stack);
     res.status(500).json({ error: err?.message || 'Unknown error' });
   }
 });
@@ -1419,8 +1421,18 @@ app.listen(PORT, '0.0.0.0', () => {
             await pool.query(`
                 ALTER TABLE chats ADD COLUMN IF NOT EXISTS session_id VARCHAR(36);
                 ALTER TABLE chats ADD COLUMN IF NOT EXISTS title VARCHAR(200);
+                ALTER TABLE chats ADD COLUMN IF NOT EXISTS hidden BOOLEAN DEFAULT FALSE;
             `);
-            console.log("✅ Schema columns verified (session_id, title)");
+            console.log("✅ Schema columns verified (session_id, title, hidden)");
+
+            // Create indexes for the hot query paths (safe to re-run — IF NOT EXISTS)
+            await pool.query(`
+                CREATE INDEX IF NOT EXISTS idx_chats_user_created
+                    ON chats (user_id, created_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_chats_user_session_created
+                    ON chats (user_id, session_id, created_at ASC);
+            `).catch((e: any) => console.warn('⚠️ Index creation skipped (may already exist):', e.message));
+            console.log("✅ DB indexes verified");
 
             // Migrate id column from integer to UUID (one-time, safe to re-run)
             const colCheck = await pool.query(`

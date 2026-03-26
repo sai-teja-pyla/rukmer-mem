@@ -90,6 +90,8 @@ export default function Dashboard({ user, isPro }: DashboardProps) {
     return saved || null;
   });
   const [pastReports, setPastReports] = useState<any[]>([]);
+  // In-memory cache: sessionId → messages[]  (survives re-renders, cleared on logout)
+  const sessionMessagesCache = useRef<Map<string, any[]>>(new Map());
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const chatEndRef = useRef<HTMLDivElement>(null);
@@ -134,51 +136,24 @@ export default function Dashboard({ user, isPro }: DashboardProps) {
         }
         
         const chats = await response.json();
-        console.log("📨 Received", chats?.length || 0, "chat messages from backend");
-        
+        console.log("📨 Received", chats?.length || 0, "sessions from backend");
+
         if (!chats || chats.length === 0) {
           console.warn("⚠️ No chats found in database");
           setPastReports([]);
           return;
         }
-        
-        // ⚡ Group chats by sessionId to reconstruct sessions
-        const sessionMap = new Map<string, any>();
-        
-        chats.forEach((chat: any) => {
-          // Use session_id if available, otherwise use chat id as fallback
-          const sessionId = chat.session_id || `legacy_${chat.id}`;
-          
-          if (!sessionMap.has(sessionId)) {
-            // First message encountered for this session (newest, since rows are DESC)
-            sessionMap.set(sessionId, {
-              id: String(chat.id),
-              sessionId: sessionId,
-              title: chat.title || chat.user_message?.substring(0, 50) || 'Chat',
-              userMessage: chat.user_message,
-              aiReply: chat.ai_reply,
-              date: new Date(chat.created_at),
-              messageCount: 1,
-              messages: [
-                { role: 'user', content: chat.user_message },
-                { role: 'assistant', content: chat.ai_reply }
-              ]
-            });
-          } else {
-            // Older message for the same session: prepend to maintain chronological order
-            const existing = sessionMap.get(sessionId)!;
-            existing.messageCount = (existing.messageCount || 1) + 1;
-            existing.messages.unshift(
-              { role: 'user', content: chat.user_message },
-              { role: 'assistant', content: chat.ai_reply }
-            );
-          }
-        });
-        
-        // Convert map to array and sort by date (newest first)
-        const formatted = Array.from(sessionMap.values())
-          .sort((a, b) => b.date.getTime() - a.date.getTime());
-        
+
+        // Backend now returns one lean row per session (no ai_reply body)
+        const formatted = chats.map((chat: any) => ({
+          id: String(chat.id),
+          sessionId: chat.session_id || `legacy_${chat.id}`,
+          title: chat.title || 'Chat',
+          date: new Date(chat.created_at),
+          messageCount: Number(chat.message_count) || 1,
+          messages: [], // loaded on demand
+        }));
+        // Already sorted DESC by the query, no re-sort needed
         console.log("✅ Loaded", formatted.length, "sessions from history");
         setPastReports(formatted);
       } catch (error) {
@@ -311,41 +286,45 @@ export default function Dashboard({ user, isPro }: DashboardProps) {
       const idStr = String(id);
       const chatRecord = pastReports.find(r => String(r.id) === idStr);
       if (chatRecord) {
-        // ⚡ Restore the session ID so we can continue in the same conversation
+        // Restore session context and switch to chat view immediately
         setSessionId(chatRecord.sessionId);
         sessionStorage.setItem('rukmer_session_id', chatRecord.sessionId);
         setReportId(idStr);
         setReport(chatRecord);
         setActiveSidebar('none');
         navigate(`/dashboard/${idStr}`, { replace: true });
-        
         setCurrentView('chat');
-        // Show cached messages immediately for instant display
-        setChatMessages(chatRecord.messages?.length > 0
-          ? chatRecord.messages
-          : [
-              { role: 'user', content: chatRecord.userMessage },
-              { role: 'assistant', content: chatRecord.aiReply }
-            ]
+
+        // 1. Show from in-memory cache instantly if already fetched
+        const cached = sessionMessagesCache.current.get(chatRecord.sessionId);
+        if (cached && cached.length > 0) {
+          setChatMessages(cached);
+          return;
+        }
+
+        // 2. Show a placeholder immediately so the UI feels responsive
+        setChatMessages([{ role: 'assistant', content: '…' }]);
+
+        // 3. Fetch full session messages from the backend
+        const idToken = await auth.currentUser?.getIdToken();
+        const sessionRes = await fetch(
+          `/api/history/session/${encodeURIComponent(chatRecord.sessionId)}`,
+          { headers: { 'Authorization': `Bearer ${idToken}` } }
         );
-        // Fetch full session history from backend to ensure ALL messages are shown
-        try {
-          const idToken = await auth.currentUser?.getIdToken();
-          const sessionRes = await fetch(`/api/history/session/${encodeURIComponent(chatRecord.sessionId)}`, {
-            headers: { 'Authorization': `Bearer ${idToken}` }
-          });
-          if (sessionRes.ok) {
-            const rows = await sessionRes.json();
-            if (rows.length > 0) {
-              const allMessages = rows.flatMap((r: any) => [
-                { role: 'user', content: r.user_message },
-                { role: 'assistant', content: r.ai_reply }
-              ]);
-              setChatMessages(allMessages);
-            }
+        if (sessionRes.ok) {
+          const rows = await sessionRes.json();
+          if (rows.length > 0) {
+            const allMessages = rows.flatMap((r: any) => [
+              { role: 'user', content: r.user_message },
+              { role: 'assistant', content: r.ai_reply }
+            ]);
+            sessionMessagesCache.current.set(chatRecord.sessionId, allMessages);
+            setChatMessages(allMessages);
+          } else {
+            setChatMessages([]);
           }
-        } catch (fetchErr) {
-          console.warn('⚠️ Could not refresh session messages from backend:', fetchErr);
+        } else {
+          setChatMessages([]);
         }
       } else {
         const docSnap = await getDoc(doc(db, "reports", idStr));
@@ -508,44 +487,42 @@ export default function Dashboard({ user, isPro }: DashboardProps) {
       }
     }
 
-    // ⚡ Update history: either create new session or add to existing one
+    // ⚡ Update history sidebar + keep session messages cache in sync
     setPastReports(prev => {
       const existingIdx = prev.findIndex(r => r.sessionId === currentSessionId);
       if (existingIdx !== -1) {
-        // Session exists: update it with new messages
+        // Session exists: update sidebar entry
         const updated = [...prev];
         updated[existingIdx] = {
           ...updated[existingIdx],
-          userMessage: msg,
-          aiReply,
           messageCount: (updated[existingIdx].messageCount || 1) + 1,
-          messages: [
-            ...(updated[existingIdx].messages || []),
-            { role: 'user', content: msg },
-            { role: 'assistant', content: aiReply }
-          ],
           date: finalDate
         };
+        // Update the in-memory message cache for this session
+        const existingCached = sessionMessagesCache.current.get(currentSessionId) || [];
+        sessionMessagesCache.current.set(currentSessionId, [
+          ...existingCached,
+          { role: 'user', content: msg },
+          { role: 'assistant', content: aiReply }
+        ]);
         return updated;
       } else {
         // New session: add to front of history
         const newId = String(finalChatId || crypto.randomUUID());
-        // Update URL to the new chat's ID if we don't have one yet
         if (!reportId) {
           setReportId(newId);
           navigate(`/dashboard/${newId}`, { replace: true });
         }
+        // Prime the cache for this brand-new session
+        sessionMessagesCache.current.set(currentSessionId, [
+          { role: 'user', content: msg },
+          { role: 'assistant', content: aiReply }
+        ]);
         return [{
           id: newId,
           sessionId: currentSessionId,
           title: msg.substring(0, 50),
-          userMessage: msg,
-          aiReply,
           messageCount: 1,
-          messages: [
-            { role: 'user', content: msg },
-            { role: 'assistant', content: aiReply }
-          ],
           date: finalDate
         }, ...prev];
       }
