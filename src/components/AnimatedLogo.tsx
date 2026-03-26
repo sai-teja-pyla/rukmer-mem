@@ -8,12 +8,14 @@ interface AnimatedLogoProps {
   className?: string;
 }
 
+// 'idle' has NO animation — it's a static image with a soft shadow.
+// Only 'thinking' and 'typing' animate, and only one element ever has those states.
 const imageVariants: Variants = {
   idle: {
-    scale: [1, 1.05, 1],
+    scale: 1,
     rotate: 0,
     filter: "drop-shadow(0px 0px 4px rgba(85, 247, 220, 0.4))",
-    transition: { duration: 3, repeat: Infinity, ease: "easeInOut" as const }
+    transition: { duration: 0 }
   },
   thinking: {
     scale: [0.9, 1.1, 0.9],

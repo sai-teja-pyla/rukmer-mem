@@ -99,18 +99,6 @@ export default function Dashboard({ user, isPro }: DashboardProps) {
 
   // --- EFFECTS ---
   useEffect(() => {
-    const authInstance = getAuth();
-    const fetchToken = async () => {
-      const u = authInstance.currentUser;
-      if (u) {
-        const token = await u.getIdToken();
-        console.log("YOUR TEST TOKEN:", token);
-      }
-    };
-    fetchToken();
-  }, []);
-
-  useEffect(() => {
     if (!user?.uid) return;
     const connRef = doc(db, "userConnections", user.uid);
     const unsubscribe = onSnapshot(connRef, (docSnap) => {
@@ -164,10 +152,15 @@ export default function Dashboard({ user, isPro }: DashboardProps) {
     fetchChatHistory();
   }, [user?.uid]);
 
+  // Write to sessionStorage only when the stream finishes (not on every chunk)
   useEffect(() => {
-    if (chatMessages.length > 0) sessionStorage.setItem('rukmer_chat_messages', JSON.stringify(chatMessages));
-    else sessionStorage.removeItem('rukmer_chat_messages');
-  }, [chatMessages]);
+    if (isStreaming) return; // skip mid-stream writes
+    const id = setTimeout(() => {
+      if (chatMessages.length > 0) sessionStorage.setItem('rukmer_chat_messages', JSON.stringify(chatMessages));
+      else sessionStorage.removeItem('rukmer_chat_messages');
+    }, 300); // debounce 300ms
+    return () => clearTimeout(id);
+  }, [chatMessages, isStreaming]);
 
   useEffect(() => {
     const saved = sessionStorage.getItem('rukmer_chat_messages');
@@ -176,9 +169,11 @@ export default function Dashboard({ user, isPro }: DashboardProps) {
     }
   }, []);
 
+  // Scroll to bottom: instant during streaming, smooth only when a new complete message arrives
   useEffect(() => {
-    chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [chatMessages]);
+    if (!chatEndRef.current) return;
+    chatEndRef.current.scrollIntoView({ behavior: isStreaming ? 'auto' : 'smooth' });
+  }, [chatMessages.length, isStreaming]); // length change = new message; isStreaming flip = stream done
 
   // If a chatId is in the URL and history is loaded, open that chat automatically
   useEffect(() => {
