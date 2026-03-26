@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect, useMemo } from 'react';
+import React, { useState, useRef, useEffect, useMemo, useCallback } from 'react';
 import { useSearchParams, useNavigate, useParams } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
@@ -408,7 +408,7 @@ export default function Dashboard({ user, isPro }: DashboardProps) {
     let finalChatId = '';
     let finalDate = new Date();
     let hasReceivedFirstChunk = false; // ⚡ Track when AI response starts
-    let streamRafPending = false; // throttle stream UI updates to animation frames
+    let streamThrottleTimer: ReturnType<typeof setTimeout> | null = null; // throttle to ~5fps
 
     while (true) {
       const { done, value } = await reader.read();
@@ -441,18 +441,17 @@ export default function Dashboard({ user, isPro }: DashboardProps) {
                 setIsStreaming(true);
                 hasReceivedFirstChunk = true;
               } else {
-                // ⚡ Throttle UI updates to ~60 fps via RAF to avoid layout thrash
-                if (!streamRafPending) {
-                  streamRafPending = true;
-                  const snapshot = aiReply; // capture current value
-                  requestAnimationFrame(() => {
+                // ⚡ Throttle UI updates to ~5 fps (every 200ms) to cut CPU dramatically
+                if (!streamThrottleTimer) {
+                  streamThrottleTimer = setTimeout(() => {
+                    const snapshot = aiReply; // capture current value
                     setChatMessages(prev => {
                       const newMsgs = [...prev];
                       newMsgs[newMsgs.length - 1] = { role: 'assistant', content: snapshot };
                       return newMsgs;
                     });
-                    streamRafPending = false;
-                  });
+                    streamThrottleTimer = null;
+                  }, 200);
                 }
               }
             } else if (data.done) {
@@ -466,6 +465,9 @@ export default function Dashboard({ user, isPro }: DashboardProps) {
         }
       }
     }
+
+    // Cancel any pending throttle timer before final flush
+    if (streamThrottleTimer) { clearTimeout(streamThrottleTimer); streamThrottleTimer = null; }
 
     // Final flush: ensure last streamed content is rendered
     setChatMessages(prev => {
@@ -784,15 +786,24 @@ export default function Dashboard({ user, isPro }: DashboardProps) {
 
               {/* Messages */}
               <div className="flex-1 overflow-y-auto p-6 space-y-6 custom-scrollbar">
-                  {chatMessages.map((m, i) => {
-                    const isLastAssistant = m.role === 'assistant' && !chatMessages.slice(i + 1).some((x: any) => x.role === 'assistant');
+                  {(() => {
+                    // Pre-compute last assistant index once — O(n) instead of O(n²)
+                    let lastAssistantIdx = -1;
+                    for (let j = chatMessages.length - 1; j >= 0; j--) {
+                      if (chatMessages[j].role === 'assistant') { lastAssistantIdx = j; break; }
+                    }
                     const aiState = chatLoading ? 'thinking' : (isStreaming ? 'typing' : 'idle');
-                    return (
+                    return chatMessages.map((m, i) => (
                       <div key={i}>
-                        <MessageBubble message={m} aiState={aiState} isLastAssistant={isLastAssistant} />
+                        <MessageBubble
+                          message={m}
+                          aiState={aiState}
+                          isLastAssistant={i === lastAssistantIdx}
+                          isStreaming={isStreaming && i === lastAssistantIdx}
+                        />
                       </div>
-                    );
-                  })}
+                    ));
+                  })()}
                 {chatLoading && <GlassTypingIndicator />}
                 <div ref={chatEndRef} />
               </div>

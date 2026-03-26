@@ -16,9 +16,10 @@ interface MessageBubbleProps {
     message: ChatMessage;
     aiState?: AIState;
     isLastAssistant?: boolean;
+    isStreaming?: boolean;
 }
 
-export function MessageBubble({ message, aiState = 'idle', isLastAssistant = false }: MessageBubbleProps) {
+export const MessageBubble = React.memo(function MessageBubble({ message, aiState = 'idle', isLastAssistant = false, isStreaming = false }: MessageBubbleProps) {
     const isUser = message.role === 'user';
     // Only animate the last assistant message; others stay idle
     const logoState = (!isUser && isLastAssistant) ? aiState : 'idle';
@@ -64,7 +65,6 @@ export function MessageBubble({ message, aiState = 'idle', isLastAssistant = fal
                     />
                 )}
 
-                {/*Use ReactMarkdown here instead of a plain div */}
                 {/* Attachments badge */}
                 {message.attachments && message.attachments.length > 0 && (
                     <div className="flex flex-wrap gap-1.5 mb-2">
@@ -76,11 +76,14 @@ export function MessageBubble({ message, aiState = 'idle', isLastAssistant = fal
                     </div>
                 )}
                 <div className="prose prose-sm max-w-none prose-slate">
-                    <ReactMarkdown>
-                        {message.content}
-                    </ReactMarkdown>
+                    {/* During streaming, render plain text to avoid ReactMarkdown re-parsing ~5x/sec */}
+                    {isStreaming ? (
+                        <p style={{ whiteSpace: 'pre-wrap' }}>{message.content}</p>
+                    ) : (
+                        <ReactMarkdown>{message.content}</ReactMarkdown>
+                    )}
                 </div>
             </div>
         </div>
     );
-}
+});
