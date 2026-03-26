@@ -112,22 +112,15 @@ export default function Dashboard({ user, isPro }: DashboardProps) {
     const fetchChatHistory = async () => {
       try {
         const idToken = await auth.currentUser?.getIdToken();
-        console.log("🔄 Fetching chat history for user:", user.uid);
-        
         const response = await fetch(`/api/history`, {
           headers: { 'Authorization': `Bearer ${idToken}` }
         });
         
-        if (!response.ok) {
-          console.error("❌ Failed to fetch history:", response.status);
-          throw new Error(`Failed: ${response.status}`);
-        }
+        if (!response.ok) throw new Error(`Failed: ${response.status}`);
         
         const chats = await response.json();
-        console.log("📨 Received", chats?.length || 0, "sessions from backend");
 
         if (!chats || chats.length === 0) {
-          console.warn("⚠️ No chats found in database");
           setPastReports([]);
           return;
         }
@@ -141,8 +134,6 @@ export default function Dashboard({ user, isPro }: DashboardProps) {
           messageCount: Number(chat.message_count) || 1,
           messages: [], // loaded on demand
         }));
-        // Already sorted DESC by the query, no re-sort needed
-        console.log("✅ Loaded", formatted.length, "sessions from history");
         setPastReports(formatted);
       } catch (error) {
         console.error('❌ Error fetching chat history:', error);
@@ -417,6 +408,7 @@ export default function Dashboard({ user, isPro }: DashboardProps) {
     let finalChatId = '';
     let finalDate = new Date();
     let hasReceivedFirstChunk = false; // ⚡ Track when AI response starts
+    let streamRafPending = false; // throttle stream UI updates to animation frames
 
     while (true) {
       const { done, value } = await reader.read();
@@ -449,12 +441,19 @@ export default function Dashboard({ user, isPro }: DashboardProps) {
                 setIsStreaming(true);
                 hasReceivedFirstChunk = true;
               } else {
-                // ⚡ Subsequent chunks: update the last message
-                setChatMessages(prev => {
-                  const newMsgs = [...prev];
-                  newMsgs[newMsgs.length - 1] = { role: 'assistant', content: aiReply };
-                  return newMsgs;
-                });
+                // ⚡ Throttle UI updates to ~60 fps via RAF to avoid layout thrash
+                if (!streamRafPending) {
+                  streamRafPending = true;
+                  const snapshot = aiReply; // capture current value
+                  requestAnimationFrame(() => {
+                    setChatMessages(prev => {
+                      const newMsgs = [...prev];
+                      newMsgs[newMsgs.length - 1] = { role: 'assistant', content: snapshot };
+                      return newMsgs;
+                    });
+                    streamRafPending = false;
+                  });
+                }
               }
             } else if (data.done) {
               // Capture the DB details sent at the very end
@@ -467,6 +466,15 @@ export default function Dashboard({ user, isPro }: DashboardProps) {
         }
       }
     }
+
+    // Final flush: ensure last streamed content is rendered
+    setChatMessages(prev => {
+      const newMsgs = [...prev];
+      if (newMsgs.length > 0 && newMsgs[newMsgs.length - 1].role === 'assistant') {
+        newMsgs[newMsgs.length - 1] = { role: 'assistant', content: aiReply };
+      }
+      return newMsgs;
+    });
 
     // Flush any remaining data in the buffer after the stream ends
     if (buffer.trim()) {
@@ -550,7 +558,7 @@ export default function Dashboard({ user, isPro }: DashboardProps) {
           boxShadow: '0 12px 40px rgba(0,0,0,0.35), inset 0 1px 0 rgba(255,255,255,0.06)',
         }}
       >
-        <div className="w-11 h-11 rounded-2xl bg-white/10 backdrop-blur-xl flex items-center justify-center mb-7 border border-white/10 shadow-lg">
+        <div className="w-11 h-11 rounded-2xl bg-white/10 flex items-center justify-center mb-7 border border-white/10 shadow-lg">
           <img src="/hexagon.png" alt="Rukmer" className="w-7 h-7 object-contain" />
         </div>
         <h5 className="text-white font-bold text-sm tracking-tight">Beta</h5>
@@ -927,7 +935,7 @@ const GlassInput = ({ value, onChange, onSend, loading, onAttach, placeholder }:
   }, [value]);
 
   return (
-    <div className="relative flex items-end gap-2 rounded-2xl bg-white/50 backdrop-blur-2xl border border-white/40 shadow-glass px-3 py-1.5 focus-within:border-violet-300/60 focus-within:shadow-glass-hover transition-all">
+    <div className="relative flex items-end gap-2 rounded-2xl bg-white/50 backdrop-blur-md border border-white/40 shadow-glass px-3 py-1.5 focus-within:border-violet-300/60 focus-within:shadow-glass-hover transition-all">
       {onAttach && (
         <button onClick={onAttach} className="p-2 mb-0.5 rounded-xl text-gray-400 hover:text-gray-600 hover:bg-white/40 transition-all">
           <Paperclip size={18} />
@@ -970,7 +978,7 @@ const GlassTypingIndicator = () => (
     <div className="mr-3 mt-1">
       <AnimatedLogo state="thinking" className="w-8 h-8" />
     </div>
-    <div className="bg-white/50 backdrop-blur-2xl border border-white/30 p-4 rounded-2xl rounded-tl-lg flex items-center gap-3 shadow-glass">
+    <div className="bg-white/50 backdrop-blur-md border border-white/30 p-4 rounded-2xl rounded-tl-lg flex items-center gap-3 shadow-glass">
       <Loader2 className="animate-spin text-blue-600" size={16} />
       <span className="text-sm text-gray-500 font-medium">Rukmer is thinking…</span>
     </div>

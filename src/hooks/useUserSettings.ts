@@ -23,47 +23,39 @@ export function useUserSettings() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    // Listen for Auth Changes
-    const unsubscribeAuth = auth.onAuthStateChanged(async (user) => {
-      if (user) {
-        const userRef = doc(db, "users", user.uid);
-        
-        // 2. REAL-TIME DATABASE LISTENER
-        const unsubscribeSnapshot = onSnapshot(userRef, (docSnap) => {
-          if (docSnap.exists()) {
-            const data = docSnap.data();
-            setSettings(data);
-            
-            // Sync DB theme to LocalStorage
-            if (data.theme) {
-              localStorage.setItem('appTheme', data.theme);
-            }
-          } else {
-            // Create default profile if it doesn't exist
-            const defaults = { 
-                displayName: user.displayName || "New User", 
-                email: user.email, 
-                theme: 'light',
-                aiCreativity: 0.7,
-                notifications: true,
-                plan: "free",
-                createdAt: new Date()
-            };
-            setDoc(userRef, defaults);
-            setSettings(defaults);
-            localStorage.setItem('appTheme', 'light');
-          }
-          setLoading(false);
-        });
+    // Use auth.currentUser directly — no extra auth listener needed.
+    // App.tsx already drives auth state; we just need the Firestore snapshot.
+    const user = auth.currentUser;
+    if (!user) {
+      setSettings(null);
+      setLoading(false);
+      return;
+    }
 
-        return () => unsubscribeSnapshot();
+    const userRef = doc(db, "users", user.uid);
+    const unsubscribeSnapshot = onSnapshot(userRef, (docSnap) => {
+      if (docSnap.exists()) {
+        const data = docSnap.data();
+        setSettings(data);
+        if (data.theme) localStorage.setItem('appTheme', data.theme);
       } else {
-        setSettings(null);
-        setLoading(false);
+        const defaults = {
+          displayName: user.displayName || "New User",
+          email: user.email,
+          theme: 'light',
+          aiCreativity: 0.7,
+          notifications: true,
+          plan: "free",
+          createdAt: new Date()
+        };
+        setDoc(userRef, defaults);
+        setSettings(defaults);
+        localStorage.setItem('appTheme', 'light');
       }
+      setLoading(false);
     });
 
-    return () => unsubscribeAuth();
+    return () => unsubscribeSnapshot();
   }, []);
 
   // 3. UPDATE FUNCTION

@@ -21,29 +21,14 @@ const setTokenCache = (token: string) => {
 const getToken = async (): Promise<string> => {
     // Check cache first
     const cachedToken = getTokenFromCache();
-    if (cachedToken) {
-        console.log("♻️  TOKEN CACHE HIT");
-        return cachedToken;
-    }
+    if (cachedToken) return cachedToken;
 
-    return new Promise((resolve, reject) => {
-        const unsubscribe = auth.onAuthStateChanged(async (user) => {
-            unsubscribe();
-            if (user) {
-                try {
-                    // Only use cached token, no force refresh (much faster)
-                    const token = await user.getIdToken(false); // false = use cache
-                    console.log("💎 TOKEN OBTAINED (fresh):", token.substring(0, 15) + "...");
-                    setTokenCache(token);
-                    resolve(token);
-                } catch (error) {
-                    reject(new Error("Failed to get Firebase token"));
-                }
-            } else {
-                reject(new Error("User is not logged in"));
-            }
-        });
-    });
+    // Use currentUser directly instead of subscribing to auth changes
+    const user = auth.currentUser;
+    if (!user) throw new Error("User is not logged in");
+    const token = await user.getIdToken(false);
+    setTokenCache(token);
+    return token;
 };
 
 /**

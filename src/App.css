@@ -25,11 +25,7 @@
   }
 }
 
-@media (prefers-reduced-motion: no-preference) {
-  a:nth-of-type(2) .logo {
-    animation: logo-spin infinite 20s linear;
-  }
-}
+/* logo-spin removed — not used in the app */
 
 .card {
   padding: 2em;
