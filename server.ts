@@ -1305,6 +1305,14 @@ app.post('/api/teams/messages', teamsBotHandler);    // alias (kept for backward
 // Bot Framework outbound token. Hit GET /api/teams/debug-auth to instantly see
 // if your credentials are the problem. Remove before going live if desired.
 app.get('/api/teams/debug-auth', async (req: any, res: any) => {
+  // Decode a JWT payload without verifying signature (for diagnostics only)
+  const decodeJwtPayload = (token: string) => {
+    try {
+      const payload = token.split('.')[1];
+      return JSON.parse(Buffer.from(payload, 'base64url').toString('utf-8'));
+    } catch { return null; }
+  };
+
   try {
     // Test 1: Multi-tenant (botframework.com tenant)
     const multiRes = await fetch('https://login.microsoftonline.com/botframework.com/oauth2/v2.0/token', {
@@ -1318,6 +1326,7 @@ app.get('/api/teams/debug-auth', async (req: any, res: any) => {
       }).toString(),
     });
     const multiData: any = await multiRes.json();
+    const multiClaims = multiData.access_token ? decodeJwtPayload(multiData.access_token) : null;
 
     // Test 2: Common tenant (works for both single + multi)
     const commonRes = await fetch('https://login.microsoftonline.com/common/oauth2/v2.0/token', {
@@ -1331,6 +1340,13 @@ app.get('/api/teams/debug-auth', async (req: any, res: any) => {
       }).toString(),
     });
     const commonData: any = await commonRes.json();
+    const commonClaims = commonData.access_token ? decodeJwtPayload(commonData.access_token) : null;
+
+    // Discover the home tenant of this App Registration
+    const openIdRes = await fetch(
+      `https://login.microsoftonline.com/${process.env.MS_BOT_ID}/v2.0/.well-known/openid-configuration`
+    );
+    const openIdData: any = await openIdRes.json().catch(() => ({}));
 
     res.json({
       botId: process.env.MS_BOT_ID,
@@ -1340,13 +1356,22 @@ app.get('/api/teams/debug-auth', async (req: any, res: any) => {
         hasToken: !!multiData.access_token,
         error: multiData.error ?? null,
         errorDescription: multiData.error_description ?? null,
+        // tid = tenant that ISSUED the token. Should be botframework.com's GUID for true MultiTenant.
+        // If this is YOUR tenant GUID instead, the bot is registered as Single-Tenant in Azure.
+        tokenTenantId: multiClaims?.tid ?? null,
+        tokenIssuer: multiClaims?.iss ?? null,
+        tokenAppId: multiClaims?.appid ?? null,
       },
       commonTenantTest: {
         httpStatus: commonRes.status,
         hasToken: !!commonData.access_token,
         error: commonData.error ?? null,
         errorDescription: commonData.error_description ?? null,
+        tokenTenantId: commonClaims?.tid ?? null,
       },
+      diagnosis: multiClaims?.tid === 'f8cdef31-a31e-4b4a-93e4-5f571e91255a'
+        ? '✅ App is TRUE MultiTenant (botframework.com tenant). Check Azure Bot > Channels > Teams is added.'
+        : `⚠️  App is SINGLE-TENANT. Token tid="${multiClaims?.tid}". Fix: set MicrosoftAppType="SingleTenant" and MicrosoftAppTenantId="${multiClaims?.tid}" in your credentialsFactory.`,
     });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
