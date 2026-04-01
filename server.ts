@@ -1290,6 +1290,8 @@ app.post('/api/webhooks/slack', async (req: any, res: any) => {
 // /api/teams/messages is kept as an alias for any manual configuration.
 const teamsBotHandler = async (req: any, res: any) => {
   console.log("🔥 TEAMS PING RECEIVED!");
+   console.log("👉 BOT ID:", process.env.MS_BOT_ID);
+  console.log("👉 PASS LENGTH:", process.env.MS_BOT_PASSWORD ? process.env.MS_BOT_PASSWORD.length : "UNDEFINED!");
   await adapter.process(req, res, async (context) => {
     await teamsBot.run(context);
   });
