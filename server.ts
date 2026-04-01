@@ -553,59 +553,73 @@ async function sendTeamsReply(context: any, text: string): Promise<void> {
     console.warn('[Teams Bot] SDK sendActivity failed:', sdkErr?.statusCode, sdkErr?.message);
   }
 
-  // FALLBACK: manually fetch token and POST to Bot Connector REST API
-  try {
-    const tokenRes = await fetch('https://login.microsoftonline.com/botframework.com/oauth2/v2.0/token', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({
-        grant_type: 'client_credentials',
-        client_id: process.env.MS_BOT_ID!,
-        client_secret: process.env.MS_BOT_PASSWORD!,
-        scope: 'https://api.botframework.com/.default',
-      }),
-    });
-    const tokenData: any = await tokenRes.json();
+  // FALLBACK: try TWO different token authorities to find which one the Bot Connector accepts.
+  // Authority 1: botframework.com — correct for MultiTenant Azure Bot
+  // Authority 2: home tenant — correct for SingleTenant Azure Bot
+  const HOME_TENANT = 'd6d49420-f39b-4df7-a1dc-d59a935871db';
+  const authorities = [
+    { name: 'botframework.com', url: 'https://login.microsoftonline.com/botframework.com/oauth2/v2.0/token' },
+    { name: 'home-tenant',      url: `https://login.microsoftonline.com/${HOME_TENANT}/oauth2/v2.0/token` },
+  ];
 
-    if (!tokenData.access_token) {
-      console.error('[Teams Bot] ❌ Manual token fetch failed:', tokenData.error, tokenData.error_description);
-      return;
-    }
+  const serviceUrl = context.activity.serviceUrl.replace(/\/?$/, '/');
+  const conversationId = context.activity.conversation.id;
+  const replyToId = context.activity.id || '';
+  const replyUrl = `${serviceUrl}v3/conversations/${encodeURIComponent(conversationId)}/activities/${encodeURIComponent(replyToId)}`;
+  const replyBody = JSON.stringify({
+    type: 'message',
+    from: { id: process.env.MS_BOT_ID },
+    text: text,
+    replyToId: replyToId,
+  });
 
-    // Log token claims for diagnostics
+  for (const auth of authorities) {
     try {
-      const payload = JSON.parse(Buffer.from(tokenData.access_token.split('.')[1], 'base64url').toString());
-      console.log('[Teams Bot] Token tid:', payload.tid, '| appid:', payload.appid, '| aud:', payload.aud);
-    } catch { /* ignore */ }
+      const tokenRes = await fetch(auth.url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({
+          grant_type: 'client_credentials',
+          client_id: process.env.MS_BOT_ID!,
+          client_secret: process.env.MS_BOT_PASSWORD!,
+          scope: 'https://api.botframework.com/.default',
+        }),
+      });
+      const tokenData: any = await tokenRes.json();
 
-    const serviceUrl = context.activity.serviceUrl.replace(/\/?$/, '/');
-    const conversationId = context.activity.conversation.id;
-    const replyToId = context.activity.id || '';
-    const replyUrl = `${serviceUrl}v3/conversations/${encodeURIComponent(conversationId)}/activities/${encodeURIComponent(replyToId)}`;
+      if (!tokenData.access_token) {
+        console.error(`[Teams Bot] ❌ Token fetch failed (${auth.name}):`, tokenData.error, tokenData.error_description);
+        continue;
+      }
 
-    const replyRes = await fetch(replyUrl, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${tokenData.access_token}`,
-      },
-      body: JSON.stringify({
-        type: 'message',
-        from: { id: process.env.MS_BOT_ID },
-        text: text,
-        replyToId: replyToId,
-      }),
-    });
+      // Decode token for diagnostics
+      try {
+        const payload = JSON.parse(Buffer.from(tokenData.access_token.split('.')[1], 'base64url').toString());
+        console.log(`[Teams Bot] Token (${auth.name}) tid:`, payload.tid, '| iss:', payload.iss);
+      } catch { /* ignore */ }
 
-    const replyBody = await replyRes.text();
-    if (replyRes.ok) {
-      console.log('[Teams Bot] ✅ Manual fallback reply SUCCEEDED:', replyRes.status);
-    } else {
-      console.error('[Teams Bot] ❌ Manual fallback rejected:', replyRes.status, replyBody);
+      const res = await fetch(replyUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${tokenData.access_token}`,
+        },
+        body: replyBody,
+      });
+
+      const resText = await res.text();
+      if (res.ok) {
+        console.log(`[Teams Bot] ✅ Reply sent via ${auth.name} authority:`, res.status);
+        return; // success — stop trying
+      } else {
+        console.error(`[Teams Bot] ❌ Rejected by Bot Connector (${auth.name}):`, res.status, resText);
+      }
+    } catch (err: any) {
+      console.error(`[Teams Bot] ❌ Exception (${auth.name}):`, err?.message);
     }
-  } catch (manualErr: any) {
-    console.error('[Teams Bot] ❌ Manual fallback exception:', manualErr?.message);
   }
+
+  console.error('[Teams Bot] ❌ ALL reply methods failed. Check Azure Bot resource type vs App Registration type.');
 }
 
 class RukmerTeamsBot extends ActivityHandler {
