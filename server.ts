@@ -1300,6 +1300,58 @@ const teamsBotHandler = async (req: any, res: any) => {
 
 app.post('/api/messages', teamsBotHandler);          // Azure Bot Service default
 app.post('/api/teams/messages', teamsBotHandler);    // alias (kept for backward compat)
+
+// Diagnostic: test whether MS_BOT_ID + MS_BOT_PASSWORD can fetch a valid
+// Bot Framework outbound token. Hit GET /api/teams/debug-auth to instantly see
+// if your credentials are the problem. Remove before going live if desired.
+app.get('/api/teams/debug-auth', async (req: any, res: any) => {
+  try {
+    // Test 1: Multi-tenant (botframework.com tenant)
+    const multiRes = await fetch('https://login.microsoftonline.com/botframework.com/oauth2/v2.0/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        grant_type: 'client_credentials',
+        client_id: process.env.MS_BOT_ID!,
+        client_secret: process.env.MS_BOT_PASSWORD!,
+        scope: 'https://api.botframework.com/.default',
+      }).toString(),
+    });
+    const multiData: any = await multiRes.json();
+
+    // Test 2: Common tenant (works for both single + multi)
+    const commonRes = await fetch('https://login.microsoftonline.com/common/oauth2/v2.0/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        grant_type: 'client_credentials',
+        client_id: process.env.MS_BOT_ID!,
+        client_secret: process.env.MS_BOT_PASSWORD!,
+        scope: 'https://api.botframework.com/.default',
+      }).toString(),
+    });
+    const commonData: any = await commonRes.json();
+
+    res.json({
+      botId: process.env.MS_BOT_ID,
+      passwordLength: process.env.MS_BOT_PASSWORD?.length ?? 0,
+      multiTenantTest: {
+        httpStatus: multiRes.status,
+        hasToken: !!multiData.access_token,
+        error: multiData.error ?? null,
+        errorDescription: multiData.error_description ?? null,
+      },
+      commonTenantTest: {
+        httpStatus: commonRes.status,
+        hasToken: !!commonData.access_token,
+        error: commonData.error ?? null,
+        errorDescription: commonData.error_description ?? null,
+      },
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
 // ────────────────────────────────────────────────────────────────────────────
 
 // 1. Start the Auth Flow for Google (Gmail & Google Drive)
