@@ -526,7 +526,8 @@ const credentialsFactory = new ConfigurationServiceClientCredentialFactory({
   MicrosoftAppId: process.env.MS_BOT_ID,
   MicrosoftAppPassword: process.env.MS_BOT_PASSWORD,
   MicrosoftAppType: 'MultiTenant',
-  MicrosoftAppTenantId: ''
+  // MicrosoftAppTenantId must NOT be set (not even '') for MultiTenant bots.
+  // An empty string breaks the token authority URL and causes 401 on outbound replies.
 });
 
 const botAuthentication = createBotFrameworkAuthenticationFromConfiguration(null, credentialsFactory);
