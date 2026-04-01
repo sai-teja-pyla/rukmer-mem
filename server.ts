@@ -525,9 +525,7 @@ async function callGemini(prompt: string): Promise<string> {
 const credentialsFactory = new ConfigurationServiceClientCredentialFactory({
   MicrosoftAppId: process.env.MS_BOT_ID,
   MicrosoftAppPassword: process.env.MS_BOT_PASSWORD,
-  MicrosoftAppType: 'SingleTenant',
-  // Tenant ID confirmed via /api/teams/debug-auth — token issuer is this tenant, not botframework.com
-  MicrosoftAppTenantId: 'd6d49420-f39b-4df7-a1dc-d59a935871db',
+  MicrosoftAppType: 'MultiTenant',
 });
 
 const botAuthentication = createBotFrameworkAuthenticationFromConfiguration(null, credentialsFactory);
@@ -549,8 +547,15 @@ class RukmerTeamsBot extends ActivityHandler {
         // Teams wraps mentions in HTML — strip the <at>Rukmer</at> tag
         const cleanPrompt = context.activity.text.replace(/<at>.*?<\/at>/g, '').trim();
 
-        // Show a typing indicator while Rukmer thinks
-        await context.sendActivities([{ type: 'typing' }]);
+        // Show a typing indicator while Rukmer thinks.
+        // Wrapped in its own try-catch: Teams rejects typing activities in some
+        // chat contexts (DMs, personal chat) with a 401 — we must not let that
+        // abort the whole handler before the actual reply is sent.
+        try {
+          await context.sendActivities([{ type: 'typing' }]);
+        } catch (typingErr: any) {
+          console.warn('[Teams Bot] Typing indicator skipped:', typingErr?.message);
+        }
 
         // Identify the user via their Entra ID (Azure AD Object ID)
         const userAadObjectId = context.activity.from.aadObjectId;
