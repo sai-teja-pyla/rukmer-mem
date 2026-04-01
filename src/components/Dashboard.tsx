@@ -33,7 +33,7 @@ async function callGemini(prompt: string): Promise<string> {
     const { GoogleGenerativeAI } = await import("@google/generative-ai");
     const genAI = new GoogleGenerativeAI(apiKey);
     const model = genAI.getGenerativeModel({
-      model: "gemini-3-pro-preview",
+      model: "gemini-2.5-pro",
       systemInstruction: "You are Rukmer, a friendly workplace companion. Be helpful, conversational, and use a touch of wit."
     });
     const result = await model.generateContent({

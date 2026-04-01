@@ -23,6 +23,7 @@ import admin from 'firebase-admin'; // 🚨 The Security Bouncer
 import { learnWorkspaceData, queryWorkspaceData, clearNamespace, fetchTeamsMessages } from './ingestionService.js';
 import { Pinecone } from '@pinecone-database/pinecone';
 import { ConfidentialClientApplication, InteractionRequiredAuthError, LogLevel } from '@azure/msal-node';
+import { WebClient } from '@slack/web-api';
 
 const pinecone = new Pinecone({ apiKey: process.env.PINECONE_API_KEY! });
 const index = pinecone.index(process.env.PINECONE_INDEX_NAME!);
@@ -1114,6 +1115,80 @@ app.get('/api/slack/channels', authenticateUser, async (req: any, res: any) => {
         console.error("Internal Server Error:", err.message);
         res.status(500).json({ error: "Internal server error fetching channels" });
     }
+});
+
+app.post('/api/webhooks/slack', async (req: any, res: any) => {
+  const { type, challenge, event, team_id } = req.body;
+
+  // 1. SLACK URL VERIFICATION (Required when you first set up the webhook)
+  if (type === 'url_verification') {
+    return res.status(200).send(challenge);
+  }
+
+  // 2. ACKNOWLEDGE IMMEDIATELY (To prevent Slack from retrying)
+  res.status(200).send(''); 
+
+  // 3. ONLY LISTEN TO APP MENTIONS (Ignore bot's own messages)
+  if (event && event.type === 'app_mention' && !event.bot_id) {
+    try {
+      console.log(`💬 Received Slack mention in team ${team_id}: ${event.text}`);
+      
+      // Clean the text (remove the <@U12345> bot mention part)
+      const cleanPrompt = event.text.replace(/<@[A-Z0-9]+>/g, '').trim();
+
+      // 4. FIND THE RIGHT TOKEN IN FIRESTORE
+      // We search Firestore for the user who connected this specific Slack Workspace
+      const usersRef = admin.firestore().collection('userTokens');
+      const snapshot = await usersRef.where('slack.teamId', '==', team_id).limit(1).get();
+      
+      if (snapshot.empty) {
+        console.error("No user found for this Slack workspace.");
+        return;
+      }
+
+      const userData = snapshot.docs[0].data();
+      const slackBotToken = userData.slack.accessToken; // The xoxb- token
+      const orgId = snapshot.docs[0].id; // The user's Rukmer ID
+      const slackClient = new WebClient(slackBotToken);
+
+      // (Optional UX) Send a "Rukmer is thinking..." message
+      const loadingMsg = await slackClient.chat.postMessage({
+        channel: event.channel,
+        thread_ts: event.ts, // Reply in a thread so it doesn't clutter the channel!
+        text: "⏳ *Synthesizing workspace data...*"
+      });
+
+      // 5. RUN YOUR EXISTING RAG & AI LOGIC
+      let workspaceContext = "";
+      try {
+        // You already wrote this function!
+        workspaceContext = await queryWorkspaceData(cleanPrompt, orgId);
+      } catch (e) { console.warn("Vector search failed"); }
+
+      const systemInstruction = `
+        You are Rukmer AI. Answer the user's question based ONLY on the following workspace context. 
+        Format your answer beautifully for Slack.
+        CONTEXT: ${workspaceContext || "No relevant data found."}
+      `;
+
+      const model = vertexAI.getGenerativeModel({ model: 'gemini-2.5-pro' });
+      const aiResponse = await model.generateContent({
+        contents: [{ role: 'user', parts: [{ text: `SYSTEM: ${systemInstruction}\n\nUSER: ${cleanPrompt}` }] }]
+      });
+      
+      const finalReply = aiResponse.response.candidates?.[0]?.content?.parts?.[0]?.text || "I couldn't process that.";
+
+      // 6. UPDATE THE SLACK MESSAGE WITH THE REAL ANSWER
+      await slackClient.chat.update({
+        channel: event.channel,
+        ts: loadingMsg.ts as string,
+        text: finalReply
+      });
+
+    } catch (error: any) {
+      console.error("Slack Webhook Error:", error.message);
+    }
+  }
 });
 
 // 1. Start the Auth Flow for Google (Gmail & Google Drive)
