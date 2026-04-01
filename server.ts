@@ -599,7 +599,16 @@ CONTEXT: ${workspaceContext || 'No relevant data found.'}`;
           aiResponse.response.candidates?.[0]?.content?.parts?.[0]?.text ||
           "I couldn't process that.";
 
-        await context.sendActivity(MessageFactory.text(finalReply));
+        console.log('[Teams Bot] Sending final reply, length:', finalReply.length);
+        try {
+          await context.sendActivity(MessageFactory.text(finalReply));
+          console.log('[Teams Bot] ✅ Reply sent successfully');
+        } catch (sendErr: any) {
+          // 401 here = Azure Bot Resource app-type mismatch.
+          // Fix: Azure Portal → App Registrations → b215cb07... → Authentication
+          //      → Supported account types → "Multitenant" → Save
+          console.error('[Teams Bot] ❌ sendActivity failed (401 = Azure Bot app-type mismatch):', sendErr?.message);
+        }
       } catch (err) {
         console.error('[Teams Bot Logic Error]:', err);
       }
