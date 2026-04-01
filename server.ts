@@ -541,7 +541,7 @@ adapter.onTurnError = async (_context, error) => {
     statusCode: (error as any)?.statusCode,
   }));
 };
-
+// The main bot logic lives here. It fires every time someone types @Rukmer in Teams.
 class RukmerTeamsBot extends ActivityHandler {
   constructor() {
     super();
