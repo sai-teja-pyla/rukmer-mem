@@ -1286,13 +1286,17 @@ app.post('/api/webhooks/slack', async (req: any, res: any) => {
 });
 
 // ─── Microsoft Teams Bot Webhook ──────────────────────────────────────────
-// Azure Bot Service routes every incoming Teams activity here.
-// The endpoint must be registered as the Messaging Endpoint in the Azure Bot resource.
-app.post('/api/teams/messages', async (req: any, res: any) => {
+// Azure Bot Service always posts to /api/messages (Bot Framework default).
+// /api/teams/messages is kept as an alias for any manual configuration.
+const teamsBotHandler = async (req: any, res: any) => {
+  console.log("🔥 TEAMS PING RECEIVED!");
   await adapter.process(req, res, async (context) => {
     await teamsBot.run(context);
   });
-});
+};
+
+app.post('/api/messages', teamsBotHandler);          // Azure Bot Service default
+app.post('/api/teams/messages', teamsBotHandler);    // alias (kept for backward compat)
 // ────────────────────────────────────────────────────────────────────────────
 
 // 1. Start the Auth Flow for Google (Gmail & Google Drive)
