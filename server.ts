@@ -542,6 +542,72 @@ adapter.onTurnError = async (_context, error) => {
   }));
 };
 // The main bot logic lives here. It fires every time someone types @Rukmer in Teams.
+
+// Helper: send a reply to Teams, trying SDK first then manual REST API fallback
+async function sendTeamsReply(context: any, text: string): Promise<void> {
+  try {
+    await context.sendActivity(MessageFactory.text(text));
+    console.log('[Teams Bot] ✅ Reply sent via SDK');
+    return;
+  } catch (sdkErr: any) {
+    console.warn('[Teams Bot] SDK sendActivity failed:', sdkErr?.statusCode, sdkErr?.message);
+  }
+
+  // FALLBACK: manually fetch token and POST to Bot Connector REST API
+  try {
+    const tokenRes = await fetch('https://login.microsoftonline.com/botframework.com/oauth2/v2.0/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        grant_type: 'client_credentials',
+        client_id: process.env.MS_BOT_ID!,
+        client_secret: process.env.MS_BOT_PASSWORD!,
+        scope: 'https://api.botframework.com/.default',
+      }),
+    });
+    const tokenData: any = await tokenRes.json();
+
+    if (!tokenData.access_token) {
+      console.error('[Teams Bot] ❌ Manual token fetch failed:', tokenData.error, tokenData.error_description);
+      return;
+    }
+
+    // Log token claims for diagnostics
+    try {
+      const payload = JSON.parse(Buffer.from(tokenData.access_token.split('.')[1], 'base64url').toString());
+      console.log('[Teams Bot] Token tid:', payload.tid, '| appid:', payload.appid, '| aud:', payload.aud);
+    } catch { /* ignore */ }
+
+    const serviceUrl = context.activity.serviceUrl.replace(/\/?$/, '/');
+    const conversationId = context.activity.conversation.id;
+    const replyToId = context.activity.id || '';
+    const replyUrl = `${serviceUrl}v3/conversations/${encodeURIComponent(conversationId)}/activities/${encodeURIComponent(replyToId)}`;
+
+    const replyRes = await fetch(replyUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${tokenData.access_token}`,
+      },
+      body: JSON.stringify({
+        type: 'message',
+        from: { id: process.env.MS_BOT_ID },
+        text: text,
+        replyToId: replyToId,
+      }),
+    });
+
+    const replyBody = await replyRes.text();
+    if (replyRes.ok) {
+      console.log('[Teams Bot] ✅ Manual fallback reply SUCCEEDED:', replyRes.status);
+    } else {
+      console.error('[Teams Bot] ❌ Manual fallback rejected:', replyRes.status, replyBody);
+    }
+  } catch (manualErr: any) {
+    console.error('[Teams Bot] ❌ Manual fallback exception:', manualErr?.message);
+  }
+}
+
 class RukmerTeamsBot extends ActivityHandler {
   constructor() {
     super();
@@ -552,10 +618,7 @@ class RukmerTeamsBot extends ActivityHandler {
         // Teams wraps mentions in HTML — strip the <at>Rukmer</at> tag
         const cleanPrompt = context.activity.text.replace(/<at>.*?<\/at>/g, '').trim();
 
-        // Show a typing indicator while Rukmer thinks.
-        // Wrapped in its own try-catch: Teams rejects typing activities in some
-        // chat contexts (DMs, personal chat) with a 401 — we must not let that
-        // abort the whole handler before the actual reply is sent.
+        // Show a typing indicator (silently skip if 401)
         try {
           await context.sendActivities([{ type: 'typing' }]);
         } catch (typingErr: any) {
@@ -564,36 +627,35 @@ class RukmerTeamsBot extends ActivityHandler {
 
         // Identify the user via their Entra ID (Azure AD Object ID)
         const userAadObjectId = context.activity.from.aadObjectId;
-
         console.log('[Teams Bot] aadObjectId:', userAadObjectId ?? '(null)');
-        if (!userAadObjectId) {
-          try { await context.sendActivity("I couldn't identify your Microsoft account."); } catch { /* 401 ok */ }
-          return await next();
-        }
 
         // Look up the user in Firestore by their Entra OID
-        const usersRef = admin.firestore().collection('userTokens');
-        const snapshot = await usersRef.where('microsoft.oid', '==', userAadObjectId).limit(1).get();
-
-        console.log('[Teams Bot] Firestore snapshot empty:', snapshot.empty, '| orgId:', snapshot.empty ? 'N/A' : snapshot.docs[0].id);
-        if (snapshot.empty) {
-          try { await context.sendActivity("You haven't connected your Microsoft account to Rukmer yet! Please log in at app.rukmer.com first."); } catch { /* 401 ok */ }
-          return await next();
+        let orgId: string | null = null;
+        if (userAadObjectId) {
+          const usersRef = admin.firestore().collection('userTokens');
+          const snapshot = await usersRef.where('microsoft.oid', '==', userAadObjectId).limit(1).get();
+          if (!snapshot.empty) {
+            orgId = snapshot.docs[0].id;
+          }
         }
+        console.log('[Teams Bot] Firestore orgId:', orgId ?? '(not linked)');
 
-        const orgId = snapshot.docs[0].id; // The user's Rukmer ID
-
-        // Run the RAG pipeline
+        // Run the RAG pipeline only if the user has a linked Rukmer account
         let workspaceContext = '';
-        try {
-          workspaceContext = await queryWorkspaceData(cleanPrompt, orgId);
-        } catch (e) {
-          console.warn('[Teams Bot] Vector search failed');
+        if (orgId) {
+          try {
+            workspaceContext = await queryWorkspaceData(cleanPrompt, orgId);
+          } catch (e) {
+            console.warn('[Teams Bot] Vector search failed');
+          }
         }
 
-        const systemInstruction = `You are Rukmer AI. Answer the user's question based ONLY on the following workspace context.
+        const systemInstruction = orgId
+          ? `You are Rukmer AI. Answer the user's question using the following workspace context.
 Format your answer for Microsoft Teams (use markdown, bolding, and bullet points).
-CONTEXT: ${workspaceContext || 'No relevant data found.'}`;
+CONTEXT: ${workspaceContext || 'No relevant data found.'}`
+          : `You are Rukmer AI, a helpful assistant. The user hasn't linked their Microsoft account to Rukmer yet, so you don't have workspace context. Answer from your general knowledge. Mention they can link their account at app.rukmer.com for workspace-aware answers.
+Format your answer for Microsoft Teams (use markdown, bolding, and bullet points).`;
 
         const model = vertexAI.getGenerativeModel({ model: 'gemini-2.5-pro' });
         const aiResponse = await model.generateContent({
@@ -604,69 +666,8 @@ CONTEXT: ${workspaceContext || 'No relevant data found.'}`;
           aiResponse.response.candidates?.[0]?.content?.parts?.[0]?.text ||
           "I couldn't process that.";
 
-        console.log('[Teams Bot] Sending final reply, length:', finalReply.length);
-        console.log('[Teams Bot] serviceUrl:', context.activity.serviceUrl);
-
-        try {
-          await context.sendActivity(MessageFactory.text(finalReply));
-          console.log('[Teams Bot] ✅ Reply sent successfully via SDK');
-        } catch (sendErr: any) {
-          console.error('[Teams Bot] ❌ SDK sendActivity failed:', sendErr?.statusCode, sendErr?.message);
-
-          // FALLBACK: Bypass SDK auth — manually fetch a token and POST to Bot Connector REST API.
-          // If this works → SDK auth config is wrong.  If this also 401s → registration/credentials issue.
-          try {
-            const tokenRes = await fetch('https://login.microsoftonline.com/botframework.com/oauth2/v2.0/token', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-              body: new URLSearchParams({
-                grant_type: 'client_credentials',
-                client_id: process.env.MS_BOT_ID!,
-                client_secret: process.env.MS_BOT_PASSWORD!,
-                scope: 'https://api.botframework.com/.default',
-              }),
-            });
-            const tokenData: any = await tokenRes.json();
-
-            if (!tokenData.access_token) {
-              console.error('[Teams Bot] ❌ Manual token fetch failed:', tokenData.error, tokenData.error_description);
-            } else {
-              // Decode token to log tid claim
-              try {
-                const payload = JSON.parse(Buffer.from(tokenData.access_token.split('.')[1], 'base64url').toString());
-                console.log('[Teams Bot] Manual token tid:', payload.tid, '| appid:', payload.appid, '| aud:', payload.aud);
-              } catch { /* ignore decode errors */ }
-
-              const serviceUrl = context.activity.serviceUrl.replace(/\/?$/, '/');
-              const conversationId = context.activity.conversation.id;
-              const replyToId = context.activity.id || '';
-              const replyUrl = `${serviceUrl}v3/conversations/${encodeURIComponent(conversationId)}/activities/${encodeURIComponent(replyToId)}`;
-
-              const replyRes = await fetch(replyUrl, {
-                method: 'POST',
-                headers: {
-                  'Content-Type': 'application/json',
-                  'Authorization': `Bearer ${tokenData.access_token}`,
-                },
-                body: JSON.stringify({
-                  type: 'message',
-                  from: { id: process.env.MS_BOT_ID },
-                  text: finalReply,
-                  replyToId: replyToId,
-                }),
-              });
-
-              const replyBody = await replyRes.text();
-              if (replyRes.ok) {
-                console.log('[Teams Bot] ✅ Manual fallback reply SUCCEEDED:', replyRes.status);
-              } else {
-                console.error('[Teams Bot] ❌ Manual fallback also rejected:', replyRes.status, replyBody);
-              }
-            }
-          } catch (manualErr: any) {
-            console.error('[Teams Bot] ❌ Manual fallback exception:', manualErr?.message);
-          }
-        }
+        console.log('[Teams Bot] Sending reply, length:', finalReply.length, '| serviceUrl:', context.activity.serviceUrl);
+        await sendTeamsReply(context, finalReply);
       } catch (err) {
         console.error('[Teams Bot Logic Error]:', err);
       }
