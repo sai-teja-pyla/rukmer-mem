@@ -522,24 +522,24 @@ async function callGemini(prompt: string): Promise<string> {
 // --- 6. Routes ---
 
 // ─── Microsoft Teams Bot Setup ─────────────────────────────────────────────
-// App Registration b215cb07 is Single-Tenant (debug-auth confirmed tid = d6d49420...).
-// Azure Bot Resource must also be set to Single-Tenant in Azure Portal:
-//   portal.azure.com → Azure Bot → <your bot> → Configuration → App type = Single Tenant
-//   + set the Tenant ID to your home tenant.
-const credentialsFactory = new ConfigurationServiceClientCredentialFactory({
-  MicrosoftAppId: process.env.MS_BOT_ID,
-  MicrosoftAppPassword: process.env.MS_BOT_PASSWORD,
-  MicrosoftAppType: 'SingleTenant',
-  MicrosoftAppTenantId: process.env.MS_BOT_TENANT_ID || 'd6d49420-f39b-4df7-a1dc-d59a935871db',
-});
+// Azure Portal App Registration is "Any Entra ID tenant" → MultiTenant.
+const botConfig: Record<string, string> = {
+  MicrosoftAppId: process.env.MS_BOT_ID || '',
+  MicrosoftAppPassword: process.env.MS_BOT_PASSWORD || '',
+  MicrosoftAppType: 'MultiTenant',
+};
 
-const botAuthentication = createBotFrameworkAuthenticationFromConfiguration(null, credentialsFactory);
+const credentialsFactory = new ConfigurationServiceClientCredentialFactory(botConfig);
+const botAuthentication = createBotFrameworkAuthenticationFromConfiguration(botConfig, credentialsFactory);
 const adapter = new CloudAdapter(botAuthentication);
 
-// Catch errors so the bot doesn't crash the whole server
-adapter.onTurnError = async (context, error) => {
-  console.error('[Teams Bot Error]:', error);
-  await context.sendActivity('Oops, my circuits got crossed. Please try again.');
+// Don't try sendActivity in onTurnError — if outbound auth is broken that also 401s and cascades
+adapter.onTurnError = async (_context, error) => {
+  console.error('[Teams Bot Adapter Error]:', JSON.stringify({
+    name: (error as any)?.name,
+    message: error?.message,
+    statusCode: (error as any)?.statusCode,
+  }));
 };
 
 class RukmerTeamsBot extends ActivityHandler {
@@ -605,14 +605,67 @@ CONTEXT: ${workspaceContext || 'No relevant data found.'}`;
           "I couldn't process that.";
 
         console.log('[Teams Bot] Sending final reply, length:', finalReply.length);
+        console.log('[Teams Bot] serviceUrl:', context.activity.serviceUrl);
+
         try {
           await context.sendActivity(MessageFactory.text(finalReply));
-          console.log('[Teams Bot] ✅ Reply sent successfully');
+          console.log('[Teams Bot] ✅ Reply sent successfully via SDK');
         } catch (sendErr: any) {
-          // 401 here = Azure Bot Resource app-type mismatch.
-          // Fix: Azure Portal → App Registrations → b215cb07... → Authentication
-          //      → Supported account types → "Multitenant" → Save
-          console.error('[Teams Bot] ❌ sendActivity failed (401 = Azure Bot app-type mismatch):', sendErr?.message);
+          console.error('[Teams Bot] ❌ SDK sendActivity failed:', sendErr?.statusCode, sendErr?.message);
+
+          // FALLBACK: Bypass SDK auth — manually fetch a token and POST to Bot Connector REST API.
+          // If this works → SDK auth config is wrong.  If this also 401s → registration/credentials issue.
+          try {
+            const tokenRes = await fetch('https://login.microsoftonline.com/botframework.com/oauth2/v2.0/token', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+              body: new URLSearchParams({
+                grant_type: 'client_credentials',
+                client_id: process.env.MS_BOT_ID!,
+                client_secret: process.env.MS_BOT_PASSWORD!,
+                scope: 'https://api.botframework.com/.default',
+              }),
+            });
+            const tokenData: any = await tokenRes.json();
+
+            if (!tokenData.access_token) {
+              console.error('[Teams Bot] ❌ Manual token fetch failed:', tokenData.error, tokenData.error_description);
+            } else {
+              // Decode token to log tid claim
+              try {
+                const payload = JSON.parse(Buffer.from(tokenData.access_token.split('.')[1], 'base64url').toString());
+                console.log('[Teams Bot] Manual token tid:', payload.tid, '| appid:', payload.appid, '| aud:', payload.aud);
+              } catch { /* ignore decode errors */ }
+
+              const serviceUrl = context.activity.serviceUrl.replace(/\/?$/, '/');
+              const conversationId = context.activity.conversation.id;
+              const replyToId = context.activity.id;
+              const replyUrl = `${serviceUrl}v3/conversations/${encodeURIComponent(conversationId)}/activities/${encodeURIComponent(replyToId)}`;
+
+              const replyRes = await fetch(replyUrl, {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json',
+                  'Authorization': `Bearer ${tokenData.access_token}`,
+                },
+                body: JSON.stringify({
+                  type: 'message',
+                  from: { id: process.env.MS_BOT_ID },
+                  text: finalReply,
+                  replyToId: replyToId,
+                }),
+              });
+
+              const replyBody = await replyRes.text();
+              if (replyRes.ok) {
+                console.log('[Teams Bot] ✅ Manual fallback reply SUCCEEDED:', replyRes.status);
+              } else {
+                console.error('[Teams Bot] ❌ Manual fallback also rejected:', replyRes.status, replyBody);
+              }
+            }
+          } catch (manualErr: any) {
+            console.error('[Teams Bot] ❌ Manual fallback exception:', manualErr?.message);
+          }
         }
       } catch (err) {
         console.error('[Teams Bot Logic Error]:', err);
