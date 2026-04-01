@@ -530,7 +530,7 @@ const botConfig: Record<string, string> = {
 };
 
 const credentialsFactory = new ConfigurationServiceClientCredentialFactory(botConfig);
-const botAuthentication = createBotFrameworkAuthenticationFromConfiguration(botConfig, credentialsFactory);
+const botAuthentication = createBotFrameworkAuthenticationFromConfiguration(null, credentialsFactory);
 const adapter = new CloudAdapter(botAuthentication);
 
 // Don't try sendActivity in onTurnError — if outbound auth is broken that also 401s and cascades
@@ -639,7 +639,7 @@ CONTEXT: ${workspaceContext || 'No relevant data found.'}`;
 
               const serviceUrl = context.activity.serviceUrl.replace(/\/?$/, '/');
               const conversationId = context.activity.conversation.id;
-              const replyToId = context.activity.id;
+              const replyToId = context.activity.id || '';
               const replyUrl = `${serviceUrl}v3/conversations/${encodeURIComponent(conversationId)}/activities/${encodeURIComponent(replyToId)}`;
 
               const replyRes = await fetch(replyUrl, {
