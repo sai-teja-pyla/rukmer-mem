@@ -525,9 +525,9 @@ async function callGemini(prompt: string): Promise<string> {
 const credentialsFactory = new ConfigurationServiceClientCredentialFactory({
   MicrosoftAppId: process.env.MS_BOT_ID,
   MicrosoftAppPassword: process.env.MS_BOT_PASSWORD,
-  MicrosoftAppType: 'MultiTenant',
-  // MicrosoftAppTenantId must NOT be set (not even '') for MultiTenant bots.
-  // An empty string breaks the token authority URL and causes 401 on outbound replies.
+  MicrosoftAppType: 'SingleTenant',
+  // Tenant ID confirmed via /api/teams/debug-auth — token issuer is this tenant, not botframework.com
+  MicrosoftAppTenantId: 'd6d49420-f39b-4df7-a1dc-d59a935871db',
 });
 
 const botAuthentication = createBotFrameworkAuthenticationFromConfiguration(null, credentialsFactory);
