@@ -522,10 +522,15 @@ async function callGemini(prompt: string): Promise<string> {
 // --- 6. Routes ---
 
 // ─── Microsoft Teams Bot Setup ─────────────────────────────────────────────
+// App Registration b215cb07 is Single-Tenant (debug-auth confirmed tid = d6d49420...).
+// Azure Bot Resource must also be set to Single-Tenant in Azure Portal:
+//   portal.azure.com → Azure Bot → <your bot> → Configuration → App type = Single Tenant
+//   + set the Tenant ID to your home tenant.
 const credentialsFactory = new ConfigurationServiceClientCredentialFactory({
   MicrosoftAppId: process.env.MS_BOT_ID,
   MicrosoftAppPassword: process.env.MS_BOT_PASSWORD,
-  MicrosoftAppType: 'MultiTenant',
+  MicrosoftAppType: 'SingleTenant',
+  MicrosoftAppTenantId: process.env.MS_BOT_TENANT_ID || 'd6d49420-f39b-4df7-a1dc-d59a935871db',
 });
 
 const botAuthentication = createBotFrameworkAuthenticationFromConfiguration(null, credentialsFactory);
@@ -560,8 +565,9 @@ class RukmerTeamsBot extends ActivityHandler {
         // Identify the user via their Entra ID (Azure AD Object ID)
         const userAadObjectId = context.activity.from.aadObjectId;
 
+        console.log('[Teams Bot] aadObjectId:', userAadObjectId ?? '(null)');
         if (!userAadObjectId) {
-          await context.sendActivity("I couldn't identify your Microsoft account.");
+          try { await context.sendActivity("I couldn't identify your Microsoft account."); } catch { /* 401 ok */ }
           return await next();
         }
 
@@ -569,10 +575,9 @@ class RukmerTeamsBot extends ActivityHandler {
         const usersRef = admin.firestore().collection('userTokens');
         const snapshot = await usersRef.where('microsoft.oid', '==', userAadObjectId).limit(1).get();
 
+        console.log('[Teams Bot] Firestore snapshot empty:', snapshot.empty, '| orgId:', snapshot.empty ? 'N/A' : snapshot.docs[0].id);
         if (snapshot.empty) {
-          await context.sendActivity(
-            "You haven't connected your Microsoft account to Rukmer yet! Please log in at app.rukmer.com first."
-          );
+          try { await context.sendActivity("You haven't connected your Microsoft account to Rukmer yet! Please log in at app.rukmer.com first."); } catch { /* 401 ok */ }
           return await next();
         }
 
