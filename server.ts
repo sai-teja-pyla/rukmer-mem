@@ -25,6 +25,14 @@ import { Pinecone } from '@pinecone-database/pinecone';
 import { ConfidentialClientApplication, InteractionRequiredAuthError, LogLevel } from '@azure/msal-node';
 import { WebClient } from '@slack/web-api';
 
+import { 
+  CloudAdapter, 
+  ConfigurationServiceClientCredentialFactory, 
+  createBotFrameworkAuthenticationFromConfiguration, 
+  ActivityHandler, 
+  MessageFactory 
+} from 'botbuilder';
+
 const pinecone = new Pinecone({ apiKey: process.env.PINECONE_API_KEY! });
 const index = pinecone.index(process.env.PINECONE_INDEX_NAME!);
 
@@ -512,6 +520,92 @@ async function callGemini(prompt: string): Promise<string> {
 }
 
 // --- 6. Routes ---
+
+// ─── Microsoft Teams Bot Setup ─────────────────────────────────────────────
+const credentialsFactory = new ConfigurationServiceClientCredentialFactory({
+  MicrosoftAppId: process.env.MS_BOT_ID,
+  MicrosoftAppPassword: process.env.MS_BOT_PASSWORD,
+  MicrosoftAppType: 'MultiTenant',
+  MicrosoftAppTenantId: ''
+});
+
+const botAuthentication = createBotFrameworkAuthenticationFromConfiguration(null, credentialsFactory);
+const adapter = new CloudAdapter(botAuthentication);
+
+// Catch errors so the bot doesn't crash the whole server
+adapter.onTurnError = async (context, error) => {
+  console.error('[Teams Bot Error]:', error);
+  await context.sendActivity('Oops, my circuits got crossed. Please try again.');
+};
+
+class RukmerTeamsBot extends ActivityHandler {
+  constructor() {
+    super();
+
+    // Fires every time someone types @Rukmer in Teams
+    this.onMessage(async (context, next) => {
+      try {
+        // Teams wraps mentions in HTML — strip the <at>Rukmer</at> tag
+        const cleanPrompt = context.activity.text.replace(/<at>.*?<\/at>/g, '').trim();
+
+        // Show a typing indicator while Rukmer thinks
+        await context.sendActivities([{ type: 'typing' }]);
+
+        // Identify the user via their Entra ID (Azure AD Object ID)
+        const userAadObjectId = context.activity.from.aadObjectId;
+
+        if (!userAadObjectId) {
+          await context.sendActivity("I couldn't identify your Microsoft account.");
+          return await next();
+        }
+
+        // Look up the user in Firestore by their Entra OID
+        const usersRef = admin.firestore().collection('userTokens');
+        const snapshot = await usersRef.where('microsoft.oid', '==', userAadObjectId).limit(1).get();
+
+        if (snapshot.empty) {
+          await context.sendActivity(
+            "You haven't connected your Microsoft account to Rukmer yet! Please log in at app.rukmer.com first."
+          );
+          return await next();
+        }
+
+        const orgId = snapshot.docs[0].id; // The user's Rukmer ID
+
+        // Run the RAG pipeline
+        let workspaceContext = '';
+        try {
+          workspaceContext = await queryWorkspaceData(cleanPrompt, orgId);
+        } catch (e) {
+          console.warn('[Teams Bot] Vector search failed');
+        }
+
+        const systemInstruction = `You are Rukmer AI. Answer the user's question based ONLY on the following workspace context.
+Format your answer for Microsoft Teams (use markdown, bolding, and bullet points).
+CONTEXT: ${workspaceContext || 'No relevant data found.'}`;
+
+        const model = vertexAI.getGenerativeModel({ model: 'gemini-2.5-pro' });
+        const aiResponse = await model.generateContent({
+          contents: [{ role: 'user', parts: [{ text: `SYSTEM: ${systemInstruction}\n\nUSER: ${cleanPrompt}` }] }]
+        });
+
+        const finalReply =
+          aiResponse.response.candidates?.[0]?.content?.parts?.[0]?.text ||
+          "I couldn't process that.";
+
+        await context.sendActivity(MessageFactory.text(finalReply));
+      } catch (err) {
+        console.error('[Teams Bot Logic Error]:', err);
+      }
+
+      await next();
+    });
+  }
+}
+
+const teamsBot = new RukmerTeamsBot();
+// ────────────────────────────────────────────────────────────────────────────
+
 app.get('/', (req: any, res: any): void => {
     res.send(`<div style="font-family:sans-serif;text-align:center;padding:50px;">
         <h1>🚀 Rukmer AI Backend is Live</h1>
@@ -1191,6 +1285,16 @@ app.post('/api/webhooks/slack', async (req: any, res: any) => {
   }
 });
 
+// ─── Microsoft Teams Bot Webhook ──────────────────────────────────────────
+// Azure Bot Service routes every incoming Teams activity here.
+// The endpoint must be registered as the Messaging Endpoint in the Azure Bot resource.
+app.post('/api/teams/messages', async (req: any, res: any) => {
+  await adapter.process(req, res, async (context) => {
+    await teamsBot.run(context);
+  });
+});
+// ────────────────────────────────────────────────────────────────────────────
+
 // 1. Start the Auth Flow for Google (Gmail & Google Drive)
 app.get('/api/auth/google', async (req: any, res: any) => {
   const { userId, type } = req.query; // type will be 'gmail' or 'gdrive'
@@ -1332,10 +1436,12 @@ app.get('/api/auth/microsoft/callback', async (req: any, res: any) => {
     await saveMsalCache(userId, pca);
 
     // Also persist the raw access token + expiry for legacy compatibility
+    const account = result!.account;
     await admin.firestore().collection('userTokens').doc(userId).set({
       microsoft: {
         access_token: result!.accessToken,
         expires_at: result!.expiresOn ? result!.expiresOn.getTime() : Date.now() + 3500_000,
+        oid: account?.localAccountId, // Azure AD Object ID — used by the Teams bot to identify the user
       }
     }, { merge: true });
 
