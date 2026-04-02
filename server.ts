@@ -527,6 +527,7 @@ const botConfig: Record<string, string> = {
   MicrosoftAppId: process.env.MS_BOT_ID || '',
   MicrosoftAppPassword: process.env.MS_BOT_PASSWORD || '',
   MicrosoftAppType: 'MultiTenant',
+  MicrosoftAppTenantId: 'common', // Use 'common' for multi-tenant bots
 };
 
 const credentialsFactory = new ConfigurationServiceClientCredentialFactory(botConfig);
