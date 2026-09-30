@@ -7,7 +7,6 @@ import { collection, query, where, onSnapshot } from 'firebase/firestore';
 // Page Imports
 import LandingPage from './components/LandingPage';
 import Dashboard from './components/Dashboard';
-import SettingsPage from './pages/SettingsPage'; 
 import HelpPage from './pages/HelpPage';
 import DocsPage from './pages/DocsPage';
 import LoginPage from './pages/LoginPage';
@@ -15,6 +14,25 @@ import SignupPage from './pages/SignupPage';
 import PrivacyPage from './pages/PrivacyPage';
 import TermsPage from './pages/TermsPage'; 
 import SubscriptionPage from './pages/SubscriptionPage';
+import ConsoleLayout from './components/console/ConsoleLayout';
+import OverviewPage from './pages/console/OverviewPage';
+import PlaygroundPage from './pages/console/PlaygroundPage';
+import ContainerTagsPage from './pages/console/ContainerTagsPage';
+import MemoryGraphPage from './pages/console/MemoryGraphPage';
+import ConnectorsPage from './pages/console/ConnectorsPage';
+import ImportPage from './pages/console/ImportPage';
+import ApiKeysPage from './pages/console/ApiKeysPage';
+import AgentsMcpPage from './pages/console/AgentsMcpPage';
+import RequestsPage from './pages/console/RequestsPage';
+import UserInsightsPage from './pages/console/UserInsightsPage';
+import {
+  GeneralSettingsPage,
+  TeamSettingsPage,
+  BillingSettingsPage,
+  UsageSettingsPage,
+  AdvancedSettingsPage,
+  AccountSettingsPage,
+} from './pages/console/settingsPages';
 import { initAnalytics } from './hooks/analytics';
 
 // 1. IMPORT YOUR TYPES CORRECTLY
@@ -105,26 +123,43 @@ export default function App() {
     <UserSettingsProvider>
     <BrowserRouter>
       <Routes>
-        <Route path="/" element={!user ? <LandingPage onLoginSuccess={handleLoginSuccess} /> : <Navigate to="/dashboard" replace />} />
-        <Route path="/login" element={!user ? <LoginPage /> : <Navigate to="/dashboard" replace />} />
-        <Route path="/signup" element={!user ? <SignupPage /> : <Navigate to="/dashboard" replace />} />
+        <Route path="/" element={<Navigate to="/overview" replace />} />
+        <Route path="/welcome" element={!user ? <LandingPage onLoginSuccess={handleLoginSuccess} /> : <Navigate to="/overview" replace />} />
+        <Route path="/login" element={!user ? <LoginPage /> : <Navigate to="/overview" replace />} />
+        <Route path="/signup" element={!user ? <SignupPage /> : <Navigate to="/overview" replace />} />
         <Route path="/privacy" element={<PrivacyPage />} />
         <Route path="/terms" element={<TermsPage />} />
 
-        {/* Passing typed user to components */}
-        <Route 
-          path="/dashboard/:chatId?" 
-          element={user ? <Dashboard user={user} isPro={isPro} /> : <Navigate to="/" replace />} 
-        />
-        <Route 
-          path="/settings" 
-          element={user ? <SettingsPage /> : <Navigate to="/" replace />} 
+        <Route element={<ConsoleLayout user={user ?? { uid: '', email: '', name: 'Guest' }} />}>
+          <Route path="/overview" element={<OverviewPage />} />
+          <Route path="/playground" element={<PlaygroundPage />} />
+          <Route path="/container-tags" element={<ContainerTagsPage />} />
+          <Route path="/memory-graph" element={<MemoryGraphPage />} />
+          <Route path="/connectors" element={<ConnectorsPage />} />
+          <Route path="/import" element={<ImportPage />} />
+          <Route path="/api-keys" element={<ApiKeysPage />} />
+          <Route path="/agents-mcp" element={<AgentsMcpPage />} />
+          <Route path="/requests" element={<RequestsPage />} />
+          <Route path="/insights" element={<UserInsightsPage />} />
+          <Route path="/settings" element={<Navigate to="/settings/general" replace />} />
+          <Route path="/settings/general" element={<GeneralSettingsPage />} />
+          <Route path="/settings/team" element={<TeamSettingsPage />} />
+          <Route path="/settings/billing" element={<BillingSettingsPage />} />
+          <Route path="/settings/usage" element={<UsageSettingsPage />} />
+          <Route path="/settings/advanced" element={<AdvancedSettingsPage />} />
+          <Route path="/settings/account" element={<AccountSettingsPage />} />
+        </Route>
+
+        <Route path="/dashboard" element={<Navigate to="/overview" replace />} />
+        <Route
+          path="/dashboard/:chatId"
+          element={user ? <Dashboard user={user} isPro={isPro} /> : <Navigate to="/" replace />}
         />
         <Route path="/help" element={user ? <HelpPage /> : <Navigate to="/" replace />} />
         <Route path="/docs" element={user ? <DocsPage /> : <Navigate to="/" replace />} />
-        <Route 
-          path="/subscription" 
-          element={user ? <SubscriptionPage user={user} isPro={isPro} /> : <Navigate to="/" replace />} 
+        <Route
+          path="/subscription"
+          element={user ? <SubscriptionPage user={user} isPro={isPro} /> : <Navigate to="/" replace />}
         />
 
         <Route path="*" element={<Navigate to="/" replace />} />

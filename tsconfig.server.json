@@ -13,5 +13,5 @@
     "lib": ["ES2020"],
     "types": ["node"]
   },
-  "include": ["server.ts", "ingestionService.ts", "backend/**/*.ts"]
+  "include": ["server.ts", "ingestionService.ts", "backend/**/*.ts", "engine/**/*.ts"]
 }

@@ -21,7 +21,7 @@ export default function LoginPage() {
     setLoading(true);
     try {
       await signInWithEmailAndPassword(auth, email, password);
-      navigate('/dashboard'); 
+      navigate('/overview'); 
     } catch (err) {
       setError("Failed to sign in. Check your email/password.");
     } finally {
@@ -33,7 +33,7 @@ export default function LoginPage() {
     try {
       const provider = new GoogleAuthProvider();
       await signInWithPopup(auth, provider);
-      navigate('/dashboard'); 
+      navigate('/overview'); 
     } catch (err) {
       setError("Google sign-in failed.");
     }

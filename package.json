@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "start": "tsx server.ts",
+    "engine": "tsx engine/server.ts",
     "server": "nodemon --exec tsx server.ts",
     "dev": "vite",
     "build": "vite build",
@@ -37,6 +38,7 @@
     "jwt-decode": "^4.0.0",
     "lucide-react": "^0.563.0",
     "mongoose": "^9.1.6",
+    "pdf-parse": "^2.4.5",
     "pg": "^8.18.0",
     "react": "^19.2.4",
     "react-dom": "^19.2.4",
