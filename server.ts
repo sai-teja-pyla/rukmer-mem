@@ -21,6 +21,7 @@ import { sendWelcomeEmail } from './src/utils/mailer.js';
 import fs from 'fs';
 import admin from 'firebase-admin'; // 🚨 The Security Bouncer
 import { learnWorkspaceData, queryWorkspaceData, clearNamespace, fetchTeamsMessages } from './ingestionService.js';
+import { bootMemoryEngine, mountMemoryEngine } from './engine/routes.js';
 import { Pinecone } from '@pinecone-database/pinecone';
 import { ConfidentialClientApplication, InteractionRequiredAuthError, LogLevel } from '@azure/msal-node';
 import { WebClient } from '@slack/web-api';
@@ -441,8 +442,9 @@ app.use((req: any, res: any, next: any): void => {
 });
 
 
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+app.use(express.json({ limit: '40mb' }));
+app.use(express.urlencoded({ extended: true, limit: '40mb' }));
+mountMemoryEngine(app);
 
 // --- 5. The Production Auth Middleware ---
 const authenticateUser = async (req: any, res: any, next: any): Promise<void> => {
@@ -1759,13 +1761,21 @@ app.get('/api/debug/pinecone-check', async (req: any, res: any) => {
 
 
 app.get('/{*any}', (req: any, res: any): void => {
-    if (req.path.startsWith('/api')) return res.status(404).json({ error: 'API route not found' });
+    if (req.path.startsWith('/api') || req.path.startsWith('/v3') || req.path.startsWith('/v4') || req.path.startsWith('/v1') || req.path.startsWith('/mcp') || req.path === '/health') {
+      return res.status(404).json({ error: 'API route not found' });
+    }
     res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
     res.sendFile(path.join(__dirname, 'dist', 'index.html'));
 });
 
 // --- 7. Start Server ---
-app.listen(PORT, '0.0.0.0', () => {
+app.listen(PORT, '0.0.0.0', async () => {
+    try {
+      const mem = await bootMemoryEngine();
+      console.log(`🧠 Memory engine mounted docs=${mem.documents} chunks=${mem.chunks} llm=${mem.llm}`);
+    } catch (err: any) {
+      console.error('Memory engine boot failed', err?.message || err);
+    }
     console.log(`🚀 Rukmer Backend on port ${PORT}`);
     pool.query("SELECT 1")
         .then(async () => {

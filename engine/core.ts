@@ -42,6 +42,11 @@ export interface TripleRec {
   predicate: string;
   object: string;
   evidence: string;
+  isLatest: boolean;
+  derived: boolean;
+  validFrom: string;
+  validTo: string | null;
+  kind: 'update' | 'extend' | 'derive' | 'assert';
 }
 
 export interface ApiKeyRec {
@@ -73,7 +78,7 @@ export interface EngineState {
   jobs: { id: string; status: string; message: string; at: string }[];
 }
 
-const DATA_DIR = path.join(process.cwd(), '.rukmer-data');
+const DATA_DIR = process.env.K_SERVICE ? path.join('/tmp', 'rukmer-data') : path.join(process.cwd(), '.rukmer-data');
 const DATA_FILE = path.join(DATA_DIR, 'engine.json');
 
 function empty(): EngineState {
@@ -81,8 +86,40 @@ function empty(): EngineState {
 }
 
 let state: EngineState = empty();
+let gcsTimer: ReturnType<typeof setTimeout> | null = null;
 
-export function loadState() {
+function gcsTarget() {
+  const bucket = process.env.MEMORY_GCS_BUCKET || (process.env.K_SERVICE ? 'rukmer-saas-data' : '');
+  const object = process.env.MEMORY_GCS_OBJECT || 'engine/engine.json';
+  return bucket ? { bucket, object } : null;
+}
+
+async function pullGcs() {
+  const target = gcsTarget();
+  if (!target) return;
+  try {
+    const { Storage } = await import('@google-cloud/storage');
+    const [buf] = await new Storage().bucket(target.bucket).file(target.object).download();
+    state = { ...empty(), ...JSON.parse(buf.toString('utf8')) };
+  } catch {
+    /* first run or no object yet */
+  }
+}
+
+async function pushGcs() {
+  const target = gcsTarget();
+  if (!target) return;
+  try {
+    const { Storage } = await import('@google-cloud/storage');
+    await new Storage().bucket(target.bucket).file(target.object).save(JSON.stringify(state), {
+      contentType: 'application/json',
+    });
+  } catch (err) {
+    console.warn('memory gcs save skipped', (err as Error).message);
+  }
+}
+
+export async function loadState() {
   try {
     if (fs.existsSync(DATA_FILE)) {
       state = { ...empty(), ...JSON.parse(fs.readFileSync(DATA_FILE, 'utf8')) };
@@ -90,13 +127,23 @@ export function loadState() {
   } catch {
     state = empty();
   }
+  await pullGcs();
+  state.triples = (state.triples || []).map(normalizeTriple);
 }
 
 export function saveState() {
-  fs.mkdirSync(DATA_DIR, { recursive: true });
-  const tmp = DATA_FILE + '.tmp';
-  fs.writeFileSync(tmp, JSON.stringify(state));
-  fs.renameSync(tmp, DATA_FILE);
+  try {
+    fs.mkdirSync(DATA_DIR, { recursive: true });
+    const tmp = DATA_FILE + '.tmp';
+    fs.writeFileSync(tmp, JSON.stringify(state));
+    fs.renameSync(tmp, DATA_FILE);
+  } catch {
+    /* Cloud Run disk can be read-only besides /tmp */
+  }
+  if (gcsTimer) clearTimeout(gcsTimer);
+  gcsTimer = setTimeout(() => {
+    void pushGcs();
+  }, 250);
 }
 
 export function getState() {
@@ -119,32 +166,43 @@ export function tokenize(text: string): string[] {
     .filter((t) => t.length > 1);
 }
 
-export function chunkText(text: string, size = 420, overlap = 70): string[] {
+export function normalizeTriple(
+  t: Partial<TripleRec> & Pick<TripleRec, 'id' | 'containerTag' | 'subject' | 'predicate' | 'object' | 'evidence'>
+): TripleRec {
+  const now = t.validFrom || new Date().toISOString();
+  return {
+    id: t.id,
+    containerTag: t.containerTag,
+    subject: t.subject,
+    predicate: t.predicate,
+    object: t.object,
+    evidence: t.evidence,
+    isLatest: t.isLatest !== false,
+    derived: !!t.derived,
+    validFrom: now,
+    validTo: t.validTo ?? null,
+    kind: t.kind || (t.derived ? 'derive' : 'assert'),
+  };
+}
+
+export function chunkText(text: string, size = 480, overlap = 90): string[] {
   const clean = text.replace(/\r/g, '').trim();
   if (!clean) return [];
-  const paras = clean.split(/\n{2,}/);
-  const windows: string[] = [];
-  let buf = '';
-  for (const p of paras) {
-    if ((buf + '\n\n' + p).length > size && buf) {
-      windows.push(buf.trim());
-      const words = buf.split(/\s+/);
-      buf = words.slice(Math.max(0, words.length - Math.floor(overlap / 5))).join(' ') + '\n\n' + p;
-    } else {
-      buf = buf ? buf + '\n\n' + p : p;
-    }
-  }
-  if (buf.trim()) windows.push(buf.trim());
-
+  const sentences = clean
+    .split(/(?<=[.!?])\s+|\n{2,}/)
+    .map((s) => s.trim())
+    .filter(Boolean);
   const out: string[] = [];
-  for (const w of windows) {
-    if (w.length <= size * 1.4) out.push(w);
-    else {
-      for (let i = 0; i < w.length; i += size - overlap) {
-        out.push(w.slice(i, i + size).trim());
-      }
+  let buf = '';
+  for (const s of sentences) {
+    if ((buf + ' ' + s).length > size && buf) {
+      out.push(buf.trim());
+      buf = buf.slice(Math.max(0, buf.length - overlap)) + ' ' + s;
+    } else {
+      buf = buf ? `${buf} ${s}` : s;
     }
   }
+  if (buf.trim()) out.push(buf.trim());
   return out.filter(Boolean);
 }
 

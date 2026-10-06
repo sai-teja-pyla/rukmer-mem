@@ -177,18 +177,23 @@ export default function ConsoleLayout({ user }: ConsoleLayoutProps) {
             {menuOpen && (
               <div className="absolute bottom-10 left-0 right-0 rounded-lg border border-white/[0.08] bg-[#161618] shadow-xl p-1 z-20">
                 <button
+                  type="button"
                   onClick={() => {
                     setMenuOpen(false);
-                    navigate('/login');
+                    navigate('/settings/account');
                   }}
                   className="w-full text-left px-2.5 py-1.5 text-[12px] text-zinc-300 rounded-md hover:bg-white/[0.06]"
                 >
-                  Sign in
+                  Account
                 </button>
                 <button
-                  onClick={async () => {
-                    await signOut(auth);
-                    navigate('/');
+                  type="button"
+                  onClick={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    setMenuOpen(false);
+                    void signOut(auth);
+                    window.location.assign('/login');
                   }}
                   className="w-full text-left px-2.5 py-1.5 text-[12px] text-zinc-300 rounded-md hover:bg-white/[0.06]"
                 >

@@ -16,7 +16,10 @@ import {
   type DocRec,
 } from './core.js';
 import { embedQuery, embedText, extractGraph, generateText, hasLlm, llmRerank } from './llm.js';
+import { deriveFacts, upsertFacts } from './facts.js';
 import { looksLikePdf, textFromPdf, textFromPdfBase64 } from './pdf.js';
+import { looksLikeDurableFact, isUsefulFact } from './quality.js';
+import { buildMemoryInjection } from './inject.js';
 
 export type SearchOpts = {
   containerTag?: string | null;
@@ -90,17 +93,8 @@ export async function ingestDocument(input: {
       if (state.entities.some((x) => x.containerTag === tag && x.name.toLowerCase() === name.toLowerCase())) continue;
       state.entities.push({ id: uid('ent'), containerTag: tag, name, type: e.type || 'topic' });
     }
-    for (const t of graph.triples || []) {
-      if (!t.subject || !t.object) continue;
-      state.triples.push({
-        id: uid('trp'),
-        containerTag: tag,
-        subject: String(t.subject),
-        predicate: String(t.predicate || 'related_to'),
-        object: String(t.object),
-        evidence: text.slice(0, 240),
-      });
-    }
+    upsertFacts(tag, graph.triples || [], text.slice(0, 240));
+    deriveFacts(tag);
   }
 
   state.jobs.push({
@@ -223,9 +217,14 @@ export async function searchMemory(query: string, opts: SearchOpts = {}) {
 
   const related = opts.includeRelated
     ? getState()
-        .triples.filter((t) => !opts.containerTag || t.containerTag === opts.containerTag)
-        .slice(0, 8)
-        .map((t) => ({ subject: t.subject, predicate: t.predicate, object: t.object }))
+        .triples.filter(
+          (t) =>
+            (!opts.containerTag || t.containerTag === opts.containerTag) &&
+            t.isLatest !== false &&
+            isUsefulFact(t)
+        )
+        .slice(0, 6)
+        .map((t) => ({ subject: t.subject, predicate: t.predicate, object: t.object, isLatest: t.isLatest, derived: t.derived }))
     : [];
 
   return {
@@ -239,27 +238,82 @@ export async function searchMemory(query: string, opts: SearchOpts = {}) {
   };
 }
 
-export async function chatWithMemory(query: string, opts: SearchOpts = {}) {
-  const retrieved = await searchMemory(query, { ...opts, topK: opts.topK ?? 8 });
-  const context = retrieved.matches.map((m, i) => `[${i + 1}] (${m.title}) ${m.text}`).join('\n\n');
-  const profile = getState()
-    .triples.filter((t) => (!opts.containerTag || t.containerTag === opts.containerTag) && /prefer|like|is|works/i.test(t.predicate))
-    .slice(0, 12)
-    .map((t) => `${t.subject} ${t.predicate} ${t.object}`)
+export type ChatTurn = { role: 'user' | 'assistant' | 'system'; content: string };
+
+export async function rememberTranscript(input: {
+  containerTag?: string;
+  source?: string;
+  title?: string;
+  messages: { role?: string; content?: string; text?: string }[];
+}) {
+  const tag = input.containerTag || 'rukmer-workspace';
+  const userText = (input.messages || [])
+    .filter((m) => String(m.role || 'user') === 'user')
+    .map((m) => String(m.content || m.text || '').trim())
+    .filter(Boolean)
+    .join('\n');
+  const lines = (input.messages || [])
+    .map((m) => {
+      const role = String(m.role || 'user');
+      const text = String(m.content || m.text || '').trim();
+      return text ? `${role}: ${text}` : '';
+    })
+    .filter(Boolean);
+  if (!lines.length) throw new Error('No messages to remember');
+  if (!looksLikeDurableFact(userText)) {
+    return { skipped: true, reason: 'not-durable', chunks: 0, document: null };
+  }
+  return ingestDocument({
+    title: input.title || `Fact ${new Date().toISOString().slice(0, 16).replace('T', ' ')}`,
+    text: userText,
+    containerTag: tag,
+    source: input.source || 'conversation',
+    mime: 'text/plain',
+    task: 'memory',
+  });
+}
+
+export async function chatWithMemory(
+  query: string,
+  opts: SearchOpts & { history?: ChatTurn[]; remember?: boolean; source?: string } = {}
+) {
+  const tag = opts.containerTag || 'rukmer-workspace';
+  const mem = await buildMemoryInjection(query, tag, { ...opts, topK: opts.topK ?? 8 });
+  const retrieved = mem.retrieved;
+  const history = (opts.history || [])
+    .slice(-12)
+    .map((m) => `${m.role}: ${m.content}`)
     .join('\n');
 
   let answer: string;
-  if (!retrieved.matches.length) {
-    answer = "I don't have memories for this yet. Import documents in the Import tab, then ask again.";
-  } else if (!hasLlm()) {
+  if (hasLlm()) {
+    try {
+      answer = await generateText(
+        `${mem.injection}\n\nConversation so far:\n${history || '(new thread)'}\n\nLatest user message: ${query}`,
+        mem.system
+      );
+    } catch (e: any) {
+      answer = retrieved.matches.length
+        ? `Model call failed (${e.message}). From memory:\n\n${retrieved.matches.map((m) => `• ${m.text.slice(0, 280)}`).join('\n\n')}`
+        : `I couldn't reach Gemini (${e.message}).`;
+    }
+  } else if (retrieved.matches.length) {
     answer = `Here's what I found in memory:\n\n${retrieved.matches.map((m) => `• ${m.text.slice(0, 280)}`).join('\n\n')}`;
   } else {
-    answer = await generateText(
-      `User question: ${query}\n\nProfile facts:\n${profile || '(none)'}\n\nRetrieved memories:\n${context}\n\nAnswer using only this memory. If unknown, say so. Cite titles in parentheses.`,
-      'You are Rukmer Memory, a precise workplace memory assistant.'
-    );
+    answer = 'The memory engine is up, but no LLM key is configured yet, so I can only search stored text. Add GEMINI_API_KEY or import documents.';
   }
-  return { answer, retrieved };
+
+  if (opts.remember !== false && query.trim()) {
+    void rememberTranscript({
+      containerTag: tag,
+      source: opts.source || 'playground',
+      messages: [
+        { role: 'user', content: query },
+        { role: 'assistant', content: answer },
+      ],
+    }).catch(() => undefined);
+  }
+  return { answer, retrieved, injection: mem.injection, graph: graphPayload(tag) };
 }
 
 export function listTags() {
@@ -283,20 +337,61 @@ export function listDocuments(containerTag?: string | null) {
 
 export function graphPayload(containerTag?: string | null) {
   const state = getState();
-  const entities = state.entities.filter((e) => !containerTag || e.containerTag === containerTag);
-  const triples = state.triples.filter((t) => !containerTag || t.containerTag === containerTag);
-  const docs = state.documents.filter((d) => !containerTag || d.containerTag === containerTag);
+  const triples = state.triples.filter((t) => (!containerTag || t.containerTag === containerTag) && isUsefulFact(t));
+  const keep = new Set(triples.flatMap((t) => [t.subject.toLowerCase(), t.object.toLowerCase()]));
+  const entities = state.entities.filter(
+    (e) => (!containerTag || e.containerTag === containerTag) && keep.has(e.name.toLowerCase())
+  );
+  const docs = state.documents.filter(
+    (d) =>
+      (!containerTag || d.containerTag === containerTag) &&
+      !d.forgotten &&
+      d.source !== 'conversation' &&
+      !/^Conversation /i.test(d.title)
+  );
+
+  const byName = new Map<string, string>();
+  for (const e of entities) {
+    const key = e.name.trim().toLowerCase();
+    if (key && !byName.has(key)) byName.set(key, e.id);
+  }
+
+  const extraNodes: { id: string; label: string; kind: 'memory'; type: string }[] = [];
+  const nodeIdFor = (name: string) => {
+    const key = String(name || '').trim().toLowerCase();
+    if (!key) return '';
+    if (byName.has(key)) return byName.get(key)!;
+    const id = `lit_${sha(key).slice(0, 12)}`;
+    byName.set(key, id);
+    extraNodes.push({ id, label: name, kind: 'memory', type: 'mention' });
+    return id;
+  };
+
+  const edges = triples
+    .map((t) => {
+      const source = nodeIdFor(t.subject);
+      const target = nodeIdFor(t.object);
+      if (!source || !target || source === target) return null;
+      return { id: t.id, source, target, label: t.predicate, isLatest: t.isLatest !== false, derived: !!t.derived };
+    })
+    .filter(Boolean) as { id: string; source: string; target: string; label: string }[];
+
+  for (const doc of docs.slice(0, 12)) {
+    const hay = `${doc.title}\n${doc.text}`.toLowerCase();
+    for (const e of entities) {
+      if (e.name.length > 3 && hay.includes(e.name.toLowerCase())) {
+        edges.push({ id: `docent_${doc.id}_${e.id}`, source: doc.id, target: e.id, label: 'mentions', isLatest: true, derived: false });
+      }
+    }
+  }
+
   return {
     nodes: [
       ...docs.map((d) => ({ id: d.id, label: d.title, kind: 'document' as const })),
       ...entities.map((e) => ({ id: e.id, label: e.name, kind: 'memory' as const, type: e.type })),
+      ...extraNodes,
     ],
-    edges: triples.map((t) => ({
-      id: t.id,
-      source: t.subject,
-      target: t.object,
-      label: t.predicate,
-    })),
+    edges,
     pathExample: triples[0] ? shortestPath(triples, triples[0].subject, triples[0].object, triples[0].containerTag) : null,
   };
 }
@@ -330,6 +425,7 @@ export function stats() {
     chunks: s.chunks.filter((c) => !c.forgotten).length,
     entities: s.entities.length,
     triples: s.triples.length,
+    latestFacts: s.triples.filter((t) => t.isLatest !== false).length,
     embeddings: s.chunks.filter((c) => c.embedding.length).length,
     requests: s.requests.length,
     llm: hasLlm(),

@@ -6,6 +6,7 @@
   "scripts": {
     "start": "tsx server.ts",
     "engine": "tsx engine/server.ts",
+    "durability": "tsx engine/durability-test.ts",
     "server": "nodemon --exec tsx server.ts",
     "dev": "vite",
     "build": "vite build",

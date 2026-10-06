@@ -1,8 +1,11 @@
 import React, { useState } from 'react';
 import { Link, useOutletContext } from 'react-router-dom';
-import { Plus, Shield, Mail, Monitor, Lock, RotateCcw, Trash2, Download } from 'lucide-react';
+import { Plus, Shield, Mail, Monitor, Lock, RotateCcw, Trash2, Download, LogOut } from 'lucide-react';
 import { PageHeader, DocLink, Panel, Row, Toggle, PrimaryButton, GhostButton, CopyField } from '../../components/console/ui';
 import type { UserProfile } from '../../types';
+import { loadProviderKeys, saveProviderKeys, type ProviderKeys } from '../../services/providerKeys';
+import { auth } from '../../firebase';
+import { signOut } from 'firebase/auth';
 
 type Ctx = { user: UserProfile; displayName: string };
 
@@ -254,9 +257,46 @@ export function UsageSettingsPage() {
 }
 
 export function AdvancedSettingsPage() {
+  const [keys, setKeys] = useState<ProviderKeys>(() => loadProviderKeys());
+  const [saved, setSaved] = useState(false);
   return (
     <div className="max-w-[920px]">
-      <PageHeader title="Advanced" subtitle="Export your data, reset the org, or delete it." />
+      <PageHeader title="Advanced" subtitle="LLM provider keys, export, or reset the org." />
+      <Panel className="mb-3">
+        <div className="px-4 py-3 text-[13.5px] text-zinc-200">Give Rukmer a brain for your models</div>
+        <p className="px-4 pb-2 text-[12px] text-zinc-500">
+          Optional, for builders. Everyday users connect Claude / ChatGPT / Gemini / Grok under Connectors (MCP). Playground can use the hosted Gemini key.
+        </p>
+        {(
+          [
+            ['gemini', 'Gemini'],
+            ['openai', 'OpenAI / ChatGPT'],
+            ['anthropic', 'Claude'],
+            ['grok', 'Grok / xAI'],
+          ] as const
+        ).map(([id, label]) => (
+          <Row key={id} label={label} hint={id === 'gemini' ? 'Optional if GEMINI_API_KEY is on the server.' : `Required to chat as ${label}.`}>
+            <input
+              type="password"
+              value={keys[id]}
+              onChange={(e) => setKeys((p) => ({ ...p, [id]: e.target.value }))}
+              className="h-8 w-64 px-2.5 rounded-lg border border-white/[0.08] bg-[#0c0c0e] text-[12px] outline-none"
+              placeholder="API key"
+            />
+          </Row>
+        ))}
+        <div className="px-4 py-3 flex justify-end">
+          <PrimaryButton
+            onClick={() => {
+              saveProviderKeys(keys);
+              setSaved(true);
+              setTimeout(() => setSaved(false), 1200);
+            }}
+          >
+            {saved ? 'Saved' : 'Save keys'}
+          </PrimaryButton>
+        </div>
+      </Panel>
       <Panel className="mb-3">
         <Row label="Export organization data" hint="Documents and memories with their container tags, as JSON. Emailed as a link, valid for 6 hours.">
           <GhostButton>
@@ -295,6 +335,7 @@ export function AdvancedSettingsPage() {
 
 export function AccountSettingsPage() {
   const { user, displayName } = useOutletContext<Ctx>();
+  const [signingOut, setSigningOut] = useState(false);
   return (
     <div className="max-w-[920px]">
       <PageHeader title="Account" subtitle="Your profile, sessions, and organization memberships." />
@@ -355,7 +396,7 @@ export function AccountSettingsPage() {
           <span className="text-[11px] tracking-[0.1em] text-zinc-500">OWNER · 1 member</span>
         </div>
       </Panel>
-      <Panel>
+      <Panel className="mb-3">
         <div className="flex items-center justify-between px-4 py-4 gap-4">
           <div>
             <p className="text-[13.5px] text-zinc-200">Export your data</p>
@@ -366,6 +407,26 @@ export function AccountSettingsPage() {
           <GhostButton>
             <Mail size={14} /> Email me my data
           </GhostButton>
+        </div>
+      </Panel>
+      <Panel>
+        <div className="flex items-center justify-between px-4 py-4 gap-4">
+          <div>
+            <p className="text-[13.5px] text-zinc-200">Sign out</p>
+            <p className="text-[12px] text-zinc-500 max-w-md">End this browser session and return to login.</p>
+          </div>
+          <button
+            type="button"
+            disabled={signingOut}
+            onClick={() => {
+              setSigningOut(true);
+              void signOut(auth);
+              window.location.assign('/login');
+            }}
+            className="h-8 px-3 rounded-lg border border-white/[0.1] text-[13px] text-zinc-300 inline-flex items-center gap-1.5"
+          >
+            <LogOut size={13} /> {signingOut ? 'Signing out…' : 'Sign out'}
+          </button>
         </div>
       </Panel>
     </div>

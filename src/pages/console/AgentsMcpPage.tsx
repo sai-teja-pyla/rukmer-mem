@@ -1,6 +1,8 @@
 import React, { useState } from 'react';
+import { Link } from 'react-router-dom';
 import { Bot, Copy, Check } from 'lucide-react';
 import { PageHeader, DocLink, Panel, EmptyState, TableHead, PrimaryButton, Toggle } from '../../components/console/ui';
+import { mcpUrl as liveMcpUrl } from '../../services/aiConnectors';
 
 const EDITORS = ['Claude Code', 'Cursor', 'Codex', 'OpenCode', 'Muse Code', 'AmpCode', 'OpenClaw', 'Hermes'];
 
@@ -20,7 +22,7 @@ export default function AgentsMcpPage() {
   };
 
   const pluginCmd = 'npx rukmer plugin';
-  const mcpUrl = 'https://mcp.rukmer.com/mcp';
+  const mcpUrl = liveMcpUrl();
   const cli = 'npm i -g rukmer && rukmer login';
 
   return (
@@ -29,10 +31,21 @@ export default function AgentsMcpPage() {
         title="Agents"
         subtitle={
           <>
-            Connect the tools you code with, or build memory into your own product. <DocLink>How agents connect ↗</DocLink>
+            Coding agents (Cursor, Claude Code) live here. For Claude, ChatGPT, Gemini, and Grok as chat apps, use Connectors — MCP, no API keys.{' '}
+            <DocLink>How agents connect ↗</DocLink>
           </>
         }
       />
+
+      <Panel className="mb-6 p-4 flex items-center justify-between gap-4">
+        <div>
+          <p className="text-[13.5px] text-zinc-200">Using Claude, ChatGPT, Gemini, or Grok as a person?</p>
+          <p className="text-[12.5px] text-zinc-500">Connect those apps with MCP. No provider API keys, and they still cannot export old chats.</p>
+        </div>
+        <Link to="/connectors" className="h-8 px-3 rounded-lg bg-[#2563eb] text-[13px] text-white inline-flex items-center">
+          Open Connectors
+        </Link>
+      </Panel>
 
       <p className="text-[14px] font-medium text-zinc-200 mb-2">Connected</p>
       <Panel className="mb-8">
@@ -118,6 +131,50 @@ export default function AgentsMcpPage() {
             {copied === 'cli' ? 'Copied' : cli}
           </button>
         </div>
+      </Panel>
+
+      <p className="text-[14px] font-medium text-zinc-200 mt-6">How data is processed</p>
+      <p className="text-[13px] text-zinc-500 mb-3">
+        Rukmer stores memory. Gemini, GPT, Claude, and Grok only see a retrieved prompt. They do not keep your graph.
+      </p>
+      <Panel className="mb-3 p-4 space-y-2 text-[13px] text-zinc-400">
+        <p>
+          <span className="text-zinc-200">Stored:</span> chunks with embeddings, BM25 index, and durable facts
+          (prefers, works_at, lives_in) scoped by containerTag.
+        </p>
+        <p>
+          <span className="text-zinc-200">Not stored as memory:</span> provider account history, model weights, or
+          throwaway chat questions.
+        </p>
+        <p>
+          <span className="text-zinc-200">Flow:</span> ingest → extract facts → hybrid retrieve → inject into the
+          system prompt → generate with the chosen model → commit new durable facts.
+        </p>
+        <p className="font-mono text-[12px] text-zinc-500">GET /v4/protocol</p>
+      </Panel>
+
+      <p className="text-[14px] font-medium text-zinc-200 mt-6">Memory router</p>
+      <p className="text-[13px] text-zinc-500 mb-3">
+        For products you build: one OpenAI-style URL. Everyday chat in Claude / ChatGPT / Gemini / Grok should use the MCP connector, not these keys.
+      </p>
+      <Panel className="mb-3 p-4">
+        <pre className="text-[11px] leading-relaxed text-zinc-400 font-mono whitespace-pre-wrap">{`# One URL — change model + key
+curl https://app.rukmer.com/v1/chat/completions \\
+  -H "x-container-tag: rukmer-workspace" \\
+  -H "x-rukmer-memory: on" \\
+  -H "Content-Type: application/json" \\
+  -H "x-gemini-key: $GEMINI_API_KEY" \\
+  -d '{"model":"gemini-3.8-flash","messages":[{"role":"user","content":"What do you know about me?"}]}'
+
+# GPT:    x-openai-key + model gpt-4o-mini
+# Claude: x-anthropic-key + model claude-sonnet-4-5
+# Grok:   x-grok-key + model grok-3-mini
+# Cursor / OpenAI SDK: baseURL https://app.rukmer.com/v1
+
+GET  /v1/models
+GET  /v4/tools
+POST /v4/tools/execute  {"name":"searchMemories","arguments":{"query":"...","containerTag":"rukmer-workspace"}}
+POST /v4/inject         {"query":"...","containerTag":"rukmer-workspace"}`}</pre>
       </Panel>
 
       <p className="text-[14px] font-medium text-zinc-200 mt-6">In your product</p>

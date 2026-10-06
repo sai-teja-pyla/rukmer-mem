@@ -12,12 +12,27 @@ export default defineConfig({
         changeOrigin: true,
         secure: false,
       },
+      '/health': {
+        target: 'http://localhost:5001',
+        changeOrigin: true,
+        secure: false,
+      },
       '/v3': {
         target: 'http://localhost:5001',
         changeOrigin: true,
         secure: false,
       },
       '/v4': {
+        target: 'http://localhost:5001',
+        changeOrigin: true,
+        secure: false,
+      },
+      '/v1': {
+        target: 'http://localhost:5001',
+        changeOrigin: true,
+        secure: false,
+      },
+      '/mcp': {
         target: 'http://localhost:5001',
         changeOrigin: true,
         secure: false,

@@ -123,14 +123,14 @@ export default function App() {
     <UserSettingsProvider>
     <BrowserRouter>
       <Routes>
-        <Route path="/" element={<Navigate to="/overview" replace />} />
+        <Route path="/" element={<Navigate to={user ? '/overview' : '/login'} replace />} />
         <Route path="/welcome" element={!user ? <LandingPage onLoginSuccess={handleLoginSuccess} /> : <Navigate to="/overview" replace />} />
         <Route path="/login" element={!user ? <LoginPage /> : <Navigate to="/overview" replace />} />
         <Route path="/signup" element={!user ? <SignupPage /> : <Navigate to="/overview" replace />} />
         <Route path="/privacy" element={<PrivacyPage />} />
         <Route path="/terms" element={<TermsPage />} />
 
-        <Route element={<ConsoleLayout user={user ?? { uid: '', email: '', name: 'Guest' }} />}>
+        <Route element={user ? <ConsoleLayout user={user} /> : <Navigate to="/login" replace />}>
           <Route path="/overview" element={<OverviewPage />} />
           <Route path="/playground" element={<PlaygroundPage />} />
           <Route path="/container-tags" element={<ContainerTagsPage />} />

@@ -1,3 +1,5 @@
+import { sanitiseGraph } from './quality.js';
+
 function geminiKey() {
   return process.env.GEMINI_API_KEY || process.env.VITE_GEMINI_API_KEY || '';
 }
@@ -71,7 +73,7 @@ export async function generateText(prompt: string, system?: string): Promise<str
   if (!geminiKey()) {
     return prompt.slice(0, 200);
   }
-  const models = ['gemini-2.0-flash', 'gemini-2.5-flash', 'gemini-2.0-flash-lite'];
+  const models = ['gemini-3.8-flash', 'gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-flash-latest'];
   let last = '';
   for (const model of models) {
     try {
@@ -91,31 +93,41 @@ export async function generateText(prompt: string, system?: string): Promise<str
 
 export async function extractGraph(text: string) {
   const fallback = heuristicExtract(text);
-  if (!geminiKey()) return fallback;
+  if (!geminiKey()) return sanitiseGraph(fallback);
   try {
     const raw = await generateText(
-      `Extract entities and triples from this text as JSON only:\n{"entities":[{"name":"","type":"person|org|place|topic|thing"}],"triples":[{"subject":"","predicate":"","object":""}]}\n\nTEXT:\n${text.slice(0, 6000)}`,
-      'Return JSON only. No markdown.'
+      `Extract ONLY durable, user-relevant facts. Skip filler, pronouns, and chaining random nouns.
+Return JSON only:
+{"entities":[{"name":"","type":"person|org|place|topic"}],"triples":[{"subject":"","predicate":"prefers|works_at|lives_in|building|uses|member_of|founder_of|allergic_to|goal|name","object":"","validFrom":"","kind":"update|extend|assert"}]}
+Rules:
+- Max 8 triples.
+- Predicates must be from that list (snake_case).
+- No related_to.
+- Do not extract The, This, Container, Memory, User, Assistant.
+- Prefer stable profile facts (preferences, job, location, projects).
+TEXT:\n${text.slice(0, 5000)}`,
+      'JSON only. If nothing durable, return {"entities":[],"triples":[]}.'
     );
     const json = JSON.parse(raw.replace(/```json|```/g, '').trim());
-    return {
+    return sanitiseGraph({
       entities: Array.isArray(json.entities) ? json.entities : fallback.entities,
       triples: Array.isArray(json.triples) ? json.triples : fallback.triples,
-    };
+    });
   } catch {
-    return fallback;
+    return sanitiseGraph(fallback);
   }
 }
 
 function heuristicExtract(text: string) {
-  const names = [...text.matchAll(/\b([A-Z][a-z]+(?:\s[A-Z][a-z]+){0,2})\b/g)].map((m) => m[1]);
-  const uniq = [...new Set(names)].filter((n) => n.length > 2).slice(0, 12);
-  const entities = uniq.map((name) => ({ name, type: 'topic' }));
   const triples: { subject: string; predicate: string; object: string }[] = [];
-  for (let i = 0; i < uniq.length - 1; i++) {
-    triples.push({ subject: uniq[i], predicate: 'related_to', object: uniq[i + 1] });
-  }
-  return { entities, triples };
+  const prefer = text.match(/\b(?:I|we)\s+(?:prefer|like|love)\s+([^.,;\n]{2,80})/i);
+  if (prefer) triples.push({ subject: 'User', predicate: 'prefers', object: prefer[1].trim() });
+  const work = text.match(/\b(?:I|we)\s+(?:work(?:s)? at|joined|founded)\s+([^.,;\n]{2,60})/i);
+  if (work) triples.push({ subject: 'User', predicate: 'works_at', object: work[1].trim() });
+  const live = text.match(/\b(?:I|we)\s+(?:live|based)\s+(?:in\s+)?([^.,;\n]{2,40})/i);
+  if (live) triples.push({ subject: 'User', predicate: 'lives_in', object: live[1].trim() });
+  const names = [...new Set(triples.flatMap((t) => [t.subject, t.object]))];
+  return { entities: names.map((name) => ({ name, type: 'topic' })), triples };
 }
 
 export async function llmRerank(query: string, passages: { id: string; text: string }[]) {

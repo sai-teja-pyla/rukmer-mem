@@ -2,6 +2,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { useUserSettings } from '../hooks/useUserSettings';
 import { auth } from '../firebase';
+import { signOut } from 'firebase/auth';
 import { useNavigate } from 'react-router-dom';
 import { 
   User, 
@@ -47,9 +48,10 @@ export default function UserDropdown({ user, onUpgradeClick, isPro }) {
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, []);
 
-  const handleLogout = async () => {
-    await auth.signOut();
-    navigate('/'); 
+  const handleLogout = () => {
+    setIsOpen(false);
+    void signOut(auth);
+    window.location.assign('/login');
   };
 
   const initial = settings?.displayName ? settings.displayName.charAt(0).toUpperCase() : "U";

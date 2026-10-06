@@ -15,11 +15,17 @@ import {
 } from 'lucide-react';
 
 import { engine } from '../../services/engineClient';
+import { keyHeaders, loadProviderKeys, saveProviderKeys, type ProviderKeys } from '../../services/providerKeys';
 
 type MemoryMode = 'agentic' | 'auto';
 type RequestTab = 'prompt' | 'curl' | 'ts' | 'py';
 
-const MODELS = ['Gemini 2.5 Pro', 'Gemini 2.5 Flash', 'DeepSeek V4 Flash'];
+const MODELS = [
+  { id: 'gemini-3.8-flash', label: 'Gemini 3.8 Flash', provider: 'gemini' },
+  { id: 'gpt-4o-mini', label: 'ChatGPT 4o mini', provider: 'openai' },
+  { id: 'claude-sonnet-4-5', label: 'Claude Sonnet', provider: 'anthropic' },
+  { id: 'grok-3-mini', label: 'Grok 3 mini', provider: 'grok' },
+] as const;
 type Mode = 'chat' | 'search';
 const SOURCES = ['All sources', 'Documents', 'Conversations', 'Apps'];
 const SUGGESTIONS = [
@@ -107,9 +113,12 @@ export default function PlaygroundPage() {
   const [mode, setMode] = useState<Mode>('chat');
   const [memoryMode, setMemoryMode] = useState<MemoryMode>('agentic');
   const [input, setInput] = useState('');
-  const [model, setModel] = useState(MODELS[0]);
-  const [tag, setTag] = useState('Select a container tag');
-  const [tagOptions, setTagOptions] = useState<string[]>(['Select a container tag']);
+  const [model, setModel] = useState<(typeof MODELS)[number]>(MODELS[0]);
+  const [tag, setTag] = useState('rukmer-workspace');
+  const [tagOptions, setTagOptions] = useState<string[]>(['rukmer-workspace']);
+  const [keys, setKeys] = useState<ProviderKeys>(() => loadProviderKeys());
+  const [keysOpen, setKeysOpen] = useState(false);
+  const [serverProviders, setServerProviders] = useState<Record<string, boolean>>({});
   const [source, setSource] = useState(SOURCES[0]);
   const [useProfile, setUseProfile] = useState(true);
   const [retrieved, setRetrieved] = useState(10);
@@ -130,10 +139,14 @@ export default function PlaygroundPage() {
     engine
       .tags()
       .then((d) => {
-        const tags = (d.tags || []).map((t: any) => t.tag);
-        setTagOptions(['Select a container tag', ...tags]);
-        if (tags[0]) setTag(tags[0]);
+        const tags = [...new Set(['rukmer-workspace', ...(d.tags || []).map((t: any) => t.tag)])];
+        setTagOptions(tags);
+        setTag(tags[0]);
       })
+      .catch(() => {});
+    engine
+      .health()
+      .then((d) => setServerProviders(d.providers || {}))
       .catch(() => {});
   }, []);
 
@@ -141,8 +154,9 @@ export default function PlaygroundPage() {
     () => ({
       mode,
       memoryMode,
-      model,
-      containerTag: tag === 'Select a container tag' ? null : tag,
+      model: model.id,
+      provider: model.provider,
+      containerTag: tag || 'rukmer-workspace',
       sources: source,
       useProfile,
       memoriesRetrieved: retrieved,
@@ -158,16 +172,21 @@ export default function PlaygroundPage() {
   );
 
   const requestPreview = useMemo(() => {
-    const body = JSON.stringify(payload, null, 2);
+    const chatBody = {
+      model: model.id,
+      messages: [{ role: 'user', content: input || 'What do you know about me?' }],
+    };
+    const body = JSON.stringify(mode === 'chat' ? chatBody : payload, null, 2);
+    const url = mode === 'chat' ? '/v1/chat/completions' : '/v4/search';
     if (requestTab === 'prompt') return body;
     if (requestTab === 'curl') {
-      return `curl -X POST http://localhost:5001/v4/${mode === 'chat' ? 'chat' : 'search'} \\\n  -H "Authorization: Bearer $ID_TOKEN" \\\n  -H "Content-Type: application/json" \\\n  -d '${JSON.stringify(payload)}'`;
+      return `curl -X POST https://app.rukmer.com${url} \\\n  -H "x-container-tag: ${tag}" \\\n  -H "x-rukmer-memory: on" \\\n  -H "Content-Type: application/json" \\\n  -H "x-${model.provider}-key: $PROVIDER_API_KEY" \\\n  -d '${JSON.stringify(mode === 'chat' ? chatBody : payload)}'`;
     }
     if (requestTab === 'ts') {
-      return `const res = await fetch("/v4/${mode === 'chat' ? 'chat' : 'search'}", {\n  method: "POST",\n  headers: {\n    Authorization: \`Bearer \${idToken}\`,\n    "Content-Type": "application/json",\n  },\n  body: JSON.stringify(${body}),\n});`;
+      return `const res = await fetch("${url}", {\n  method: "POST",\n  headers: {\n    "Content-Type": "application/json",\n    "x-container-tag": "${tag}",\n    "x-${model.provider}-key": process.env.PROVIDER_API_KEY,\n  },\n  body: JSON.stringify(${body}),\n});`;
     }
-    return `import requests\n\nrequests.post(\n  "http://localhost:5001/v4/${mode === 'chat' ? 'chat' : 'search'}",\n  headers={"Authorization": f"Bearer {id_token}"},\n  json=${body},\n)`;
-  }, [payload, requestTab, mode]);
+    return `import requests\n\nrequests.post(\n  "https://app.rukmer.com${url}",\n  headers={"x-container-tag": "${tag}", "x-${model.provider}-key": key},\n  json=${body},\n)`;
+  }, [payload, requestTab, mode, model, tag, input]);
 
   const reset = () => {
     setMemoryMode('agentic');
@@ -201,12 +220,15 @@ export default function PlaygroundPage() {
     const body = {
       query: value,
       prompt: value,
-      containerTag: tag === 'Select a container tag' ? undefined : tag,
+      containerTag: tag || 'rukmer-workspace',
       memoriesRetrieved: retrieved,
       matchStrictness: strictness,
       rerank,
       rewriteQuery: rewrite,
       include,
+      remember: true,
+      source: 'playground',
+      history: messages.map((m) => ({ role: m.role, content: m.text })),
     };
     try {
       if (mode === 'search') {
@@ -220,16 +242,38 @@ export default function PlaygroundPage() {
           },
         ]);
       } else {
-        const out = await engine.chat(body);
-        setHits(out.retrieved?.matches || []);
-        setMessages((prev) => [...prev, { role: 'assistant', text: out.answer || 'No answer.' }]);
+        const history = [...messages, { role: 'user' as const, text: value }].map((m) => ({
+          role: m.role,
+          content: m.text,
+        }));
+        const out = await engine.complete(
+          {
+            model: model.id,
+            messages: history,
+            containerTag: tag || 'rukmer-workspace',
+            memoriesRetrieved: retrieved,
+            rerank,
+            rewriteQuery: rewrite,
+            memoryMode,
+            compareWithoutMemory: compare,
+          },
+          {
+            ...keyHeaders(keys),
+            'x-container-tag': tag || 'rukmer-workspace',
+            'x-rukmer-memory': compare ? 'off' : 'on',
+            'x-rukmer-mode': memoryMode,
+          }
+        );
+        const answer = out.answer || out.choices?.[0]?.message?.content || out.error || 'No answer.';
+        setHits(out.rukmer ? [{ id: 'inj', title: `${out.rukmer.provider} · ${out.rukmer.matches} memories`, text: compare ? 'Compared without memory.' : 'Memory injected into the model system prompt.', score: out.rukmer.matches }] : []);
+        setMessages((prev) => [...prev, { role: 'assistant', text: typeof answer === 'string' ? answer : JSON.stringify(answer) }]);
       }
     } catch (err: any) {
       setMessages((prev) => [
         ...prev,
         {
           role: 'assistant',
-          text: `Engine is offline (${err.message}). Start it with npm run engine on port 5001.`,
+          text: err.message || 'Memory engine is unreachable.',
         },
       ]);
     } finally {
@@ -242,9 +286,9 @@ export default function PlaygroundPage() {
       <div className="shrink-0 mb-3">
         <h1 className="text-[22px] font-semibold text-white tracking-tight">Playground</h1>
         <p className="text-[13px] text-zinc-400 mt-0.5">
-          Search your memories and chat with them.{' '}
-          <Link to="/docs" className="text-[#60a5fa] hover:underline">
-            How search works ↗
+          Search memories, then chat here. Gemini can use Rukmer’s hosted key — no paste.{' '}
+          <Link to="/connectors" className="text-[#60a5fa] hover:underline">
+            Connect Claude, ChatGPT, Gemini, or Grok ↗
           </Link>
         </p>
       </div>
@@ -270,8 +314,8 @@ export default function PlaygroundPage() {
                 <Search size={14} /> Search
               </button>
             </div>
-            <Link to="/api-keys" className="text-[12.5px] text-zinc-500 hover:text-zinc-300">
-              Use your API key
+            <Link to="/connectors" className="text-[12.5px] text-zinc-500 hover:text-zinc-300">
+              Connect apps instead of keys
             </Link>
           </div>
 
@@ -344,23 +388,24 @@ export default function PlaygroundPage() {
                     onClick={() => setModelOpen((v) => !v)}
                     className="h-7 px-2 rounded-md text-[12.5px] text-zinc-200 hover:bg-white/[0.04] inline-flex items-center gap-1"
                   >
-                    {model}
+                    {model.label}
                     <span className="text-zinc-500 text-[11px] inline-flex items-center gap-0.5">
                       {memoryMode === 'agentic' ? 'Agentic' : 'Auto'} <ChevronDown size={12} />
                     </span>
                   </button>
                   {modelOpen && (
-                    <div className="absolute bottom-8 left-0 z-20 w-48 rounded-lg border border-white/[0.08] bg-[#161618] p-1 shadow-xl">
+                    <div className="absolute bottom-8 left-0 z-20 w-56 rounded-lg border border-white/[0.08] bg-[#161618] p-1 shadow-xl">
                       {MODELS.map((m) => (
                         <button
-                          key={m}
+                          key={m.id}
                           onClick={() => {
                             setModel(m);
                             setModelOpen(false);
                           }}
                           className="w-full text-left px-2.5 py-1.5 text-[12.5px] rounded-md hover:bg-white/[0.06] text-zinc-200"
                         >
-                          {m}
+                          {m.label}
+                          <span className="block text-[10px] text-zinc-500">{m.provider}{serverProviders[m.provider] || keys[m.provider] ? ' · ready' : ' · use Connectors or a key'}</span>
                         </button>
                       ))}
                     </div>
@@ -375,7 +420,11 @@ export default function PlaygroundPage() {
                 >
                   <Split size={13} /> Compare without memory
                 </button>
-                <button className="h-7 w-7 rounded-md text-zinc-500 hover:text-zinc-300 flex items-center justify-center">
+                <button
+                  onClick={() => setKeysOpen(true)}
+                  className="h-7 w-7 rounded-md text-zinc-500 hover:text-zinc-300 flex items-center justify-center"
+                  title="Provider API keys"
+                >
                   <Plug size={14} />
                 </button>
                 <button
@@ -520,6 +569,50 @@ export default function PlaygroundPage() {
           </div>
         </aside>
       </div>
+
+      {keysOpen && (
+        <div className="fixed inset-0 z-40 bg-black/50 flex items-center justify-center p-4">
+          <div className="w-full max-w-md rounded-xl border border-white/[0.1] bg-[#161618] p-4">
+            <p className="text-[15px] font-medium text-white mb-1">Optional builder keys</p>
+            <p className="text-[12px] text-zinc-500 mb-3">
+              Normal use: Connectors (MCP) or chat here with the hosted Gemini key. Paste keys only if you are calling the provider API yourself.
+            </p>
+            {(
+              [
+                ['gemini', 'Gemini'],
+                ['openai', 'ChatGPT / OpenAI'],
+                ['anthropic', 'Claude'],
+                ['grok', 'Grok / xAI'],
+              ] as const
+            ).map(([id, label]) => (
+              <label key={id} className="block mb-2">
+                <span className="text-[12px] text-zinc-400">{label}{serverProviders[id] ? ' · server key ready' : ''}</span>
+                <input
+                  type="password"
+                  value={keys[id]}
+                  onChange={(e) => setKeys((p) => ({ ...p, [id]: e.target.value }))}
+                  placeholder={id === 'gemini' ? 'optional if server has GEMINI_API_KEY' : `paste ${label} API key`}
+                  className="mt-1 w-full h-9 px-3 rounded-lg border border-white/[0.08] bg-[#0c0c0e] text-[12px] outline-none"
+                />
+              </label>
+            ))}
+            <div className="flex justify-end gap-2 mt-3">
+              <button onClick={() => setKeysOpen(false)} className="h-8 px-3 text-[13px] text-zinc-400">
+                Close
+              </button>
+              <button
+                onClick={() => {
+                  saveProviderKeys(keys);
+                  setKeysOpen(false);
+                }}
+                className="h-8 px-3 rounded-lg bg-[#2563eb] text-[13px] text-white"
+              >
+                Save
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

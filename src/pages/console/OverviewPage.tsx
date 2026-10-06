@@ -6,6 +6,8 @@ const BASE_PROMPT = `# You are onboarding this project to Rukmer Memory
 
 Rukmer is a memory API for AI apps and agents: ingest conversations, documents, files, and URLs; get semantic search, extracted facts, and per-user profiles back. Every call is scoped to one containerTag, with strict isolation between tags.
 
+Rukmer stores processed memory (chunks + durable facts). It does not replace Gemini, GPT, Claude, or Grok. Those models generate answers after Rukmer injects retrieved memory into the prompt.
+
 ## What you can call
 
 | Operation | Endpoint | Use when |
@@ -16,7 +18,8 @@ Rukmer is a memory API for AI apps and agents: ingest conversations, documents, 
 | Get profile | GET /v4/profile | Static + dynamic context for a user |
 | List documents | POST /v3/documents/list | Paginate and filter ingested content |
 | Forget memory | DELETE /v4/memories | Soft-delete one fact; JSON body with containerTag plus id or exact content |
-| Forget matching | POST /v4/memories/forget-matching | Soft-delete every fact matching a query or an ids list; dryRun previews first |`;
+| Forget matching | POST /v4/memories/forget-matching | Soft-delete every fact matching a query or an ids list; dryRun previews first |
+| Memory protocol | GET /v4/protocol | How Rukmer stores vs injects memory |`;
 
 export default function OverviewPage() {
   const [copied, setCopied] = useState(false);

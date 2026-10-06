@@ -12,6 +12,48 @@
         "destination": "/__/auth/handler"
       },
       {
+        "source": "/health",
+        "run": {
+          "serviceId": "rukmer-saas-service",
+          "region": "us-central1"
+        }
+      },
+      {
+        "source": "/v3/**",
+        "run": {
+          "serviceId": "rukmer-saas-service",
+          "region": "us-central1"
+        }
+      },
+      {
+        "source": "/v4/**",
+        "run": {
+          "serviceId": "rukmer-saas-service",
+          "region": "us-central1"
+        }
+      },
+      {
+        "source": "/v1/**",
+        "run": {
+          "serviceId": "rukmer-saas-service",
+          "region": "us-central1"
+        }
+      },
+      {
+        "source": "/mcp",
+        "run": {
+          "serviceId": "rukmer-saas-service",
+          "region": "us-central1"
+        }
+      },
+      {
+        "source": "/mcp/**",
+        "run": {
+          "serviceId": "rukmer-saas-service",
+          "region": "us-central1"
+        }
+      },
+      {
         "source": "/api/**",
         "run": {
           "serviceId": "rukmer-saas-service",
