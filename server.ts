@@ -1104,18 +1104,8 @@ app.get('/api/chat/history/:userId', authenticateUser, async (req: any, res: any
     }
 });
 
-app.get('/api/user-status/:userId', authenticateUser, async (req: any, res: any): Promise<void> => {
-    try {
-        const { userId }: any = req.params;
-        const result = await pool.query('SELECT is_pro, plan_type FROM users WHERE id = $1', [userId]);
-        if (result.rows.length > 0) {
-            res.json({ isPro: result.rows[0].is_pro, planType: result.rows[0].plan_type });
-        } else {
-            res.json({ isPro: false, planType: 'free' });
-        }
-    } catch (error: any) {
-        res.status(500).json({ error: 'Failed to fetch user status: ' + (error?.message || error) });
-    }
+app.get('/api/user-status/:userId', authenticateUser, async (_req: any, res: any): Promise<void> => {
+    res.json({ isPro: true, planType: 'pro', beta: true });
 });
 
 // Example Node.js/Express Route

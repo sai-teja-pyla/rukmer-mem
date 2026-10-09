@@ -43,10 +43,8 @@ export function GeneralSettingsPage() {
         <Row label="Organization ID" hint="Used in CLI and API calls.">
           <CopyField value={orgId} />
         </Row>
-        <Row label="Require two-factor for all members" hint="Available on Scale and Enterprise.">
-          <Link to="/settings/billing" className="text-[13px] text-[#60a5fa]">
-            Upgrade to Scale ↗
-          </Link>
+        <Row label="Require two-factor for all members" hint="Included for every account in private beta.">
+          <span className="text-[13px] text-zinc-400">Included</span>
         </Row>
         <Row label="Organization context" hint="Filters what gets stored during ingestion, guided by a description of your organization.">
           <Toggle on={orgContext} onClick={() => setOrgContext((v) => !v)} />
@@ -148,8 +146,7 @@ export function BillingSettingsPage() {
         <div className="flex items-center justify-between mb-4">
           <p className="text-[13.5px] text-zinc-200">Current plan</p>
           <div className="flex gap-2">
-            <GhostButton>Compare plans</GhostButton>
-            <PrimaryButton>Upgrade to Pro · $19</PrimaryButton>
+            <span className="h-8 px-3 rounded-lg border border-emerald-500/20 text-[12px] text-emerald-400 inline-flex items-center">Private beta · Pro</span>
           </div>
         </div>
         <div className="grid grid-cols-4 text-[12px] text-zinc-500 mb-1">
@@ -159,12 +156,12 @@ export function BillingSettingsPage() {
           <span>STATUS</span>
         </div>
         <div className="grid grid-cols-4 text-[13.5px] text-zinc-200">
-          <span>Free</span>
+          <span>Pro (beta)</span>
           <span>$0</span>
-          <span>$5/mo</span>
+          <span>Full access</span>
           <span><span className="text-[12px] text-emerald-400">Active</span></span>
         </div>
-        <p className="text-[12px] text-zinc-500 mt-2">You used $0 of $5 this month. Pro includes $20.</p>
+        <p className="text-[12px] text-zinc-500 mt-2">Private beta: every signed-in account has the same Pro connectors, OAuth, and memory access. No upgrade required.</p>
       </Panel>
 
       <Panel className="mb-3 p-4">

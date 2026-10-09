@@ -18,7 +18,6 @@ const FILE_CONNECTORS: {
   id: string;
   name: string;
   kind: Exclude<Kind, 'ai'>;
-  plan: string;
   icon: string;
   href?: (uid: string) => string;
 }[] = [
@@ -26,7 +25,6 @@ const FILE_CONNECTORS: {
     id: 'gdrive',
     name: 'Google Drive',
     kind: 'oauth',
-    plan: 'Pro',
     icon: 'https://www.gstatic.com/images/branding/product/2x/drive_2020q4_48dp.png',
     href: (uid) => `/api/auth/google?userId=${encodeURIComponent(uid)}&type=gdrive`,
   },
@@ -34,18 +32,17 @@ const FILE_CONNECTORS: {
     id: 'gmail',
     name: 'Gmail',
     kind: 'oauth',
-    plan: 'Max',
     icon: 'https://www.gstatic.com/images/branding/product/2x/gmail_2020q4_48dp.png',
     href: (uid) => `/api/auth/google?userId=${encodeURIComponent(uid)}&type=gmail`,
   },
-  { id: 'slack', name: 'Slack', kind: 'oauth', plan: 'Pro', icon: 'https://cdn.worldvectorlogo.com/logos/slack-new-logo.svg' },
-  { id: 'outlook', name: 'Microsoft Outlook', kind: 'oauth', plan: 'Pro', icon: '/icons/outlook.svg', href: (uid) => `/api/auth/microsoft?userId=${encodeURIComponent(uid)}&type=outlook` },
-  { id: 'teams', name: 'Microsoft Teams', kind: 'oauth', plan: 'Pro', icon: '/icons/teams.svg', href: (uid) => `/api/auth/microsoft?userId=${encodeURIComponent(uid)}&type=teams` },
-  { id: 'onedrive', name: 'OneDrive', kind: 'oauth', plan: 'Pro', icon: '/icons/onedrive.svg', href: (uid) => `/api/auth/microsoft?userId=${encodeURIComponent(uid)}&type=onedrive` },
-  { id: 'notion', name: 'Notion', kind: 'oauth', plan: 'Pro', icon: 'https://upload.wikimedia.org/wikipedia/commons/4/45/Notion_app_logo.png' },
-  { id: 'github', name: 'GitHub', kind: 'oauth', plan: 'Scale', icon: 'https://cdn.simpleicons.org/github/ffffff' },
-  { id: 's3', name: 'Amazon S3', kind: 'service', plan: 'Scale', icon: 'https://cdn.simpleicons.org/amazons3/FF9900' },
-  { id: 'crawler', name: 'Web Crawler', kind: 'service', plan: 'Scale', icon: '' },
+  { id: 'slack', name: 'Slack', kind: 'oauth', icon: 'https://cdn.worldvectorlogo.com/logos/slack-new-logo.svg', href: (uid) => `/api/auth/slack?userId=${encodeURIComponent(uid)}` },
+  { id: 'outlook', name: 'Microsoft Outlook', kind: 'oauth', icon: '/icons/outlook.svg', href: (uid) => `/api/auth/microsoft?userId=${encodeURIComponent(uid)}&type=outlook` },
+  { id: 'teams', name: 'Microsoft Teams', kind: 'oauth', icon: '/icons/teams.svg', href: (uid) => `/api/auth/microsoft?userId=${encodeURIComponent(uid)}&type=teams` },
+  { id: 'onedrive', name: 'OneDrive', kind: 'oauth', icon: '/icons/onedrive.svg', href: (uid) => `/api/auth/microsoft?userId=${encodeURIComponent(uid)}&type=onedrive` },
+  { id: 'notion', name: 'Notion', kind: 'oauth', icon: 'https://upload.wikimedia.org/wikipedia/commons/4/45/Notion_app_logo.png' },
+  { id: 'github', name: 'GitHub', kind: 'oauth', icon: 'https://cdn.simpleicons.org/github/ffffff' },
+  { id: 's3', name: 'Amazon S3', kind: 'service', icon: 'https://cdn.simpleicons.org/amazons3/FF9900' },
+  { id: 'crawler', name: 'Web Crawler', kind: 'service', icon: '' },
 ];
 
 const AI_APPS: {
@@ -287,7 +284,7 @@ export default function ConnectorsPage() {
               </div>
               <div className="flex-1 min-w-0">
                 <p className="text-[13.5px] text-zinc-100">{c.name}</p>
-                <p className="text-[12px] text-zinc-500">Requires the {c.plan} plan · imports files you own, not AI chat history</p>
+                <p className="text-[12px] text-zinc-500">Private beta · Pro access for every account · imports files you own, not AI chat history</p>
               </div>
               <ChevronRight size={16} className="text-zinc-600" />
               {c.href && user?.uid ? (
@@ -295,7 +292,7 @@ export default function ConnectorsPage() {
                   Connect
                 </a>
               ) : (
-                <GhostButton>Upgrade</GhostButton>
+                <GhostButton>Coming soon</GhostButton>
               )}
               <button className="h-8 w-8 rounded-md text-zinc-500 hover:text-zinc-300 flex items-center justify-center">
                 <MoreHorizontal size={16} />

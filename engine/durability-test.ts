@@ -535,7 +535,7 @@ const gaps: string[] = [];
 await check('gap inventory (recorded, does not hide failures)', async () => {
   const health = await json('/health');
   gaps.push('Single in-process JSON store (engine.json / GCS). Fine for ~100 light users on one instance; not multi-region HA.');
-  gaps.push('Drive/Gmail/Slack OAuth rows in Connectors are still Upgrade placeholders, not live sync.');
+  gaps.push('Drive/Gmail/Slack OAuth start from Connectors; file ingest after consent is still the existing /api/auth callbacks, not a full memory-graph sync.');
   gaps.push('MCP has no OAuth consent yet; ChatGPT/Claude custom connectors need that for production.');
   gaps.push('No rate limits, quotas, or per-user storage caps on the memory engine.');
   gaps.push(`Hosted Gemini for Playground: ${health.data.providers?.gemini ? 'yes' : 'no'}; OpenAI/Claude/Grok keys: ${health.data.providers?.openai ? 'openai ' : ''}${health.data.providers?.anthropic ? 'anthropic ' : ''}${health.data.providers?.grok ? 'grok' : 'not on server'}.`);

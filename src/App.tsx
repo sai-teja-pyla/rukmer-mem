@@ -1,8 +1,7 @@
 import React, { useState, useEffect, useLayoutEffect } from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'; 
-import { auth, db } from './firebase';
+import { auth } from './firebase';
 import { onAuthStateChanged, User as FirebaseUser } from 'firebase/auth';
-import { collection, query, where, onSnapshot } from 'firebase/firestore';
 
 // Page Imports
 import LandingPage from './components/LandingPage';
@@ -70,8 +69,6 @@ export default function App() {
 
   // Auth & Subscription Listener
   useEffect(() => {
-    let unsubscribeSub: () => void = () => {};
-
     const unsubscribeAuth = onAuthStateChanged(auth, (currentUser: FirebaseUser | null) => {
       if (currentUser) {
         setUser({
@@ -80,30 +77,15 @@ export default function App() {
           name: currentUser.displayName || (currentUser.email?.split('@')[0]) || 'Guest User',
           photo: currentUser.photoURL || undefined
         });
-
-        // Subscription Listener
-        const subRef = collection(db, "customers", currentUser.uid, "subscriptions");
-        const q = query(subRef, where("status", "in", ["active", "trialing"]));
-        
-        unsubscribeSub = onSnapshot(q, (snapshot) => {
-          setIsPro(!snapshot.empty);
-        }, (error) => {
-          console.error("🚨 Firestore subscription error:", error);
-          setIsPro(false);
-        });
-
+        setIsPro(true);
       } else {
         setUser(null);
         setIsPro(false);
-        unsubscribeSub();
       }
       setAuthLoading(false);
     });
 
-    return () => {
-      unsubscribeAuth();
-      unsubscribeSub();
-    };
+    return () => unsubscribeAuth();
   }, []);
 
   if (authLoading) {
