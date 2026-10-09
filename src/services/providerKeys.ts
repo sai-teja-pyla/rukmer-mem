@@ -25,10 +25,7 @@ export function saveProviderKeys(keys: ProviderKeys) {
 
 export function keyHeaders(keys: ProviderKeys, extra?: Record<string, string>) {
   const headers: Record<string, string> = { ...(extra || {}) };
-  if (keys.openai) {
-    headers['x-openai-key'] = keys.openai;
-    headers.Authorization = `Bearer ${keys.openai}`;
-  }
+  if (keys.openai) headers['x-openai-key'] = keys.openai;
   if (keys.anthropic) headers['x-anthropic-key'] = keys.anthropic;
   if (keys.gemini) headers['x-gemini-key'] = keys.gemini;
   if (keys.grok) headers['x-grok-key'] = keys.grok;

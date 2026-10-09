@@ -1,9 +1,26 @@
+import { auth } from '../firebase';
+
 const base = '';
 
+async function authHeaders() {
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  const user = auth.currentUser;
+  if (user) {
+    try {
+      headers.Authorization = `Bearer ${await user.getIdToken()}`;
+    } catch {
+      /* token refresh can fail while signed out */
+    }
+    headers['x-rukmer-user'] = user.uid;
+  }
+  return headers;
+}
+
 async function req(path: string, init?: RequestInit) {
+  const headers = { ...(await authHeaders()), ...((init?.headers as Record<string, string>) || {}) };
   const res = await fetch(`${base}${path}`, {
     ...init,
-    headers: { 'Content-Type': 'application/json', ...(init?.headers || {}) },
+    headers,
   });
   const raw = await res.text();
   let data: any = {};
@@ -18,6 +35,7 @@ async function req(path: string, init?: RequestInit) {
 
 export const engine = {
   health: () => req('/health'),
+  me: () => req('/v3/me'),
   ingest: (body: any) => req('/v3/documents', { method: 'POST', body: JSON.stringify(body) }),
   ingestBatch: (body: any) => req('/v3/documents/batch', { method: 'POST', body: JSON.stringify(body) }),
   listDocs: (containerTag?: string) =>

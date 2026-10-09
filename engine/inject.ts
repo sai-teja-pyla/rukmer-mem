@@ -19,7 +19,8 @@ export function lastUserQuery(messages: ChatMessage[]) {
 
 export async function buildMemoryInjection(query: string, containerTag: string, opts: SearchOpts = {}) {
   const { searchMemory } = await import('./pipeline.js');
-  const tag = containerTag || 'rukmer-workspace';
+  const tag = containerTag;
+  if (!tag) throw new Error('containerTag required');
   const retrieved = await searchMemory(query || 'profile preferences work history', {
     ...opts,
     containerTag: tag,

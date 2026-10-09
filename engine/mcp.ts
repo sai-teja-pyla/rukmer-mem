@@ -17,7 +17,7 @@ function rpcError(id: unknown, code: number, message: string) {
   return { jsonrpc: '2.0', id, error: { code, message } };
 }
 
-async function handleOne(msg: any) {
+async function handleOne(msg: any, uid?: string) {
   const id = msg?.id;
   const method = String(msg?.method || '');
   if (!method) return rpcError(id ?? null, -32600, 'Invalid request');
@@ -42,7 +42,7 @@ async function handleOne(msg: any) {
     const name = String(msg?.params?.name || '');
     const args = msg?.params?.arguments || {};
     try {
-      const out = await runMemoryTool(name, args);
+      const out = await runMemoryTool(name, args, uid);
       return rpcResult(id, {
         content: [{ type: 'text', text: JSON.stringify(out, null, 2) }],
       });
@@ -77,18 +77,19 @@ export async function handleMcp(req: Request, res: Response) {
     return;
   }
 
+  const uid = req.memoryUser?.uid;
   const body = req.body;
   if (Array.isArray(body)) {
     const out = [];
     for (const msg of body) {
-      const r = await handleOne(msg);
+      const r = await handleOne(msg, uid);
       if (r) out.push(r);
     }
     res.json(out);
     return;
   }
 
-  const result = await handleOne(body);
+  const result = await handleOne(body, uid);
   if (!result) {
     res.status(202).end();
     return;

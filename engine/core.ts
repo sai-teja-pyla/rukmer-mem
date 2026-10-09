@@ -56,6 +56,7 @@ export interface ApiKeyRec {
   hash: string;
   createdAt: string;
   lastUsed: string | null;
+  ownerUid?: string;
 }
 
 export interface RequestRec {
@@ -75,7 +76,7 @@ export interface EngineState {
   triples: TripleRec[];
   apiKeys: ApiKeyRec[];
   requests: RequestRec[];
-  jobs: { id: string; status: string; message: string; at: string }[];
+  jobs: { id: string; status: string; message: string; at: string; ownerUid?: string; containerTag?: string }[];
 }
 
 const DATA_DIR = process.env.K_SERVICE ? path.join('/tmp', 'rukmer-data') : path.join(process.cwd(), '.rukmer-data');

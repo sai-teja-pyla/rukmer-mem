@@ -1,22 +1,27 @@
 import React, { useEffect, useState } from 'react';
+import { useOutletContext } from 'react-router-dom';
 import { Upload, Zap, Plus } from 'lucide-react';
 import { PageHeader, DocLink, Panel, PrimaryButton, GhostButton } from '../../components/console/ui';
 import { engine } from '../../services/engineClient';
+import type { UserProfile } from '../../types';
+import { homeTag as makeHomeTag } from '../../services/tenancy';
 
 const TYPES = ['TXT', 'MD', 'JSON', 'CSV', 'HTML', 'PDF'];
 
 export default function ImportPage() {
+  const { user, homeTag } = useOutletContext<{ user: UserProfile; homeTag: string }>();
+  const mine = homeTag || makeHomeTag(user.uid);
   const [url, setUrl] = useState('');
   const [staged, setStaged] = useState<{ title: string; text?: string; pdfBase64?: string; mime?: string; source: string }[]>([]);
-  const [tag, setTag] = useState('rukmer-workspace');
-  const [tags, setTags] = useState<string[]>(['rukmer-workspace']);
+  const [tag, setTag] = useState(mine);
+  const [tags, setTags] = useState<string[]>(mine ? [mine] : []);
   const [task, setTask] = useState<'memory' | 'rag'>('memory');
   const [jobs, setJobs] = useState<any[]>([]);
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState('');
 
   const refresh = () => {
-    engine.tags().then((d) => setTags((d.tags || []).map((t: any) => t.tag).concat(['personal', 'support']).filter((v: string, i: number, a: string[]) => a.indexOf(v) === i))).catch(() => {});
+    engine.tags().then((d) => setTags([...new Set([mine, ...(d.tags || []).map((t: any) => t.tag)].filter(Boolean))])).catch(() => {});
     engine.jobs().then((d) => setJobs(d.jobs || [])).catch(() => {});
   };
 

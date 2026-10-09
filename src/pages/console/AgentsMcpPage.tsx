@@ -160,7 +160,8 @@ export default function AgentsMcpPage() {
       <Panel className="mb-3 p-4">
         <pre className="text-[11px] leading-relaxed text-zinc-400 font-mono whitespace-pre-wrap">{`# One URL — change model + key
 curl https://app.rukmer.com/v1/chat/completions \\
-  -H "x-container-tag: rukmer-workspace" \\
+  -H "Authorization: Bearer $FIREBASE_ID_TOKEN" \\
+  -H "x-container-tag: u_<your-uid>" \\
   -H "x-rukmer-memory: on" \\
   -H "Content-Type: application/json" \\
   -H "x-gemini-key: $GEMINI_API_KEY" \\
@@ -173,8 +174,8 @@ curl https://app.rukmer.com/v1/chat/completions \\
 
 GET  /v1/models
 GET  /v4/tools
-POST /v4/tools/execute  {"name":"searchMemories","arguments":{"query":"...","containerTag":"rukmer-workspace"}}
-POST /v4/inject         {"query":"...","containerTag":"rukmer-workspace"}`}</pre>
+POST /v4/tools/execute  {"name":"searchMemories","arguments":{"query":"...","containerTag":"u_<your-uid>"}}
+POST /v4/inject         {"query":"...","containerTag":"u_<your-uid>"}`}</pre>
       </Panel>
 
       <p className="text-[14px] font-medium text-zinc-200 mt-6">In your product</p>

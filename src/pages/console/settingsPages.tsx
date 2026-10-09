@@ -7,7 +7,7 @@ import { loadProviderKeys, saveProviderKeys, type ProviderKeys } from '../../ser
 import { auth } from '../../firebase';
 import { signOut } from 'firebase/auth';
 
-type Ctx = { user: UserProfile; displayName: string };
+type Ctx = { user: UserProfile; displayName: string; homeTag?: string };
 
 const BUCKETS = [
   'Preferences', 'Interests', 'Goals', 'Work', 'Relationships', 'Health',
@@ -18,7 +18,8 @@ export function GeneralSettingsPage() {
   const [orgName, setOrgName] = useState('Rukmer');
   const [orgContext, setOrgContext] = useState(false);
   const [buckets, setBuckets] = useState<string[]>([]);
-  const orgId = 'rukmer-workspace';
+  const { homeTag } = useOutletContext<Ctx>();
+  const orgId = homeTag || 'your-private-memory';
 
   return (
     <div className="max-w-[920px]">
@@ -391,7 +392,7 @@ export function AccountSettingsPage() {
         <div className="flex items-center justify-between px-4 py-3.5 border-t border-white/[0.06]">
           <div>
             <p className="text-[13.5px] text-zinc-200">Rukmer</p>
-            <p className="text-[12px] text-zinc-500">rukmer-workspace</p>
+            <p className="text-[12px] text-zinc-500">{user.uid ? `u_${user.uid}` : 'private memory'}</p>
           </div>
           <span className="text-[11px] tracking-[0.1em] text-zinc-500">OWNER · 1 member</span>
         </div>

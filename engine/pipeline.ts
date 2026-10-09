@@ -20,6 +20,7 @@ import { deriveFacts, upsertFacts } from './facts.js';
 import { looksLikePdf, textFromPdf, textFromPdfBase64 } from './pdf.js';
 import { looksLikeDurableFact, isUsefulFact } from './quality.js';
 import { buildMemoryInjection } from './inject.js';
+import { homeTag, ownsTag, uidFromTag } from './tenancy.js';
 
 export type SearchOpts = {
   containerTag?: string | null;
@@ -34,8 +35,9 @@ export type SearchOpts = {
 };
 
 function scopedChunks(tag?: string | null, includeForgotten = false) {
+  if (!tag) return [];
   return getState().chunks.filter((c) => {
-    if (tag && c.containerTag !== tag) return false;
+    if (c.containerTag !== tag) return false;
     if (!includeForgotten && c.forgotten) return false;
     return true;
   });
@@ -51,7 +53,8 @@ export async function ingestDocument(input: {
 }) {
   const text = input.text.trim();
   if (!text) throw new Error('Empty document');
-  const tag = input.containerTag || 'default';
+  const tag = input.containerTag;
+  if (!tag) throw new Error('containerTag required');
   const state = getState();
   const doc: DocRec = {
     id: uid('doc'),
@@ -102,6 +105,8 @@ export async function ingestDocument(input: {
     status: 'done',
     message: `Ingested ${doc.title} (${chunks.length} chunks)`,
     at: new Date().toISOString(),
+    ownerUid: uidFromTag(tag),
+    containerTag: tag,
   });
   saveState();
   return { document: doc, chunks: chunks.length, entities: getState().entities.filter((e) => e.containerTag === tag).length };
@@ -219,7 +224,7 @@ export async function searchMemory(query: string, opts: SearchOpts = {}) {
     ? getState()
         .triples.filter(
           (t) =>
-            (!opts.containerTag || t.containerTag === opts.containerTag) &&
+            t.containerTag === opts.containerTag &&
             t.isLatest !== false &&
             isUsefulFact(t)
         )
@@ -234,7 +239,7 @@ export async function searchMemory(query: string, opts: SearchOpts = {}) {
     related,
     tookMs: Date.now() - started,
     mode: hasLlm() ? 'hybrid+llm' : 'hybrid-local',
-    stats: { chunks: chunks.length, documents: getState().documents.filter((d) => !opts.containerTag || d.containerTag === opts.containerTag).length },
+    stats: { chunks: chunks.length, documents: getState().documents.filter((d) => d.containerTag === opts.containerTag).length },
   };
 }
 
@@ -246,7 +251,8 @@ export async function rememberTranscript(input: {
   title?: string;
   messages: { role?: string; content?: string; text?: string }[];
 }) {
-  const tag = input.containerTag || 'rukmer-workspace';
+  const tag = input.containerTag;
+  if (!tag) throw new Error('containerTag required');
   const userText = (input.messages || [])
     .filter((m) => String(m.role || 'user') === 'user')
     .map((m) => String(m.content || m.text || '').trim())
@@ -277,7 +283,8 @@ export async function chatWithMemory(
   query: string,
   opts: SearchOpts & { history?: ChatTurn[]; remember?: boolean; source?: string } = {}
 ) {
-  const tag = opts.containerTag || 'rukmer-workspace';
+  const tag = opts.containerTag;
+  if (!tag) throw new Error('containerTag required');
   const mem = await buildMemoryInjection(query, tag, { ...opts, topK: opts.topK ?? 8 });
   const retrieved = mem.retrieved;
   const history = (opts.history || [])
@@ -316,35 +323,45 @@ export async function chatWithMemory(
   return { answer, retrieved, injection: mem.injection, graph: graphPayload(tag) };
 }
 
-export function listTags() {
+function summarizeTag(tag: string) {
   const state = getState();
-  const tags = [...new Set(state.documents.map((d) => d.containerTag))];
-  return tags.map((tag) => ({
+  return {
     tag,
     documents: state.documents.filter((d) => d.containerTag === tag && !d.forgotten).length,
     memories: state.chunks.filter((c) => c.containerTag === tag && !c.forgotten).length,
     activity: state.documents
       .filter((d) => d.containerTag === tag)
       .sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0]?.createdAt,
-  }));
+  };
+}
+
+export function listTags(uid?: string) {
+  const state = getState();
+  const tags = [...new Set(state.documents.map((d) => d.containerTag))].filter((tag) => !uid || ownsTag(uid, tag));
+  const rows = tags.map(summarizeTag);
+  if (uid) {
+    const home = homeTag(uid);
+    if (!rows.some((r) => r.tag === home)) rows.unshift({ tag: home, documents: 0, memories: 0, activity: undefined as any });
+  }
+  return rows;
 }
 
 export function listDocuments(containerTag?: string | null) {
+  if (!containerTag) return [];
   return getState()
-    .documents.filter((d) => !containerTag || d.containerTag === containerTag)
+    .documents.filter((d) => d.containerTag === containerTag)
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
 }
 
 export function graphPayload(containerTag?: string | null) {
+  if (!containerTag) return { nodes: [], edges: [], pathExample: null };
   const state = getState();
-  const triples = state.triples.filter((t) => (!containerTag || t.containerTag === containerTag) && isUsefulFact(t));
+  const triples = state.triples.filter((t) => t.containerTag === containerTag && isUsefulFact(t));
   const keep = new Set(triples.flatMap((t) => [t.subject.toLowerCase(), t.object.toLowerCase()]));
-  const entities = state.entities.filter(
-    (e) => (!containerTag || e.containerTag === containerTag) && keep.has(e.name.toLowerCase())
-  );
+  const entities = state.entities.filter((e) => e.containerTag === containerTag && keep.has(e.name.toLowerCase()));
   const docs = state.documents.filter(
     (d) =>
-      (!containerTag || d.containerTag === containerTag) &&
+      d.containerTag === containerTag &&
       !d.forgotten &&
       d.source !== 'conversation' &&
       !/^Conversation /i.test(d.title)
@@ -396,12 +413,16 @@ export function graphPayload(containerTag?: string | null) {
   };
 }
 
-export function forgetById(id: string) {
+export function forgetById(id: string, uid?: string) {
   const state = getState();
   const chunk = state.chunks.find((c) => c.id === id);
-  if (chunk) chunk.forgotten = true;
+  if (chunk) {
+    if (uid && !ownsTag(uid, chunk.containerTag)) return { ok: false, error: 'forbidden' };
+    chunk.forgotten = true;
+  }
   const doc = state.documents.find((d) => d.id === id);
   if (doc) {
+    if (uid && !ownsTag(uid, doc.containerTag)) return { ok: false, error: 'forbidden' };
     doc.forgotten = true;
     state.chunks.filter((c) => c.docId === id).forEach((c) => (c.forgotten = true));
   }
@@ -410,6 +431,7 @@ export function forgetById(id: string) {
 }
 
 export function forgetMatching(query: string, containerTag?: string | null, dryRun = false) {
+  if (!containerTag) return { count: 0, ids: [] as string[], dryRun };
   const chunks = scopedChunks(containerTag, true).filter((c) => c.text.toLowerCase().includes(query.toLowerCase()));
   if (!dryRun) {
     chunks.forEach((c) => (c.forgotten = true));
@@ -418,15 +440,16 @@ export function forgetMatching(query: string, containerTag?: string | null, dryR
   return { count: chunks.length, ids: chunks.map((c) => c.id), dryRun };
 }
 
-export function stats() {
+export function stats(uid?: string) {
   const s = getState();
+  const mine = (tag: string) => !uid || ownsTag(uid, tag);
   return {
-    documents: s.documents.filter((d) => !d.forgotten).length,
-    chunks: s.chunks.filter((c) => !c.forgotten).length,
-    entities: s.entities.length,
-    triples: s.triples.length,
-    latestFacts: s.triples.filter((t) => t.isLatest !== false).length,
-    embeddings: s.chunks.filter((c) => c.embedding.length).length,
+    documents: s.documents.filter((d) => !d.forgotten && mine(d.containerTag)).length,
+    chunks: s.chunks.filter((c) => !c.forgotten && mine(c.containerTag)).length,
+    entities: s.entities.filter((e) => mine(e.containerTag)).length,
+    triples: s.triples.filter((t) => mine(t.containerTag)).length,
+    latestFacts: s.triples.filter((t) => t.isLatest !== false && mine(t.containerTag)).length,
+    embeddings: s.chunks.filter((c) => c.embedding.length && mine(c.containerTag)).length,
     requests: s.requests.length,
     llm: hasLlm(),
   };
@@ -439,12 +462,13 @@ export function logRequest(rec: { method: string; path: string; status: number; 
   saveState();
 }
 
-export function insights() {
+export function insights(uid?: string) {
   const s = getState();
-  const tags = listTags();
+  const tags = listTags(uid);
+  const mine = (tag: string) => !uid || ownsTag(uid, tag);
   return {
     activeUsers: 1,
-    memories: s.chunks.filter((c) => !c.forgotten).length,
+    memories: s.chunks.filter((c) => !c.forgotten && mine(c.containerTag)).length,
     queries: s.requests.filter((r) => r.path.includes('search') || r.path.includes('chat')).length,
     tags,
   };

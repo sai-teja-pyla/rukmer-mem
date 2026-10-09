@@ -9,7 +9,7 @@ export const MEMORY_PROTOCOL = {
   stores: {
     chunks: 'Semantic passages with embeddings for hybrid search (vector + BM25).',
     facts: 'Durable triples only (prefers, works_at, lives_in, …) with isLatest / validFrom / validTo.',
-    scope: 'containerTag = user or workspace. Not mixed into the provider account.',
+    scope: 'Each signed-in user gets a private home tag u_{uid}. Requests cannot read another user\'s tag.',
   },
   doesNotStore: [
     'The LLM itself or its weights',

@@ -206,7 +206,7 @@ export default function ConsoleLayout({ user }: ConsoleLayoutProps) {
       </aside>
 
       <main className={`flex-1 min-w-0 bg-[#0f0f11] ${isImmersive ? 'overflow-hidden p-0' : 'overflow-y-auto p-4 md:p-5'}`}>
-        <Outlet context={{ user, displayName }} />
+        <Outlet context={{ user, displayName, homeTag: user.uid ? `u_${user.uid}` : '' }} />
       </main>
     </div>
   );

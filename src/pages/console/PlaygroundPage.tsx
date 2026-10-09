@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useOutletContext } from 'react-router-dom';
 import {
   MessageSquare,
   Search,
@@ -16,6 +16,8 @@ import {
 
 import { engine } from '../../services/engineClient';
 import { keyHeaders, loadProviderKeys, saveProviderKeys, type ProviderKeys } from '../../services/providerKeys';
+import type { UserProfile } from '../../types';
+import { homeTag as makeHomeTag } from '../../services/tenancy';
 
 type MemoryMode = 'agentic' | 'auto';
 type RequestTab = 'prompt' | 'curl' | 'ts' | 'py';
@@ -110,12 +112,14 @@ function CircleCheck({ on, onClick, label }: { on: boolean; onClick: () => void;
 }
 
 export default function PlaygroundPage() {
+  const { user, homeTag } = useOutletContext<{ user: UserProfile; homeTag: string }>();
+  const mine = homeTag || makeHomeTag(user.uid);
   const [mode, setMode] = useState<Mode>('chat');
   const [memoryMode, setMemoryMode] = useState<MemoryMode>('agentic');
   const [input, setInput] = useState('');
   const [model, setModel] = useState<(typeof MODELS)[number]>(MODELS[0]);
-  const [tag, setTag] = useState('rukmer-workspace');
-  const [tagOptions, setTagOptions] = useState<string[]>(['rukmer-workspace']);
+  const [tag, setTag] = useState(mine);
+  const [tagOptions, setTagOptions] = useState<string[]>(mine ? [mine] : []);
   const [keys, setKeys] = useState<ProviderKeys>(() => loadProviderKeys());
   const [keysOpen, setKeysOpen] = useState(false);
   const [serverProviders, setServerProviders] = useState<Record<string, boolean>>({});
@@ -136,12 +140,16 @@ export default function PlaygroundPage() {
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
+    if (mine) {
+      setTag(mine);
+      setTagOptions((prev) => [...new Set([mine, ...prev])]);
+    }
     engine
       .tags()
       .then((d) => {
-        const tags = [...new Set(['rukmer-workspace', ...(d.tags || []).map((t: any) => t.tag)])];
+        const tags = [...new Set([mine, ...(d.tags || []).map((t: any) => t.tag)].filter(Boolean))];
         setTagOptions(tags);
-        setTag(tags[0]);
+        setTag((cur) => (tags.includes(cur) ? cur : mine));
       })
       .catch(() => {});
     engine
@@ -156,7 +164,7 @@ export default function PlaygroundPage() {
       memoryMode,
       model: model.id,
       provider: model.provider,
-      containerTag: tag || 'rukmer-workspace',
+      containerTag: tag || mine,
       sources: source,
       useProfile,
       memoriesRetrieved: retrieved,
@@ -220,7 +228,7 @@ export default function PlaygroundPage() {
     const body = {
       query: value,
       prompt: value,
-      containerTag: tag || 'rukmer-workspace',
+      containerTag: tag || mine,
       memoriesRetrieved: retrieved,
       matchStrictness: strictness,
       rerank,
@@ -250,7 +258,7 @@ export default function PlaygroundPage() {
           {
             model: model.id,
             messages: history,
-            containerTag: tag || 'rukmer-workspace',
+            containerTag: tag || mine,
             memoriesRetrieved: retrieved,
             rerank,
             rewriteQuery: rewrite,
@@ -259,7 +267,7 @@ export default function PlaygroundPage() {
           },
           {
             ...keyHeaders(keys),
-            'x-container-tag': tag || 'rukmer-workspace',
+            'x-container-tag': tag || mine,
             'x-rukmer-memory': compare ? 'off' : 'on',
             'x-rukmer-mode': memoryMode,
           }

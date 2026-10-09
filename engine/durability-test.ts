@@ -7,17 +7,18 @@ import { isUsefulFact, looksLikeDurableFact, normalizePredicate } from './qualit
 
 const ENGINE = process.env.ENGINE_URL || 'http://127.0.0.1:5001';
 const APP = process.env.APP_URL || 'http://127.0.0.1:5173';
-const TAG = `durability-${Date.now()}`;
+const USER = `d${Date.now().toString(36)}`;
+const TAG = `u_${USER}--suite`;
 const MARKER = `DurabilityTea${Date.now().toString(36)}`;
 
 type Result = { name: string; ok: boolean; detail: string; ms: number };
 
 const results: Result[] = [];
 
-async function json(path: string, init?: RequestInit) {
+async function json(path: string, init?: RequestInit, uid = USER) {
   const res = await fetch(`${ENGINE}${path}`, {
     ...init,
-    headers: { 'Content-Type': 'application/json', ...(init?.headers || {}) },
+    headers: { 'Content-Type': 'application/json', 'x-rukmer-user': uid, ...(init?.headers || {}) },
   });
   const text = await res.text();
   let data: any = {};
@@ -55,8 +56,9 @@ await check('quality: reject related_to junk', async () => {
 await check('engine health', async () => {
   const { status, data } = await json('/health');
   assert(status === 200 && data.ok, `status=${status}`);
-  assert(data.stats?.llm === true, 'llm false');
+  assert(data.llm === true || data.stats?.llm === true, 'llm false');
   assert(data.engine === 'rukmer-open-core', 'wrong engine');
+  assert(data.isolation === 'per-user', 'isolation flag missing');
 });
 
 await check('vite app', async () => {
@@ -437,25 +439,55 @@ await check('temporal fact update closes old value', async () => {
   return `edges=${(data.edges || []).length} injectHasRukmer=${/rukmer/i.test(blob)}`;
 });
 
-const USERS = 100;
-const loadTag = (i: number) => `${TAG}-u${String(i).padStart(3, '0')}`;
+await check('anonymous search is rejected', async () => {
+  const res = await fetch(`${ENGINE}/v4/search`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ query: 'UniqueToken42' }),
+  });
+  assert(res.status === 401, `expected 401 got ${res.status}`);
+});
 
-await check(`100-user isolation (${USERS} containerTags)`, async () => {
+await check('user A cannot steal user B tag', async () => {
+  const a = await json('/v3/documents', {
+    method: 'POST',
+    body: JSON.stringify({ title: 'a-secret', text: `AlphaOnlyToken ${MARKER} stays with A.`, task: 'rag' }),
+  }, 'alice');
+  assert(a.status === 200, a.data.error);
+  const b = await json('/v4/search', {
+    method: 'POST',
+    body: JSON.stringify({ query: 'AlphaOnlyToken', containerTag: 'u_alice', memoriesRetrieved: 8 }),
+  }, 'bob');
+  assert(b.status === 200, b.data.error);
+  const texts = (b.data.matches || []).map((m: any) => m.text).join(' ');
+  assert(!texts.includes('AlphaOnlyToken'), `bob saw alice: ${texts.slice(0, 200)}`);
+  const tags = await json('/v3/tags', undefined, 'bob');
+  const names = (tags.data.tags || []).map((t: any) => t.tag).join(',');
+  assert(!names.includes('u_alice'), `bob listed alice tags: ${names}`);
+});
+
+const USERS = 100;
+const iso = (n: number) => `iso${n}`;
+
+await check(`100-user isolation (${USERS} identities)`, async () => {
   const t0 = Date.now();
   const ids = Array.from({ length: USERS }, (_, i) => i);
   const batch = 10;
   for (let i = 0; i < ids.length; i += batch) {
     await Promise.all(
       ids.slice(i, i + batch).map((n) =>
-        json('/v3/documents', {
-          method: 'POST',
-          body: JSON.stringify({
-            title: `user-${n}`,
-            containerTag: loadTag(n),
-            task: 'rag',
-            text: `Secret${n} lives only in workspace ${n}. UniqueToken${n} must never leak.`,
-          }),
-        }).then((r) => {
+        json(
+          '/v3/documents',
+          {
+            method: 'POST',
+            body: JSON.stringify({
+              title: `user-${n}`,
+              task: 'rag',
+              text: `Secret${n} lives only with ${iso(n)}. UniqueToken${n} must never leak.`,
+            }),
+          },
+          iso(n)
+        ).then((r) => {
           if (r.status !== 200) throw new Error(`user ${n} ingest ${r.status} ${r.data.error || ''}`);
         })
       )
@@ -463,34 +495,36 @@ await check(`100-user isolation (${USERS} containerTags)`, async () => {
   }
   const probes = [0, 7, 42, 99];
   for (const n of probes) {
-    const hit = await json('/v4/search', {
-      method: 'POST',
-      body: JSON.stringify({ query: `UniqueToken${n}`, containerTag: loadTag(n), memoriesRetrieved: 5 }),
-    });
+    const hit = await json(
+      '/v4/search',
+      { method: 'POST', body: JSON.stringify({ query: `UniqueToken${n}`, memoriesRetrieved: 5 }) },
+      iso(n)
+    );
     const texts = (hit.data.matches || []).map((m: any) => m.text).join(' ');
     assert(texts.includes(`UniqueToken${n}`), `user ${n} missed own secret`);
-    const leak = await json('/v4/search', {
-      method: 'POST',
-      body: JSON.stringify({ query: `UniqueToken${n}`, containerTag: loadTag((n + 1) % USERS), memoriesRetrieved: 8 }),
-    });
+    const leak = await json(
+      '/v4/search',
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          query: `UniqueToken${n}`,
+          containerTag: `u_${iso(n)}`,
+          memoriesRetrieved: 8,
+        }),
+      },
+      iso((n + 1) % USERS)
+    );
     const other = (leak.data.matches || []).map((m: any) => m.text).join(' ');
     assert(!other.includes(`UniqueToken${n}`), `user ${n} leaked into ${(n + 1) % USERS}`);
   }
-  const open = await json('/v4/search', {
-    method: 'POST',
-    body: JSON.stringify({ query: 'UniqueToken42', memoriesRetrieved: 8 }),
-  });
-  return `ingest+probe ${Date.now() - t0}ms; unscoped search n=${(open.data.matches || []).length} (API has no user auth)`;
+  return `ingest+probe ${Date.now() - t0}ms`;
 });
 
 await check('100-user concurrent search', async () => {
   const t0 = Date.now();
   const searches = await Promise.all(
     Array.from({ length: 20 }, (_, i) => i * 5).map((n) =>
-      json('/v4/search', {
-        method: 'POST',
-        body: JSON.stringify({ query: `UniqueToken${n}`, containerTag: loadTag(n) }),
-      })
+      json('/v4/search', { method: 'POST', body: JSON.stringify({ query: `UniqueToken${n}` }) }, iso(n))
     )
   );
   assert(searches.every((s) => s.status === 200), 'search failed under concurrency');
@@ -499,18 +533,8 @@ await check('100-user concurrent search', async () => {
 
 const gaps: string[] = [];
 await check('gap inventory (recorded, does not hide failures)', async () => {
-  const unauth = await json('/v4/search', {
-    method: 'POST',
-    body: JSON.stringify({ query: 'UniqueToken42', containerTag: loadTag(42) }),
-  });
-  if (unauth.status === 200) gaps.push('Memory API (/v3 /v4 /mcp) has no Firebase/API-key auth — any client can read a known containerTag.');
-  const unscoped = await json('/v4/search', { method: 'POST', body: JSON.stringify({ query: 'UniqueToken7' }) });
-  if ((unscoped.data.matches || []).some((m: any) => String(m.text).includes('UniqueToken7'))) {
-    gaps.push('Search without containerTag can scan the shared store (default tag only or all tags depending on path).');
-  }
   const health = await json('/health');
-  gaps.push('Single in-process JSON store (engine.json / GCS). Fine for ~100 light users on one Cloud Run instance; not multi-region HA or per-tenant DBs.');
-  gaps.push('Playground/chat still uses one default tag unless the UI sets containerTag; signed-in uid is not auto-bound.');
+  gaps.push('Single in-process JSON store (engine.json / GCS). Fine for ~100 light users on one instance; not multi-region HA.');
   gaps.push('Drive/Gmail/Slack OAuth rows in Connectors are still Upgrade placeholders, not live sync.');
   gaps.push('MCP has no OAuth consent yet; ChatGPT/Claude custom connectors need that for production.');
   gaps.push('No rate limits, quotas, or per-user storage caps on the memory engine.');

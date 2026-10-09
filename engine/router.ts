@@ -8,11 +8,14 @@ import {
 } from './inject.js';
 import { rememberTranscript } from './pipeline.js';
 import { MEMORY_TOOLS, runMemoryTool } from './tools.js';
+import { resolveOwnedTag } from './tenancy.js';
 
 export type Provider = 'openai' | 'anthropic' | 'gemini' | 'grok';
 
 function tagOf(req: Request) {
-  return String(req.headers['x-container-tag'] || req.body?.containerTag || 'rukmer-workspace');
+  const uid = req.memoryUser?.uid;
+  if (!uid) throw new Error('Sign in required for memory');
+  return resolveOwnedTag(uid, String(req.headers['x-container-tag'] || req.body?.containerTag || ''));
 }
 
 function memoryOn(req: Request) {
@@ -28,6 +31,12 @@ function header(req: Request, name: string) {
 function bearer(req: Request) {
   const a = header(req, 'authorization');
   return a.toLowerCase().startsWith('bearer ') ? a.slice(7).trim() : '';
+}
+
+function providerSecret(req: Request) {
+  const t = bearer(req);
+  if (!t || t.split('.').length === 3 || t.startsWith('rk_live_')) return '';
+  return t;
 }
 
 export function providerFromModel(model: string): Provider {
@@ -48,7 +57,7 @@ export function providerStatus() {
 }
 
 function keyFor(provider: Provider, req: Request) {
-  const token = bearer(req);
+  const token = providerSecret(req);
   if (provider === 'openai') {
     return header(req, 'x-openai-key') || token || process.env.OPENAI_API_KEY || '';
   }
