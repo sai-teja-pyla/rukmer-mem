@@ -171,8 +171,8 @@ export default function ConnectorsPage() {
         <p className="text-[11px] font-mono text-zinc-500 break-all">{keyed}</p>
       </Panel>
 
-      <div className="flex items-center justify-between gap-3 mb-3">
-        <div className="inline-flex rounded-lg border border-white/[0.08] bg-[#0c0c0e] p-0.5">
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 sm:gap-3 mb-3">
+        <div className="inline-flex rounded-lg border border-white/[0.08] bg-[#0c0c0e] p-0.5 overflow-x-auto max-w-full">
           {(['ai', 'all', 'oauth', 'service'] as const).map((id) => (
             <button
               key={id}
@@ -185,7 +185,7 @@ export default function ConnectorsPage() {
             </button>
           ))}
         </div>
-        <div className="flex items-center gap-2 h-8 px-2.5 rounded-lg border border-white/[0.08] bg-[#0c0c0e] w-[220px]">
+        <div className="flex items-center gap-2 h-8 px-2.5 rounded-lg border border-white/[0.08] bg-[#0c0c0e] w-full sm:w-[220px]">
           <Search size={13} className="text-zinc-500" />
           <input
             value={q}
@@ -203,7 +203,7 @@ export default function ConnectorsPage() {
             const expanded = open === app.id;
             return (
               <div key={app.id} className="border-b border-white/[0.06] last:border-b-0">
-                <div className="flex items-center gap-3 px-4 py-3.5">
+                <div className="flex flex-wrap items-center gap-3 px-3 sm:px-4 py-3.5">
                   <div className="h-8 w-8 rounded-md bg-white/[0.04] border border-white/[0.06] flex items-center justify-center text-[11px] text-zinc-300">
                     {app.name.slice(0, 1)}
                   </div>
@@ -260,7 +260,7 @@ export default function ConnectorsPage() {
               </div>
             );
           })}
-          <div className="px-4 py-3 flex items-center justify-between gap-3 border-t border-white/[0.06]">
+          <div className="px-3 sm:px-4 py-3 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 sm:gap-3 border-t border-white/[0.06]">
             <p className="text-[12px] text-zinc-500">Same MCP URL for every app. OAuth signs the connector into your private tag.</p>
             <button
               onClick={() => copy('mcp', keyed)}
@@ -277,7 +277,7 @@ export default function ConnectorsPage() {
           {list.map((c) => (
             <div
               key={c.id}
-              className="flex items-center gap-3 px-4 py-3.5 border-b border-white/[0.06] last:border-b-0"
+              className="flex flex-wrap items-center gap-3 px-3 sm:px-4 py-3.5 border-b border-white/[0.06] last:border-b-0"
             >
               <div className="h-8 w-8 rounded-md bg-white/[0.04] border border-white/[0.06] flex items-center justify-center overflow-hidden">
                 {c.icon ? <img src={c.icon} alt="" className="h-5 w-5 object-contain" /> : <span className="text-[11px] text-zinc-400">W</span>}

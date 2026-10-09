@@ -66,7 +66,7 @@ export default function LoginPage() {
       
       {/* Main Content Area */}
       <div className="flex-grow flex flex-col items-center justify-center p-4">
-        <div className="w-full max-w-md bg-white p-8 rounded-2xl shadow-xl border border-gray-100">
+        <div className="w-full max-w-md bg-white p-5 sm:p-8 rounded-2xl shadow-xl border border-gray-100">
           
           {/* Header */}
           <div className="text-center mb-8">

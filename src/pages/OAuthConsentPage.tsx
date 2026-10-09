@@ -33,8 +33,8 @@ export default function OAuthConsentPage() {
   };
 
   return (
-    <div className="min-h-screen bg-[#0a0a0b] text-zinc-200 flex items-center justify-center p-6">
-      <div className="w-full max-w-md rounded-2xl border border-white/[0.08] bg-[#141416] p-6">
+    <div className="min-h-[100dvh] bg-[#0a0a0b] text-zinc-200 flex items-center justify-center p-4 sm:p-6">
+      <div className="w-full max-w-md rounded-2xl border border-white/[0.08] bg-[#141416] p-5 sm:p-6">
         <p className="text-[11px] tracking-[0.14em] text-zinc-500 mb-2">RUKMER MEMORY</p>
         <h1 className="text-[22px] font-semibold text-white mb-2">Allow this app to use your memory?</h1>
         <p className="text-[13px] text-zinc-400 leading-relaxed mb-4">

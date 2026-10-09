@@ -386,29 +386,95 @@ export function graphPayload(containerTag?: string | null, uid?: string) {
     return id;
   };
 
+  const factRow = (t: (typeof triples)[number]) => ({
+    id: t.id,
+    subject: t.subject,
+    predicate: t.predicate,
+    object: t.object,
+    evidence: t.evidence,
+    isLatest: t.isLatest !== false,
+    derived: !!t.derived,
+    containerTag: t.containerTag,
+  });
+
+  const factsAbout = (name: string) => {
+    const key = String(name || '').trim().toLowerCase();
+    return triples.filter((t) => t.subject.toLowerCase() === key || t.object.toLowerCase() === key).map(factRow);
+  };
+
   const edges = triples
     .map((t) => {
       const source = nodeIdFor(t.subject);
       const target = nodeIdFor(t.object);
       if (!source || !target || source === target) return null;
-      return { id: t.id, source, target, label: t.predicate, isLatest: t.isLatest !== false, derived: !!t.derived };
+      return {
+        id: t.id,
+        source,
+        target,
+        label: t.predicate,
+        isLatest: t.isLatest !== false,
+        derived: !!t.derived,
+        subject: t.subject,
+        object: t.object,
+        evidence: t.evidence,
+        containerTag: t.containerTag,
+      };
     })
-    .filter(Boolean) as { id: string; source: string; target: string; label: string; isLatest: boolean; derived: boolean }[];
+    .filter(Boolean) as {
+      id: string;
+      source: string;
+      target: string;
+      label: string;
+      isLatest: boolean;
+      derived: boolean;
+      subject: string;
+      object: string;
+      evidence: string;
+      containerTag: string;
+    }[];
 
   for (const doc of docs.slice(0, 12)) {
     const hay = `${doc.title}\n${doc.text}`.toLowerCase();
     for (const e of entities) {
       if (e.name.length > 3 && hay.includes(e.name.toLowerCase())) {
-        edges.push({ id: `docent_${doc.id}_${e.id}`, source: doc.id, target: e.id, label: 'mentions', isLatest: true, derived: false });
+        edges.push({
+          id: `docent_${doc.id}_${e.id}`,
+          source: doc.id,
+          target: e.id,
+          label: 'mentions',
+          isLatest: true,
+          derived: false,
+          subject: doc.title,
+          object: e.name,
+          evidence: '',
+          containerTag: doc.containerTag,
+        });
       }
     }
   }
 
   return {
     nodes: [
-      ...docs.map((d) => ({ id: d.id, label: d.title, kind: 'document' as const })),
-      ...entities.map((e) => ({ id: e.id, label: e.name, kind: 'memory' as const, type: e.type })),
-      ...extraNodes,
+      ...docs.map((d) => ({
+        id: d.id,
+        label: d.title,
+        kind: 'document' as const,
+        source: d.source,
+        mime: d.mime,
+        containerTag: d.containerTag,
+        createdAt: d.createdAt,
+        text: String(d.text || '').slice(0, 4000),
+        facts: factsAbout(d.title),
+      })),
+      ...entities.map((e) => ({
+        id: e.id,
+        label: e.name,
+        kind: 'memory' as const,
+        type: e.type,
+        containerTag: e.containerTag,
+        facts: factsAbout(e.name),
+      })),
+      ...extraNodes.map((n) => ({ ...n, facts: factsAbout(n.label) })),
     ],
     edges,
     pathExample: triples[0] ? shortestPath(triples, triples[0].subject, triples[0].object, triples[0].containerTag) : null,

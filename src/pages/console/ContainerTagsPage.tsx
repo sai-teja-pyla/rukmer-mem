@@ -47,9 +47,9 @@ export default function ContainerTagsPage() {
             }
           />
         ) : (
-          <div>
+          <div className="overflow-x-auto">
             {filtered.map((t) => (
-              <div key={t.tag} className="grid grid-cols-4 px-4 py-3 text-[13px] text-zinc-300 border-t border-white/[0.06]">
+              <div key={t.tag} className="grid grid-cols-4 min-w-[560px] px-4 py-3 text-[13px] text-zinc-300 border-t border-white/[0.06]">
                 <span className="text-zinc-100">{t.tag}</span>
                 <span>{t.documents}</span>
                 <span>{t.memories}</span>

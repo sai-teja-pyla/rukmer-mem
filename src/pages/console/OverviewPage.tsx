@@ -57,12 +57,12 @@ Keep secrets in .env — never commit keys.`;
               <Box size={18} strokeWidth={1.6} />
               <FileText size={18} strokeWidth={1.6} />
             </div>
-            <h1 className="text-[32px] font-semibold tracking-tight text-white mb-3">Get started</h1>
+            <h1 className="text-[26px] sm:text-[32px] font-semibold tracking-tight text-white mb-3">Get started</h1>
             <p className="text-[14px] text-zinc-400 leading-relaxed max-w-[340px]">
               Paste one prompt into Claude Code, Cursor, Codex or OpenCode. Your agent creates a key, learns the API, and wires memory into this project.
             </p>
 
-            <div className="flex items-center gap-3 mt-7">
+            <div className="flex flex-wrap items-center gap-3 mt-7">
               <button
                 onClick={copyPrompt}
                 className="inline-flex items-center gap-2 h-10 px-4 rounded-lg bg-[#2563eb] hover:bg-[#1d4ed8] text-white text-[13.5px] font-medium"
@@ -92,7 +92,7 @@ Keep secrets in .env — never commit keys.`;
             </Link>
           </div>
 
-          <div className="relative rounded-xl border border-white/[0.08] bg-[#0c0c0e] overflow-hidden min-h-[360px]">
+          <div className="relative rounded-xl border border-white/[0.08] bg-[#0c0c0e] overflow-hidden min-h-[240px] sm:min-h-[360px]">
             <button
               onClick={copyPrompt}
               className="absolute top-2.5 right-2.5 z-10 h-8 w-8 rounded-md border border-white/[0.08] bg-[#141416] text-zinc-400 hover:text-white flex items-center justify-center"

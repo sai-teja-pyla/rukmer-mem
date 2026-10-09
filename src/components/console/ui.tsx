@@ -11,12 +11,12 @@ export function PageHeader({
   action?: React.ReactNode;
 }) {
   return (
-    <div className="flex items-start justify-between gap-4 mb-5">
-      <div>
-        <h1 className="text-[22px] font-semibold text-white tracking-tight">{title}</h1>
-        <p className="text-[13px] text-zinc-400 mt-1">{subtitle}</p>
+    <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3 sm:gap-4 mb-5">
+      <div className="min-w-0">
+        <h1 className="text-[20px] sm:text-[22px] font-semibold text-white tracking-tight">{title}</h1>
+        <p className="text-[13px] text-zinc-400 mt-1 leading-relaxed">{subtitle}</p>
       </div>
-      {action}
+      {action ? <div className="shrink-0">{action}</div> : null}
     </div>
   );
 }
@@ -45,12 +45,12 @@ export function Row({
   children: React.ReactNode;
 }) {
   return (
-    <div className="flex items-center justify-between gap-6 px-4 py-3.5 border-t border-white/[0.06] first:border-t-0">
+    <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 sm:gap-6 px-4 py-3.5 border-t border-white/[0.06] first:border-t-0">
       <div className="min-w-0">
         <p className="text-[13.5px] text-zinc-200">{label}</p>
         {hint && <p className="text-[12px] text-zinc-500 mt-0.5 max-w-md">{hint}</p>}
       </div>
-      <div className="shrink-0">{children}</div>
+      <div className="shrink-0 max-w-full overflow-x-auto">{children}</div>
     </div>
   );
 }
@@ -139,10 +139,12 @@ export function FilterChip({ children }: { children: React.ReactNode }) {
 
 export function TableHead({ cols }: { cols: string[] }) {
   return (
-    <div className="grid px-4 py-2.5 text-[11px] tracking-[0.08em] text-zinc-500 border-b border-white/[0.06] whitespace-nowrap" style={{ gridTemplateColumns: `repeat(${cols.length}, minmax(0,1fr))` }}>
-      {cols.map((c) => (
-        <span key={c}>{c}</span>
-      ))}
+    <div className="overflow-x-auto">
+      <div className="grid px-4 py-2.5 text-[11px] tracking-[0.08em] text-zinc-500 border-b border-white/[0.06] whitespace-nowrap min-w-[560px]" style={{ gridTemplateColumns: `repeat(${cols.length}, minmax(0,1fr))` }}>
+        {cols.map((c) => (
+          <span key={c}>{c}</span>
+        ))}
+      </div>
     </div>
   );
 }
@@ -160,7 +162,7 @@ export function CopyField({ value }: { value: string }) {
         setCopied(true);
         setTimeout(() => setCopied(false), 1200);
       }}
-      className="inline-flex items-center gap-2 h-8 px-2.5 rounded-lg border border-white/[0.08] bg-[#0c0c0e] text-[12.5px] text-zinc-300 font-mono"
+      className="inline-flex items-center gap-2 h-8 max-w-full px-2.5 rounded-lg border border-white/[0.08] bg-[#0c0c0e] text-[12.5px] text-zinc-300 font-mono truncate"
     >
       {copied ? 'Copied' : value}
     </button>

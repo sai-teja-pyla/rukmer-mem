@@ -143,23 +143,25 @@ export function BillingSettingsPage() {
         }
       />
       <Panel className="mb-3 p-4">
-        <div className="flex items-center justify-between mb-4">
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mb-4">
           <p className="text-[13.5px] text-zinc-200">Current plan</p>
           <div className="flex gap-2">
             <span className="h-8 px-3 rounded-lg border border-emerald-500/20 text-[12px] text-emerald-400 inline-flex items-center">Private beta · Pro</span>
           </div>
         </div>
-        <div className="grid grid-cols-4 text-[12px] text-zinc-500 mb-1">
+        <div className="overflow-x-auto">
+        <div className="grid grid-cols-4 text-[12px] text-zinc-500 mb-1 min-w-[480px]">
           <span>PLAN</span>
           <span>PRICE</span>
           <span>INCLUDED CREDITS</span>
           <span>STATUS</span>
         </div>
-        <div className="grid grid-cols-4 text-[13.5px] text-zinc-200">
+        <div className="grid grid-cols-4 text-[13.5px] text-zinc-200 min-w-[480px]">
           <span>Pro (beta)</span>
           <span>$0</span>
           <span>Full access</span>
           <span><span className="text-[12px] text-emerald-400">Active</span></span>
+        </div>
         </div>
         <p className="text-[12px] text-zinc-500 mt-2">Private beta: every signed-in account has the same Pro connectors, OAuth, and memory access. No upgrade required.</p>
       </Panel>

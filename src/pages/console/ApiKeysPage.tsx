@@ -71,9 +71,9 @@ export default function ApiKeysPage() {
               }
             />
           ) : (
-            <div>
+            <div className="overflow-x-auto">
               {created.map((k) => (
-                <div key={k.id || k.prefix} className="grid grid-cols-5 px-4 py-3 text-[13px] text-zinc-300 border-t border-white/[0.06]">
+                <div key={k.id || k.prefix} className="grid grid-cols-5 min-w-[560px] px-4 py-3 text-[13px] text-zinc-300 border-t border-white/[0.06]">
                   <span className="font-mono">{k.prefix}</span>
                   <span>Full</span>
                   <span>{k.createdAt ? new Date(k.createdAt).toLocaleDateString() : 'Just now'}</span>

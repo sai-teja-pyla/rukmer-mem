@@ -84,7 +84,7 @@ export default function ImportPage() {
       <div className="grid lg:grid-cols-[minmax(0,1fr)_280px] gap-3">
         <div className="space-y-3">
           <label
-            className="block rounded-xl border border-dashed border-white/[0.12] bg-[#111113] px-6 py-12 text-center cursor-pointer hover:border-white/[0.2]"
+            className="block rounded-xl border border-dashed border-white/[0.12] bg-[#111113] px-4 sm:px-6 py-8 sm:py-12 text-center cursor-pointer hover:border-white/[0.2]"
             onDragOver={(e) => e.preventDefault()}
             onDrop={(e) => {
               e.preventDefault();

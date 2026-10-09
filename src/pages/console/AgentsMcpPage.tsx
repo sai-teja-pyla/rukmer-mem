@@ -37,7 +37,7 @@ export default function AgentsMcpPage() {
         }
       />
 
-      <Panel className="mb-6 p-4 flex items-center justify-between gap-4">
+      <Panel className="mb-6 p-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 sm:gap-4">
         <div>
           <p className="text-[13.5px] text-zinc-200">Using Claude, ChatGPT, Gemini, or Grok as a person?</p>
           <p className="text-[12.5px] text-zinc-500">Connect those apps with MCP. No provider API keys, and they still cannot export old chats.</p>
@@ -69,7 +69,7 @@ export default function AgentsMcpPage() {
       <p className="text-[13px] text-zinc-500 mb-3">Rukmer as a plugin: your agents and the CLI share this workspace’s memory.</p>
 
       <Panel className="mb-3 p-4">
-        <div className="flex items-center justify-between mb-3">
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mb-3">
           <div>
             <p className="text-[13.5px] text-zinc-200">Connect an agent</p>
             <p className="text-[12.5px] text-zinc-500">All editor plugins at once. Claude Code, Cursor, Codex and OpenCode.</p>
@@ -95,11 +95,11 @@ export default function AgentsMcpPage() {
           ))}
         </div>
         <div className="mt-4 space-y-2 text-[13px]">
-          <div className="flex items-center justify-between gap-4">
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-1 sm:gap-4">
             <span className="text-zinc-400">1. Add the marketplace</span>
-            <code className="text-[12px] text-zinc-300 font-mono truncate">/plugin marketplace add rukmer/rukmer-memory</code>
+            <code className="text-[12px] text-zinc-300 font-mono break-all">/plugin marketplace add rukmer/rukmer-memory</code>
           </div>
-          <div className="flex items-center justify-between gap-4">
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-1 sm:gap-4">
             <span className="text-zinc-400">2. Install</span>
             <code className="text-[12px] text-zinc-300 font-mono">/plugin install rukmer</code>
           </div>
@@ -107,26 +107,26 @@ export default function AgentsMcpPage() {
       </Panel>
 
       <Panel className="mb-3">
-        <div className="flex items-center justify-between px-4 py-3.5 border-b border-white/[0.06]">
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 px-4 py-3.5 border-b border-white/[0.06]">
           <div>
             <p className="text-[13.5px] text-zinc-200">Connect over MCP</p>
             <p className="text-[12px] text-zinc-500">Add this URL to your MCP client. Signs in through your browser.</p>
           </div>
           <button
             onClick={() => copy('mcp', mcpUrl)}
-            className="h-8 px-3 rounded-lg border border-white/[0.08] bg-[#0c0c0e] text-[12px] font-mono text-zinc-300"
+            className="h-8 px-3 rounded-lg border border-white/[0.08] bg-[#0c0c0e] text-[12px] font-mono text-zinc-300 max-w-full truncate"
           >
             {copied === 'mcp' ? 'Copied' : mcpUrl}
           </button>
         </div>
-        <div className="flex items-center justify-between px-4 py-3.5">
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 px-4 py-3.5">
           <div>
             <p className="text-[13.5px] text-zinc-200">Rukmer CLI</p>
             <p className="text-[12px] text-zinc-500">Manage this workspace from a shell.</p>
           </div>
           <button
             onClick={() => copy('cli', cli)}
-            className="h-8 px-3 rounded-lg border border-white/[0.08] bg-[#0c0c0e] text-[12px] font-mono text-zinc-300"
+            className="h-8 px-3 rounded-lg border border-white/[0.08] bg-[#0c0c0e] text-[12px] font-mono text-zinc-300 max-w-full truncate"
           >
             {copied === 'cli' ? 'Copied' : cli}
           </button>
@@ -158,7 +158,7 @@ export default function AgentsMcpPage() {
         For products you build: one OpenAI-style URL. Everyday chat in Claude / ChatGPT / Gemini / Grok should use the MCP connector, not these keys.
       </p>
       <Panel className="mb-3 p-4">
-        <pre className="text-[11px] leading-relaxed text-zinc-400 font-mono whitespace-pre-wrap">{`# One URL — change model + key
+        <pre className="text-[11px] leading-relaxed text-zinc-400 font-mono whitespace-pre-wrap break-all overflow-x-auto">{`# One URL — change model + key
 curl https://app.rukmer.com/v1/chat/completions \\
   -H "Authorization: Bearer $FIREBASE_ID_TOKEN" \\
   -H "x-container-tag: u_<your-uid>" \\
@@ -181,12 +181,12 @@ POST /v4/inject         {"query":"...","containerTag":"u_<your-uid>"}`}</pre>
       <p className="text-[14px] font-medium text-zinc-200 mt-6">In your product</p>
       <p className="text-[13px] text-zinc-500 mb-3">Rukmer as infrastructure: give your own app memory with the SDK.</p>
       <Panel>
-        <div className="flex items-center justify-between px-4 py-3.5">
+        <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3 px-4 py-3.5">
           <div>
             <p className="text-[13.5px] text-zinc-200">Build with Rukmer</p>
             <p className="text-[12px] text-zinc-500">Paste the setup prompt into your coding agent.</p>
           </div>
-          <div className="flex items-center gap-3">
+          <div className="flex flex-col sm:flex-row sm:items-center gap-3">
             <span className="text-[12px] text-zinc-500 inline-flex items-center gap-2">
               Include an API key <Toggle on={includeKey} onClick={() => setIncludeKey((v) => !v)} />
             </span>

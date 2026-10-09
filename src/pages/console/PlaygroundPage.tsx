@@ -290,9 +290,9 @@ export default function PlaygroundPage() {
   };
 
   return (
-    <div className="h-full min-h-0 flex flex-col px-5 pt-4 pb-3">
+    <div className="h-full min-h-0 flex flex-col px-3 sm:px-5 pt-3 sm:pt-4 pb-3">
       <div className="shrink-0 mb-3">
-        <h1 className="text-[22px] font-semibold text-white tracking-tight">Playground</h1>
+        <h1 className="hidden lg:block text-[22px] font-semibold text-white tracking-tight">Playground</h1>
         <p className="text-[13px] text-zinc-400 mt-0.5">
           Search memories, then chat here. Gemini can use Rukmer’s hosted key — no paste.{' '}
           <Link to="/connectors" className="text-[#60a5fa] hover:underline">
@@ -301,9 +301,9 @@ export default function PlaygroundPage() {
         </p>
       </div>
 
-      <div className="flex-1 min-h-0 grid grid-cols-[minmax(0,1fr)_300px] gap-3">
-        <section className="min-h-0 rounded-2xl border border-white/[0.07] bg-[#111113] flex flex-col overflow-hidden">
-          <div className="flex items-center justify-between px-4 pt-3 pb-2">
+      <div className="flex-1 min-h-0 grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_300px] gap-3 overflow-y-auto xl:overflow-hidden">
+        <section className="min-h-[420px] xl:min-h-0 rounded-2xl border border-white/[0.07] bg-[#111113] flex flex-col overflow-hidden">
+          <div className="flex flex-wrap items-center justify-between gap-2 px-3 sm:px-4 pt-3 pb-2">
             <div className="inline-flex rounded-lg border border-white/[0.08] bg-[#0c0c0e] p-0.5">
               <button
                 onClick={() => setMode('chat')}
@@ -327,7 +327,7 @@ export default function PlaygroundPage() {
             </Link>
           </div>
 
-          <div className="flex-1 min-h-0 overflow-y-auto px-6 flex flex-col">
+          <div className="flex-1 min-h-0 overflow-y-auto px-3 sm:px-6 flex flex-col">
             {messages.length === 0 ? (
               <div className="flex-1 flex flex-col items-center justify-center text-center py-8">
                 <div className="h-11 w-11 rounded-xl bg-[#1d4ed8]/20 border border-[#3b82f6]/30 flex items-center justify-center mb-4">
@@ -342,7 +342,7 @@ export default function PlaygroundPage() {
                 {messages.map((m, i) => (
                   <div key={i} className={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
                     <div
-                      className={`max-w-[80%] rounded-xl px-3.5 py-2 text-[13.5px] leading-relaxed whitespace-pre-wrap ${
+                      className={`max-w-[92%] sm:max-w-[80%] rounded-xl px-3.5 py-2 text-[13.5px] leading-relaxed whitespace-pre-wrap ${
                         m.role === 'user'
                           ? 'bg-[#1e3a5f] text-zinc-100'
                           : 'bg-white/[0.04] border border-white/[0.06] text-zinc-300'
@@ -387,7 +387,7 @@ export default function PlaygroundPage() {
                 placeholder={mode === 'chat' ? '' : 'Search memories…'}
                 className="w-full bg-transparent px-3 text-[13.5px] text-zinc-200 outline-none resize-none min-h-[44px]"
               />
-              <div className="flex items-center gap-2 px-2.5 pb-2">
+              <div className="flex flex-wrap items-center gap-2 px-2.5 pb-2">
                 <button className="h-7 w-7 rounded-md border border-white/[0.08] text-zinc-400 hover:text-white flex items-center justify-center">
                   <Plus size={14} />
                 </button>
@@ -426,7 +426,7 @@ export default function PlaygroundPage() {
                     compare ? 'text-blue-300 bg-blue-500/10' : 'text-zinc-500 hover:text-zinc-300'
                   }`}
                 >
-                  <Split size={13} /> Compare without memory
+                  <Split size={13} /> <span className="hidden sm:inline">Compare without memory</span><span className="sm:hidden">Compare</span>
                 </button>
                 <button
                   onClick={() => setKeysOpen(true)}
@@ -479,7 +479,7 @@ export default function PlaygroundPage() {
           </div>
         </section>
 
-        <aside className="min-h-0 rounded-2xl border border-white/[0.07] bg-[#111113] flex flex-col overflow-hidden">
+        <aside className="min-h-0 xl:min-h-0 rounded-2xl border border-white/[0.07] bg-[#111113] flex flex-col overflow-hidden">
           <div className="flex items-center justify-between px-4 py-3">
             <h2 className="text-[14.5px] font-medium text-white">Memory settings</h2>
             <button onClick={reset} className="text-[12.5px] text-zinc-500 hover:text-zinc-300 inline-flex items-center gap-1">
