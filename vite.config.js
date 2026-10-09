@@ -37,6 +37,16 @@ export default defineConfig({
         changeOrigin: true,
         secure: false,
       },
+      '/oauth': {
+        target: 'http://localhost:5001',
+        changeOrigin: true,
+        secure: false,
+      },
+      '/.well-known': {
+        target: 'http://localhost:5001',
+        changeOrigin: true,
+        secure: false,
+      },
       // This creates a "fake" local folder that actually points to Anthropic
       '/anthropic-api': {
         target: 'https://api.anthropic.com',

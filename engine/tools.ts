@@ -36,7 +36,8 @@ export const MEMORY_TOOLS = [
 ];
 
 export async function runMemoryTool(name: string, args: any, uid?: string) {
-  const tag = uid ? resolveOwnedTag(uid, args?.containerTag) : args?.containerTag;
+  if (!uid) throw new Error('Sign in required');
+  const tag = resolveOwnedTag(uid, args?.containerTag);
   if (!tag) throw new Error('containerTag required');
   if (name === 'searchMemories') {
     return searchMemory(String(args?.query || ''), { containerTag: tag, topK: 8, includeRelated: true });

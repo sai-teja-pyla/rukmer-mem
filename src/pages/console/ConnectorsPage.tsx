@@ -1,27 +1,51 @@
 import React, { useMemo, useState } from 'react';
+import { useOutletContext } from 'react-router-dom';
 import { Search, ChevronRight, MoreHorizontal, Copy, Check, ExternalLink } from 'lucide-react';
 import { PageHeader, DocLink, Panel, GhostButton, PrimaryButton } from '../../components/console/ui';
 import {
   loadConnectedApps,
   mcpUrl,
+  mcpUrlWithKey,
   openApiUrl,
   setAppConnected,
   type AiAppId,
 } from '../../services/aiConnectors';
+import type { UserProfile } from '../../types';
 
 type Kind = 'ai' | 'oauth' | 'service';
 
-const FILE_CONNECTORS: { name: string; kind: Exclude<Kind, 'ai'>; plan: string; icon: string }[] = [
-  { name: 'Google Drive', kind: 'oauth', plan: 'Pro', icon: 'https://www.gstatic.com/images/branding/product/2x/drive_2020q4_48dp.png' },
-  { name: 'Gmail', kind: 'oauth', plan: 'Max', icon: 'https://www.gstatic.com/images/branding/product/2x/gmail_2020q4_48dp.png' },
-  { name: 'Slack', kind: 'oauth', plan: 'Pro', icon: 'https://cdn.worldvectorlogo.com/logos/slack-new-logo.svg' },
-  { name: 'Microsoft Outlook', kind: 'oauth', plan: 'Pro', icon: '/icons/outlook.svg' },
-  { name: 'Microsoft Teams', kind: 'oauth', plan: 'Pro', icon: '/icons/teams.svg' },
-  { name: 'OneDrive', kind: 'oauth', plan: 'Pro', icon: '/icons/onedrive.svg' },
-  { name: 'Notion', kind: 'oauth', plan: 'Pro', icon: 'https://upload.wikimedia.org/wikipedia/commons/4/45/Notion_app_logo.png' },
-  { name: 'GitHub', kind: 'oauth', plan: 'Scale', icon: 'https://cdn.simpleicons.org/github/ffffff' },
-  { name: 'Amazon S3', kind: 'service', plan: 'Scale', icon: 'https://cdn.simpleicons.org/amazons3/FF9900' },
-  { name: 'Web Crawler', kind: 'service', plan: 'Scale', icon: '' },
+const FILE_CONNECTORS: {
+  id: string;
+  name: string;
+  kind: Exclude<Kind, 'ai'>;
+  plan: string;
+  icon: string;
+  href?: (uid: string) => string;
+}[] = [
+  {
+    id: 'gdrive',
+    name: 'Google Drive',
+    kind: 'oauth',
+    plan: 'Pro',
+    icon: 'https://www.gstatic.com/images/branding/product/2x/drive_2020q4_48dp.png',
+    href: (uid) => `/api/auth/google?userId=${encodeURIComponent(uid)}&type=gdrive`,
+  },
+  {
+    id: 'gmail',
+    name: 'Gmail',
+    kind: 'oauth',
+    plan: 'Max',
+    icon: 'https://www.gstatic.com/images/branding/product/2x/gmail_2020q4_48dp.png',
+    href: (uid) => `/api/auth/google?userId=${encodeURIComponent(uid)}&type=gmail`,
+  },
+  { id: 'slack', name: 'Slack', kind: 'oauth', plan: 'Pro', icon: 'https://cdn.worldvectorlogo.com/logos/slack-new-logo.svg' },
+  { id: 'outlook', name: 'Microsoft Outlook', kind: 'oauth', plan: 'Pro', icon: '/icons/outlook.svg', href: (uid) => `/api/auth/microsoft?userId=${encodeURIComponent(uid)}&type=outlook` },
+  { id: 'teams', name: 'Microsoft Teams', kind: 'oauth', plan: 'Pro', icon: '/icons/teams.svg', href: (uid) => `/api/auth/microsoft?userId=${encodeURIComponent(uid)}&type=teams` },
+  { id: 'onedrive', name: 'OneDrive', kind: 'oauth', plan: 'Pro', icon: '/icons/onedrive.svg', href: (uid) => `/api/auth/microsoft?userId=${encodeURIComponent(uid)}&type=onedrive` },
+  { id: 'notion', name: 'Notion', kind: 'oauth', plan: 'Pro', icon: 'https://upload.wikimedia.org/wikipedia/commons/4/45/Notion_app_logo.png' },
+  { id: 'github', name: 'GitHub', kind: 'oauth', plan: 'Scale', icon: 'https://cdn.simpleicons.org/github/ffffff' },
+  { id: 's3', name: 'Amazon S3', kind: 'service', plan: 'Scale', icon: 'https://cdn.simpleicons.org/amazons3/FF9900' },
+  { id: 'crawler', name: 'Web Crawler', kind: 'service', plan: 'Scale', icon: '' },
 ];
 
 const AI_APPS: {
@@ -37,9 +61,9 @@ const AI_APPS: {
     where: 'claude.ai → Customize → Connectors',
     open: 'https://claude.ai/settings/connectors',
     steps: [
-      'Open Claude → Customize → Connectors (or Settings → Connectors).',
-      'Add a custom connector and paste the Rukmer MCP URL. No Anthropic API key.',
-      'Enable searchMemories and addMemory. New chats can read and write Rukmer memory.',
+      'Open Claude → Settings → Connectors → Add custom connector.',
+      'Paste the Rukmer MCP URL. Claude starts Rukmer OAuth in the browser — Allow.',
+      'If OAuth is blocked, paste a Rukmer API key as ?api_key= on the same URL.',
     ],
   },
   {
@@ -48,9 +72,9 @@ const AI_APPS: {
     where: 'chatgpt.com → Settings → Connectors (Developer mode)',
     open: 'https://chatgpt.com/',
     steps: [
-      'In ChatGPT, turn on Developer mode, then Settings → Connectors → create.',
-      'Paste the Rukmer MCP URL, or attach the OpenAPI file as Custom GPT Actions.',
-      'Sign in is your ChatGPT account plus this workspace. No OpenAI API key.',
+      'Turn on ChatGPT Developer mode, then Settings → Connectors → Create.',
+      'Paste the Rukmer MCP URL. ChatGPT uses OAuth — sign in to Rukmer and Allow.',
+      'Fallback: Custom GPT Actions with the OpenAPI file plus a Rukmer API key.',
     ],
   },
   {
@@ -59,9 +83,9 @@ const AI_APPS: {
     where: 'Gemini CLI, or chat in Rukmer Playground',
     open: 'https://gemini.google.com/',
     steps: [
-      'Gemini’s website does not import past chats. Connect Gemini CLI: gemini mcp add rukmer <MCP URL>.',
-      'Or stay in Playground and pick Gemini — Rukmer can use the hosted Gemini key.',
-      'Going forward, tools searchMemories / addMemory keep the graph in Rukmer.',
+      'Gemini’s website cannot import old chats. For CLI: gemini mcp add rukmer <MCP URL with api_key>.',
+      'Or chat in Playground with Gemini selected — memory stays in this workspace.',
+      'Going forward, searchMemories / addMemory write facts into your graph.',
     ],
   },
   {
@@ -71,19 +95,22 @@ const AI_APPS: {
     open: 'https://grok.com/connectors',
     steps: [
       'Open grok.com → Connectors and add a custom MCP server.',
-      'Paste the Rukmer MCP URL. No xAI API key.',
+      'Paste the Rukmer MCP URL and complete Rukmer OAuth, or append ?api_key=.',
       'Grok then calls Rukmer tools in new chats. Past grok.com threads stay on X.',
     ],
   },
 ];
 
 export default function ConnectorsPage() {
+  const { user } = useOutletContext<{ user: UserProfile; homeTag: string }>();
   const [tab, setTab] = useState<'ai' | 'all' | Kind>('ai');
   const [q, setQ] = useState('');
   const [copied, setCopied] = useState<string | null>(null);
   const [open, setOpen] = useState<AiAppId | null>(null);
   const [connected, setConnected] = useState<AiAppId[]>(() => loadConnectedApps());
+  const [key, setKey] = useState('');
   const url = mcpUrl();
+  const keyed = mcpUrlWithKey(key);
   const spec = openApiUrl();
 
   const copy = async (id: string, text: string) => {
@@ -124,13 +151,27 @@ export default function ConnectorsPage() {
         }
       />
 
-      <Panel className="mb-4 p-4 text-[13px] text-zinc-400 leading-relaxed">
-        <p className="text-zinc-200 mb-1">You do not paste those products’ API keys.</p>
+      <Panel className="mb-4 p-4 text-[13px] text-zinc-400 leading-relaxed space-y-2">
+        <p className="text-zinc-200">You do not paste ChatGPT, Gemini, Claude, or Grok API keys.</p>
         <p>
-          They do not give Rukmer their chat-session or history APIs. Connecting means:{' '}
-          <span className="text-zinc-300">while you talk in that app going forward</span>, it can search and save
-          memory here. Old threads stay where they are unless you import a file.
+          Those apps connect with <span className="text-zinc-300">Rukmer OAuth</span> or a{' '}
+          <span className="text-zinc-300">Rukmer API key</span> from API Keys. They still cannot export old chat history.
         </p>
+        <div className="flex flex-col sm:flex-row gap-2 pt-1">
+          <input
+            value={key}
+            onChange={(e) => setKey(e.target.value)}
+            placeholder="Optional rk_live_ key to embed in the MCP URL"
+            className="flex-1 h-9 px-3 rounded-lg border border-white/[0.08] bg-[#0c0c0e] text-[12px] font-mono outline-none"
+          />
+          <button
+            onClick={() => copy('mcpk', keyed)}
+            className="h-9 px-3 rounded-lg border border-white/[0.08] text-[12px] text-zinc-300 inline-flex items-center gap-1"
+          >
+            {copied === 'mcpk' ? <Check size={12} /> : <Copy size={12} />} Copy MCP URL
+          </button>
+        </div>
+        <p className="text-[11px] font-mono text-zinc-500 break-all">{keyed}</p>
       </Panel>
 
       <div className="flex items-center justify-between gap-3 mb-3">
@@ -187,7 +228,7 @@ export default function ConnectorsPage() {
                     </ol>
                     <div className="flex flex-wrap gap-2 pt-2">
                       <button
-                        onClick={() => copy(app.id, url)}
+                        onClick={() => copy(app.id, keyed)}
                         className="h-8 px-3 rounded-lg border border-white/[0.08] bg-[#0c0c0e] text-[12px] font-mono text-zinc-300"
                       >
                         {copied === app.id ? 'Copied MCP URL' : url}
@@ -223,9 +264,9 @@ export default function ConnectorsPage() {
             );
           })}
           <div className="px-4 py-3 flex items-center justify-between gap-3 border-t border-white/[0.06]">
-            <p className="text-[12px] text-zinc-500">Same MCP URL for every app. Copy once, paste in each connector.</p>
+            <p className="text-[12px] text-zinc-500">Same MCP URL for every app. OAuth signs the connector into your private tag.</p>
             <button
-              onClick={() => copy('mcp', url)}
+              onClick={() => copy('mcp', keyed)}
               className="h-8 px-3 rounded-lg border border-white/[0.08] text-[12px] text-zinc-300 inline-flex items-center gap-1"
             >
               {copied === 'mcp' ? <Check size={12} /> : <Copy size={12} />} {copied === 'mcp' ? 'Copied' : 'Copy MCP URL'}
@@ -238,7 +279,7 @@ export default function ConnectorsPage() {
         <Panel>
           {list.map((c) => (
             <div
-              key={c.name}
+              key={c.id}
               className="flex items-center gap-3 px-4 py-3.5 border-b border-white/[0.06] last:border-b-0"
             >
               <div className="h-8 w-8 rounded-md bg-white/[0.04] border border-white/[0.06] flex items-center justify-center overflow-hidden">
@@ -249,7 +290,13 @@ export default function ConnectorsPage() {
                 <p className="text-[12px] text-zinc-500">Requires the {c.plan} plan · imports files you own, not AI chat history</p>
               </div>
               <ChevronRight size={16} className="text-zinc-600" />
-              <GhostButton>Upgrade</GhostButton>
+              {c.href && user?.uid ? (
+                <a href={c.href(user.uid)} className="h-8 px-3 rounded-lg bg-[#2563eb] text-[12px] text-white inline-flex items-center">
+                  Connect
+                </a>
+              ) : (
+                <GhostButton>Upgrade</GhostButton>
+              )}
               <button className="h-8 w-8 rounded-md text-zinc-500 hover:text-zinc-300 flex items-center justify-center">
                 <MoreHorizontal size={16} />
               </button>

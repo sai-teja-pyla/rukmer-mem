@@ -1479,7 +1479,7 @@ app.get('/api/auth/google', async (req: any, res: any) => {
   if (type === 'gmail') {
     scopes = ['https://www.googleapis.com/auth/gmail.readonly'];
   } else if (type === 'gdrive') {
-    scopes = ['https://www.googleapis.com/auth/devstorage.read_only'];
+    scopes = ['https://www.googleapis.com/auth/drive.readonly'];
   }
 
   // 2. Encode both userId and the type into the state 
@@ -1529,9 +1529,9 @@ app.get('/api/auth/google/callback', async (req: any, res: any) => {
     // Fire-and-forget RAG ingestion so Pinecone is populated immediately after connecting
     getAppContent(userId).catch((e: any) => console.warn('⚠️ Post-Google ingest failed:', e.message));
 
-    res.redirect(`${FRONTEND_URL}?connection=success`);
+    res.redirect(`${IS_PROD ? 'https://app.rukmer.com' : 'http://localhost:5173'}/connectors?connection=success`);
   } catch (error) {
-    res.redirect(`${FRONTEND_URL}?error=google_failed`);
+    res.redirect(`${IS_PROD ? 'https://app.rukmer.com' : 'http://localhost:5173'}/connectors?error=google_failed`);
   }
 });
 
@@ -1761,7 +1761,7 @@ app.get('/api/debug/pinecone-check', async (req: any, res: any) => {
 
 
 app.get('/{*any}', (req: any, res: any): void => {
-    if (req.path.startsWith('/api') || req.path.startsWith('/v3') || req.path.startsWith('/v4') || req.path.startsWith('/v1') || req.path.startsWith('/mcp') || req.path === '/health') {
+    if (req.path.startsWith('/api') || req.path.startsWith('/v3') || req.path.startsWith('/v4') || req.path.startsWith('/v1') || req.path.startsWith('/mcp') || req.path.startsWith('/oauth') || req.path.startsWith('/.well-known') || req.path === '/health') {
       return res.status(404).json({ error: 'API route not found' });
     }
     res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');

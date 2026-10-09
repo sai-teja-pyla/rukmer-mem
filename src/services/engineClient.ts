@@ -1,10 +1,25 @@
+import { onAuthStateChanged } from 'firebase/auth';
 import { auth } from '../firebase';
 
 const base = '';
 
+function waitForAuth() {
+  if (auth.currentUser) return Promise.resolve(auth.currentUser);
+  return new Promise<typeof auth.currentUser>((resolve) => {
+    const unsub = onAuthStateChanged(auth, (user) => {
+      unsub();
+      resolve(user);
+    });
+    setTimeout(() => {
+      unsub();
+      resolve(auth.currentUser);
+    }, 4000);
+  });
+}
+
 async function authHeaders() {
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-  const user = auth.currentUser;
+  const user = (await waitForAuth()) || auth.currentUser;
   if (user) {
     try {
       headers.Authorization = `Bearer ${await user.getIdToken()}`;
@@ -55,6 +70,8 @@ export const engine = {
   requests: () => req('/v3/requests'),
   keys: () => req('/v3/keys'),
   createKey: (name: string) => req('/v3/keys', { method: 'POST', body: JSON.stringify({ name }) }),
+  verifyKey: (secret: string) => req('/v3/keys/verify', { method: 'POST', body: JSON.stringify({ secret }) }),
+  oauthCode: (body: any) => req('/oauth/code', { method: 'POST', body: JSON.stringify(body) }),
   models: () => req('/v1/models'),
   complete: (body: any, headers?: Record<string, string>) =>
     req('/v1/chat/completions', { method: 'POST', headers, body: JSON.stringify(body) }),

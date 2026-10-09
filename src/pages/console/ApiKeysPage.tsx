@@ -8,6 +8,8 @@ export default function ApiKeysPage() {
   const [name, setName] = useState('');
   const [created, setCreated] = useState<any[]>([]);
   const [secret, setSecret] = useState('');
+  const [check, setCheck] = useState('');
+  const [checkMsg, setCheckMsg] = useState('');
 
   useEffect(() => {
     engine.keys().then((d) => setCreated(d.keys || [])).catch(() => {});
@@ -23,6 +25,32 @@ export default function ApiKeysPage() {
           </>
         }
       />
+      <Panel className="mb-4 p-4">
+        <p className="text-[13px] text-zinc-300 mb-2">Validate a key</p>
+        <div className="flex flex-col sm:flex-row gap-2">
+          <input
+            value={check}
+            onChange={(e) => setCheck(e.target.value)}
+            placeholder="rk_live_…"
+            className="flex-1 h-9 px-3 rounded-lg border border-white/[0.08] bg-[#0c0c0e] text-[12px] font-mono outline-none"
+          />
+          <PrimaryButton
+            onClick={async () => {
+              setCheckMsg('');
+              try {
+                const out = await engine.verifyKey(check.trim());
+                setCheckMsg(out.ok ? `Valid · ${out.homeTag} · ${out.via}` : out.error || 'Invalid');
+              } catch (e: any) {
+                setCheckMsg(e.message || 'Invalid API key');
+              }
+            }}
+          >
+            Verify
+          </PrimaryButton>
+        </div>
+        {checkMsg && <p className="text-[12px] text-zinc-400 mt-2">{checkMsg}</p>}
+      </Panel>
+
       <Panel>
         <TableHead cols={['API KEY', 'SCOPE', 'CREATED', 'LAST USED', 'EXPIRES']} />
         <div className="relative min-h-[320px]">

@@ -69,6 +69,22 @@ export interface RequestRec {
   type: string;
 }
 
+export interface OauthClientRec {
+  id: string;
+  redirectUris: string[];
+  createdAt: string;
+}
+
+export interface OauthCodeRec {
+  code: string;
+  uid: string;
+  clientId: string;
+  redirectUri: string;
+  challenge: string;
+  method: string;
+  exp: number;
+}
+
 export interface EngineState {
   documents: DocRec[];
   chunks: ChunkRec[];
@@ -77,13 +93,25 @@ export interface EngineState {
   apiKeys: ApiKeyRec[];
   requests: RequestRec[];
   jobs: { id: string; status: string; message: string; at: string; ownerUid?: string; containerTag?: string }[];
+  oauthClients: OauthClientRec[];
+  oauthCodes: OauthCodeRec[];
 }
 
 const DATA_DIR = process.env.K_SERVICE ? path.join('/tmp', 'rukmer-data') : path.join(process.cwd(), '.rukmer-data');
 const DATA_FILE = path.join(DATA_DIR, 'engine.json');
 
 function empty(): EngineState {
-  return { documents: [], chunks: [], entities: [], triples: [], apiKeys: [], requests: [], jobs: [] };
+  return {
+    documents: [],
+    chunks: [],
+    entities: [],
+    triples: [],
+    apiKeys: [],
+    requests: [],
+    jobs: [],
+    oauthClients: [],
+    oauthCodes: [],
+  };
 }
 
 let state: EngineState = empty();
@@ -130,9 +158,12 @@ export async function loadState() {
   }
   await pullGcs();
   state.triples = (state.triples || []).map(normalizeTriple);
+  state.oauthClients = state.oauthClients || [];
+  state.oauthCodes = state.oauthCodes || [];
+  state.apiKeys = state.apiKeys || [];
 }
 
-export function saveState() {
+function writeLocal() {
   try {
     fs.mkdirSync(DATA_DIR, { recursive: true });
     const tmp = DATA_FILE + '.tmp';
@@ -141,10 +172,23 @@ export function saveState() {
   } catch {
     /* Cloud Run disk can be read-only besides /tmp */
   }
+}
+
+export function saveState() {
+  writeLocal();
   if (gcsTimer) clearTimeout(gcsTimer);
   gcsTimer = setTimeout(() => {
     void pushGcs();
   }, 250);
+}
+
+export async function persistNow() {
+  writeLocal();
+  if (gcsTimer) {
+    clearTimeout(gcsTimer);
+    gcsTimer = null;
+  }
+  await pushGcs();
 }
 
 export function getState() {

@@ -21,7 +21,8 @@ export default function LoginPage() {
     setLoading(true);
     try {
       await signInWithEmailAndPassword(auth, email, password);
-      navigate('/overview'); 
+      const next = new URLSearchParams(window.location.search).get('next');
+      navigate(next && next.startsWith('/') ? next : '/overview'); 
     } catch (err) {
       setError("Failed to sign in. Check your email/password.");
     } finally {
@@ -33,7 +34,8 @@ export default function LoginPage() {
     try {
       const provider = new GoogleAuthProvider();
       await signInWithPopup(auth, provider);
-      navigate('/overview'); 
+      const next = new URLSearchParams(window.location.search).get('next');
+      navigate(next && next.startsWith('/') ? next : '/overview'); 
     } catch (err) {
       setError("Google sign-in failed.");
     }

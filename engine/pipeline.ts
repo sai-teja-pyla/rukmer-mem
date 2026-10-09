@@ -353,19 +353,21 @@ export function listDocuments(containerTag?: string | null) {
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
 }
 
-export function graphPayload(containerTag?: string | null) {
-  if (!containerTag) return { nodes: [], edges: [], pathExample: null };
+export function graphPayload(containerTag?: string | null, uid?: string) {
   const state = getState();
-  const triples = state.triples.filter((t) => t.containerTag === containerTag && isUsefulFact(t));
+  const tags = new Set<string>();
+  if (containerTag) tags.add(containerTag);
+  if (uid) {
+    for (const d of state.documents) if (ownsTag(uid, d.containerTag)) tags.add(d.containerTag);
+    for (const t of state.triples) if (ownsTag(uid, t.containerTag)) tags.add(t.containerTag);
+    for (const e of state.entities) if (ownsTag(uid, e.containerTag)) tags.add(e.containerTag);
+  }
+  if (!tags.size) return { nodes: [], edges: [], pathExample: null, tags: [] as string[] };
+  const inScope = (tag: string) => tags.has(tag);
+  const triples = state.triples.filter((t) => inScope(t.containerTag));
   const keep = new Set(triples.flatMap((t) => [t.subject.toLowerCase(), t.object.toLowerCase()]));
-  const entities = state.entities.filter((e) => e.containerTag === containerTag && keep.has(e.name.toLowerCase()));
-  const docs = state.documents.filter(
-    (d) =>
-      d.containerTag === containerTag &&
-      !d.forgotten &&
-      d.source !== 'conversation' &&
-      !/^Conversation /i.test(d.title)
-  );
+  const entities = state.entities.filter((e) => inScope(e.containerTag) && (keep.size === 0 || keep.has(e.name.toLowerCase())));
+  const docs = state.documents.filter((d) => inScope(d.containerTag) && !d.forgotten);
 
   const byName = new Map<string, string>();
   for (const e of entities) {
@@ -391,7 +393,7 @@ export function graphPayload(containerTag?: string | null) {
       if (!source || !target || source === target) return null;
       return { id: t.id, source, target, label: t.predicate, isLatest: t.isLatest !== false, derived: !!t.derived };
     })
-    .filter(Boolean) as { id: string; source: string; target: string; label: string }[];
+    .filter(Boolean) as { id: string; source: string; target: string; label: string; isLatest: boolean; derived: boolean }[];
 
   for (const doc of docs.slice(0, 12)) {
     const hay = `${doc.title}\n${doc.text}`.toLowerCase();
@@ -410,6 +412,7 @@ export function graphPayload(containerTag?: string | null) {
     ],
     edges,
     pathExample: triples[0] ? shortestPath(triples, triples[0].subject, triples[0].object, triples[0].containerTag) : null,
+    tags: [...tags],
   };
 }
 

@@ -2,6 +2,7 @@ import type { NextFunction, Request, Response } from 'express';
 import { getState } from './core.js';
 import { sha } from './core.js';
 import { sanitizeUid } from './tenancy.js';
+import { mcpUnauthorized } from './oauth.js';
 
 export type MemoryUser = { uid: string; via: 'firebase' | 'apikey' | 'dev' };
 
@@ -13,11 +14,29 @@ declare global {
   }
 }
 
+function headerVal(req: Request, name: string) {
+  const v = req.headers[name];
+  return typeof v === 'string' ? v.trim() : '';
+}
+
 function bearer(req: Request) {
-  const a = req.headers.authorization;
-  const v = Array.isArray(a) ? a[0] : a;
-  if (!v || !v.toLowerCase().startsWith('bearer ')) return '';
-  return v.slice(7).trim();
+  const a = headerVal(req, 'authorization');
+  if (a.toLowerCase().startsWith('bearer ')) return a.slice(7).trim();
+  return '';
+}
+
+export function extractAccessToken(req: Request) {
+  const q = req.query || {};
+  const body = req.body && typeof req.body === 'object' ? (req.body as Record<string, unknown>) : {};
+  const fromBody = String(body.secret || body.api_key || body.access_token || '').trim();
+  return (
+    bearer(req) ||
+    headerVal(req, 'x-api-key') ||
+    headerVal(req, 'x-rukmer-key') ||
+    headerVal(req, 'api-key') ||
+    String(q.api_key || q.access_token || q.key || '').trim() ||
+    (fromBody.startsWith('rk_live_') ? fromBody : '')
+  );
 }
 
 function authRequired() {
@@ -47,15 +66,18 @@ async function verifyFirebase(token: string) {
 }
 
 function uidFromApiKey(token: string) {
-  if (!token.startsWith('rk_live_')) return '';
-  const rec = getState().apiKeys.find((k) => k.hash === sha(token));
+  const raw = token.trim();
+  if (!raw.startsWith('rk_live_')) return '';
+  const rec = getState().apiKeys.find((k) => k.hash === sha(raw) || k.hash === sha(raw.trim()));
   if (!rec) return '';
   rec.lastUsed = new Date().toISOString();
-  return sanitizeUid((rec as any).ownerUid || '');
+  const uid = sanitizeUid(rec.ownerUid || '');
+  if (!uid) return '';
+  return uid;
 }
 
 export async function resolveIdentity(req: Request): Promise<MemoryUser> {
-  const token = bearer(req);
+  const token = extractAccessToken(req);
   if (token.startsWith('rk_live_')) {
     const uid = uidFromApiKey(token);
     if (!uid) throw Object.assign(new Error('Invalid API key'), { status: 401 });
@@ -84,6 +106,8 @@ export function isPublicMemoryPath(method: string, path: string) {
   if (method === 'OPTIONS') return true;
   if (PUBLIC.has(path)) return true;
   if (method === 'GET' && path === '/mcp') return true;
+  if (path.includes('/.well-known/')) return true;
+  if (path === '/oauth/authorize' || path === '/oauth/register' || path === '/oauth/token') return true;
   return false;
 }
 
@@ -93,12 +117,16 @@ export function memoryAuth(req: Request, res: Response, next: NextFunction) {
     req.path.startsWith('/v3') ||
     req.path.startsWith('/v4') ||
     req.path.startsWith('/v1') ||
-    req.path.startsWith('/mcp');
+    req.path.startsWith('/mcp') ||
+    req.path === '/oauth/code';
   if (!gated) return next();
   void resolveIdentity(req)
     .then((user) => {
       req.memoryUser = user;
       next();
     })
-    .catch((e) => res.status(e.status || 401).json({ error: e.message || 'Unauthorized' }));
+    .catch((e) => {
+      if (req.path.startsWith('/mcp')) return mcpUnauthorized(req, res);
+      res.status(e.status || 401).json({ error: e.message || 'Unauthorized' });
+    });
 }

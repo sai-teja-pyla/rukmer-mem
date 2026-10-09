@@ -1,6 +1,6 @@
 import type { Express, Request } from 'express';
 import crypto from 'crypto';
-import { getState, loadState, saveState, sha, shortestPath, uid } from './core.js';
+import { getState, loadState, persistNow, saveState, sha, shortestPath, uid } from './core.js';
 import {
   chatWithMemory,
   forgetById,
@@ -24,8 +24,9 @@ import { completeChat, providerStatus, routeAnthropic, routeGemini, routeGrok, r
 import { MEMORY_TOOLS, runMemoryTool } from './tools.js';
 import { CHATGPT_OPENAPI, handleMcp } from './mcp.js';
 import { MEMORY_PROTOCOL } from './protocol.js';
-import { memoryAuth } from './identity.js';
+import { extractAccessToken, memoryAuth } from './identity.js';
 import { homeTag, resolveOwnedTag } from './tenancy.js';
+import { mountOauth } from './oauth.js';
 
 function uidOf(req: Request) {
   const uid = req.memoryUser?.uid;
@@ -55,6 +56,7 @@ export async function bootMemoryEngine() {
 
 export function mountMemoryEngine(app: Express) {
   app.use(memoryAuth);
+  mountOauth(app);
   app.use((req, res, next) => {
     const start = Date.now();
     res.on('finish', () => {
@@ -308,7 +310,8 @@ export function mountMemoryEngine(app: Express) {
 
   app.get('/v4/graph', (req, res) => {
     try {
-      res.json(graphPayload(tagOf(req)));
+      const uid = uidOf(req);
+      res.json(graphPayload(tagOf(req), uid));
     } catch (e: any) {
       res.status(e.status || 401).json({ error: e.message });
     }
@@ -382,7 +385,28 @@ export function mountMemoryEngine(app: Express) {
     }
   });
 
-  app.post('/v3/keys', (req, res) => {
+  app.post('/v3/keys/verify', async (req, res) => {
+    try {
+      const uid = uidOf(req);
+      const secret = String(req.body?.secret || extractAccessToken(req) || '').trim();
+      if (secret.startsWith('rk_live_')) {
+        const rec = getState().apiKeys.find((k) => k.hash === sha(secret));
+        if (!rec) return res.status(401).json({ ok: false, error: 'Invalid API key' });
+        if (rec.ownerUid && rec.ownerUid !== uid) return res.status(403).json({ ok: false, error: 'Key belongs to another user' });
+        if (!rec.ownerUid) {
+          rec.ownerUid = uid;
+          await persistNow();
+        }
+      } else if (req.memoryUser?.via !== 'apikey' && req.memoryUser?.via !== 'firebase' && req.memoryUser?.via !== 'dev') {
+        return res.status(401).json({ ok: false, error: 'Invalid API key' });
+      }
+      res.json({ ok: true, uid, homeTag: homeTag(uid), via: req.memoryUser?.via });
+    } catch (e: any) {
+      res.status(e.status || 401).json({ ok: false, error: e.message });
+    }
+  });
+
+  app.post('/v3/keys', async (req, res) => {
     try {
       const ownerUid = uidOf(req);
       const secret = 'rk_live_' + crypto.randomBytes(18).toString('hex');
@@ -390,13 +414,13 @@ export function mountMemoryEngine(app: Express) {
         id: uid('key'),
         name: String(req.body?.name || 'Untitled'),
         prefix: secret.slice(0, 12) + '…',
-        hash: sha(secret),
+        hash: sha(secret.trim()),
         createdAt: new Date().toISOString(),
         lastUsed: null,
         ownerUid,
       };
       getState().apiKeys.push(rec);
-      saveState();
+      await persistNow();
       res.json({ ...rec, secret, scope: 'Full' });
     } catch (e: any) {
       res.status(e.status || 401).json({ error: e.message });

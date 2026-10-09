@@ -12,6 +12,7 @@ dotenv.config({ path: path.join(__dirname, '..', '.env') });
 const app = express();
 app.use(cors());
 app.use(express.json({ limit: '40mb' }));
+app.use(express.urlencoded({ extended: true, limit: '40mb' }));
 mountMemoryEngine(app);
 
 const PORT = Number(process.env.PORT || 5001);

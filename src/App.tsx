@@ -33,6 +33,7 @@ import {
   AdvancedSettingsPage,
   AccountSettingsPage,
 } from './pages/console/settingsPages';
+import OAuthConsentPage from './pages/OAuthConsentPage';
 import { initAnalytics } from './hooks/analytics';
 
 // 1. IMPORT YOUR TYPES CORRECTLY
@@ -125,7 +126,23 @@ export default function App() {
       <Routes>
         <Route path="/" element={<Navigate to={user ? '/overview' : '/login'} replace />} />
         <Route path="/welcome" element={!user ? <LandingPage onLoginSuccess={handleLoginSuccess} /> : <Navigate to="/overview" replace />} />
-        <Route path="/login" element={!user ? <LoginPage /> : <Navigate to="/overview" replace />} />
+        <Route
+          path="/login"
+          element={
+            !user ? (
+              <LoginPage />
+            ) : (
+              <Navigate
+                to={(() => {
+                  const next = new URLSearchParams(window.location.search).get('next');
+                  return next && next.startsWith('/') ? next : '/overview';
+                })()}
+                replace
+              />
+            )
+          }
+        />
+        <Route path="/connect/oauth" element={user ? <OAuthConsentPage /> : <Navigate to={`/login?next=${encodeURIComponent(window.location.pathname + window.location.search)}`} replace />} />
         <Route path="/signup" element={!user ? <SignupPage /> : <Navigate to="/overview" replace />} />
         <Route path="/privacy" element={<PrivacyPage />} />
         <Route path="/terms" element={<TermsPage />} />

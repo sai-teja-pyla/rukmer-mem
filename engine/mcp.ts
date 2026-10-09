@@ -39,6 +39,7 @@ async function handleOne(msg: any, uid?: string) {
     return rpcResult(id, { tools: MCP_TOOLS });
   }
   if (method === 'tools/call') {
+    if (!uid) return rpcError(id, -32001, 'unauthorized');
     const name = String(msg?.params?.name || '');
     const args = msg?.params?.arguments || {};
     try {
