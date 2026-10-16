@@ -1,11 +1,13 @@
-import React, { useState } from 'react';
-import { Link, useOutletContext } from 'react-router-dom';
-import { Plus, Shield, Mail, Monitor, Lock, RotateCcw, Trash2, Download, LogOut } from 'lucide-react';
+import React, { useEffect, useState } from 'react';
+import { useOutletContext } from 'react-router-dom';
+import { Shield, Monitor, Lock, RotateCcw, Download, LogOut } from 'lucide-react';
 import { PageHeader, DocLink, Panel, Row, Toggle, PrimaryButton, GhostButton, CopyField } from '../../components/console/ui';
 import type { UserProfile } from '../../types';
 import { loadProviderKeys, saveProviderKeys, type ProviderKeys } from '../../services/providerKeys';
+import { engine } from '../../services/engineClient';
 import { auth } from '../../firebase';
 import { signOut } from 'firebase/auth';
+import { useUserSettings } from '../../hooks/useUserSettings';
 
 type Ctx = { user: UserProfile; displayName: string; homeTag?: string };
 
@@ -14,12 +16,45 @@ const BUCKETS = [
   'Skills', 'Finances', 'Education', 'Travel', 'Values', 'Projects',
 ];
 
+const ORG_KEY = 'rukmer.orgSettings';
+
+function loadOrgSettings() {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(ORG_KEY) || '{}');
+    return {
+      name: typeof parsed.name === 'string' && parsed.name ? parsed.name : 'Rukmer',
+      context: !!parsed.context,
+      buckets: Array.isArray(parsed.buckets) ? parsed.buckets.filter((b: unknown) => typeof b === 'string') : [],
+    };
+  } catch {
+    return { name: 'Rukmer', context: false, buckets: [] as string[] };
+  }
+}
+
+async function downloadExport() {
+  const data = await engine.exportData();
+  const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'rukmer-export.json';
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
 export function GeneralSettingsPage() {
-  const [orgName, setOrgName] = useState('Rukmer');
-  const [orgContext, setOrgContext] = useState(false);
-  const [buckets, setBuckets] = useState<string[]>([]);
+  const savedOrg = loadOrgSettings();
+  const [orgName, setOrgName] = useState(savedOrg.name);
+  const [orgContext, setOrgContext] = useState(savedOrg.context);
+  const [buckets, setBuckets] = useState<string[]>(savedOrg.buckets);
   const { homeTag } = useOutletContext<Ctx>();
   const orgId = homeTag || 'your-private-memory';
+  const { settings, updateSettings } = useUserSettings();
+  const light = (settings?.consoleTheme || localStorage.getItem('consoleTheme')) === 'light';
+  const persistOrg = (next: { name?: string; context?: boolean; buckets?: string[] }) => {
+    const value = { name: next.name ?? orgName, context: next.context ?? orgContext, buckets: next.buckets ?? buckets };
+    localStorage.setItem(ORG_KEY, JSON.stringify(value));
+  };
 
   return (
     <div className="max-w-[920px]">
@@ -33,10 +68,26 @@ export function GeneralSettingsPage() {
       />
       <Panel>
         <div className="px-4 py-3 text-[13.5px] text-zinc-200">Organization</div>
+        <Row label="Appearance" hint="Dark is the default. Switch the console to a white theme.">
+          <button
+            type="button"
+            onClick={() => {
+              const next = light ? 'dark' : 'light';
+              localStorage.setItem('consoleTheme', next);
+              void updateSettings({ consoleTheme: next });
+            }}
+            className="h-8 px-3 rounded-lg border border-white/[0.1] text-[13px] text-zinc-200"
+          >
+            {light ? 'Light' : 'Dark'}
+          </button>
+        </Row>
         <Row label="Organization name" hint="The public name of your organization.">
           <input
             value={orgName}
-            onChange={(e) => setOrgName(e.target.value)}
+            onChange={(e) => {
+              setOrgName(e.target.value);
+              persistOrg({ name: e.target.value });
+            }}
             className="h-8 w-56 px-2.5 rounded-lg border border-white/[0.08] bg-[#0c0c0e] text-[13px] text-right outline-none"
           />
         </Row>
@@ -47,7 +98,14 @@ export function GeneralSettingsPage() {
           <span className="text-[13px] text-zinc-400">Included</span>
         </Row>
         <Row label="Organization context" hint="Filters what gets stored during ingestion, guided by a description of your organization.">
-          <Toggle on={orgContext} onClick={() => setOrgContext((v) => !v)} />
+          <Toggle
+            on={orgContext}
+            onClick={() => {
+              const next = !orgContext;
+              setOrgContext(next);
+              persistOrg({ context: next });
+            }}
+          />
         </Row>
         <div className="px-4 py-4 border-t border-white/[0.06]">
           <div className="flex items-start justify-between gap-6">
@@ -69,7 +127,11 @@ export function GeneralSettingsPage() {
                   return (
                     <button
                       key={b}
-                      onClick={() => setBuckets((p) => (on ? p.filter((x) => x !== b) : [...p, b]))}
+                      onClick={() => {
+                        const next = on ? buckets.filter((x) => x !== b) : [...buckets, b];
+                        setBuckets(next);
+                        persistOrg({ buckets: next });
+                      }}
                       className={`h-7 px-2.5 rounded-md border text-[12px] ${
                         on ? 'border-blue-400/40 bg-blue-500/10 text-zinc-100' : 'border-white/[0.08] text-zinc-400'
                       }`}
@@ -78,7 +140,17 @@ export function GeneralSettingsPage() {
                     </button>
                   );
                 })}
-                <button className="h-7 px-2.5 rounded-md border border-white/[0.08] text-[12px] text-zinc-400">
+                <button
+                  type="button"
+                  className="h-7 px-2.5 rounded-md border border-white/[0.08] text-[12px] text-zinc-400"
+                  onClick={() => {
+                    const name = window.prompt('Bucket name')?.trim();
+                    if (!name || buckets.includes(name)) return;
+                    const next = [...buckets, name];
+                    setBuckets(next);
+                    persistOrg({ buckets: next });
+                  }}
+                >
                   + Custom bucket
                 </button>
               </div>
@@ -97,11 +169,7 @@ export function TeamSettingsPage() {
       <PageHeader
         title="Team"
         subtitle="The people in your organization and their roles."
-        action={
-          <PrimaryButton>
-            <Plus size={14} /> Invite member
-          </PrimaryButton>
-        }
+        action={<span className="text-[12px] text-zinc-500">Private beta is one seat</span>}
       />
       <Panel>
         <div className="grid grid-cols-[2fr_1fr_1fr_1fr_1fr] px-4 py-2.5 text-[11px] tracking-[0.08em] text-zinc-500 border-b border-white/[0.06]">
@@ -168,32 +236,14 @@ export function BillingSettingsPage() {
 
       <Panel className="mb-3 p-4">
         <p className="text-[13.5px] text-zinc-200 mb-2">Credits</p>
-        <p className="text-[28px] text-white">
-          $5.00 <span className="text-[13px] text-zinc-500">available</span>
-        </p>
-        <div className="h-2 rounded-full bg-white/[0.06] mt-3 mb-3 overflow-hidden">
-          <div className="h-full w-full bg-zinc-600/40" />
-        </div>
-        <div className="grid grid-cols-3 text-[12px] text-zinc-500">
-          <div>
-            PLAN CREDITS
-            <p className="text-zinc-200 text-[13px] mt-0.5">$5.00</p>
-          </div>
-          <div>
-            USED THIS PERIOD
-            <p className="text-zinc-200 text-[13px] mt-0.5">$0.00</p>
-          </div>
-          <div>
-            MONTHLY ALLOWANCE
-            <p className="text-zinc-200 text-[13px] mt-0.5">$5.00</p>
-          </div>
-        </div>
+        <p className="text-[15px] text-zinc-300">Not billed during private beta.</p>
+        <p className="text-[12px] text-zinc-500 mt-1">Usage on the next page counts documents, facts, and API calls. It does not draw down a balance.</p>
       </Panel>
 
       <Panel className="p-4">
         <div className="flex items-center justify-between mb-3">
           <p className="text-[13.5px] text-zinc-200">Billing & payment</p>
-          <GhostButton>Manage billing</GhostButton>
+          <span className="text-[12px] text-zinc-500">No invoices in private beta</span>
         </div>
         <div className="grid grid-cols-2 text-[12px] text-zinc-500 mb-3">
           <div>
@@ -207,7 +257,7 @@ export function BillingSettingsPage() {
         </div>
         <div className="flex items-center justify-between py-2 border-t border-white/[0.06]">
           <span className="text-[13px] text-zinc-400">No payment method</span>
-          <button className="text-[13px] text-zinc-300">Add payment method ›</button>
+          <span className="text-[13px] text-zinc-500">Not billed in private beta</span>
         </div>
         <p className="text-[13.5px] text-zinc-200 mt-4 mb-2">Invoices</p>
         <p className="text-[13px] text-zinc-500">No invoices yet.</p>
@@ -217,40 +267,47 @@ export function BillingSettingsPage() {
 }
 
 export function UsageSettingsPage() {
+  const [stats, setStats] = useState<any>(null);
+  const [requests, setRequests] = useState<any>(null);
+  useEffect(() => {
+    engine.stats().then(setStats).catch(() => {});
+    engine.requests().then(setRequests).catch(() => {});
+  }, []);
+  const calls = requests?.requests?.length || stats?.requests || 0;
   return (
     <div className="max-w-[920px]">
-      <PageHeader title="Usage" subtitle="Where this period's credits went, day by day and meter by meter." />
+      <PageHeader title="Usage" subtitle="Memory and API activity for this account. Private beta is not metered in dollars." />
       <Panel className="p-4 mb-3">
-        <p className="text-[13px] text-zinc-400 mb-2">This period</p>
+        <p className="text-[13px] text-zinc-400 mb-2">This account</p>
         <p className="text-[28px] text-white">
-          $0.00 <span className="text-[13px] text-zinc-500">used</span>
+          {calls} <span className="text-[13px] text-zinc-500">logged API calls</span>
         </p>
         <div className="flex gap-[3px] mt-3 mb-2">
           {Array.from({ length: 48 }).map((_, i) => (
             <span key={i} className="h-4 flex-1 rounded-[1px] bg-white/[0.06]" />
           ))}
         </div>
-        <p className="text-[12px] text-zinc-500">of $5.00 in credits</p>
+        <p className="text-[12px] text-zinc-500">Private beta does not charge credits</p>
       </Panel>
       <div className="grid md:grid-cols-2 gap-3 mb-3">
         <Panel className="p-4">
-          <p className="text-[11px] tracking-[0.12em] text-zinc-500">TOKENS PROCESSED</p>
+          <p className="text-[11px] tracking-[0.12em] text-zinc-500">DOCUMENTS</p>
           <p className="text-[22px] text-zinc-200 mt-4">
-            0 <span className="text-[13px] text-zinc-500">this period</span>
+            {stats?.documents ?? '—'} <span className="text-[13px] text-zinc-500">stored</span>
           </p>
         </Panel>
         <Panel className="p-4">
-          <p className="text-[11px] tracking-[0.12em] text-zinc-500">PROJECTED MONTH-END</p>
+          <p className="text-[11px] tracking-[0.12em] text-zinc-500">FACTS</p>
           <p className="text-[22px] text-zinc-200 mt-4">
-            $0.00 <span className="text-[13px] text-zinc-500">at current pace</span>
+            {stats?.latestFacts ?? '—'} <span className="text-[13px] text-zinc-500">latest</span>
           </p>
-          <p className="text-[12px] text-zinc-500 mt-2">0% of credits</p>
+          <p className="text-[12px] text-zinc-500 mt-2">{stats?.chunks ?? 0} chunks</p>
         </Panel>
       </div>
       <Panel className="p-8 text-center min-h-[180px] flex flex-col items-center justify-center">
-        <p className="text-[13.5px] text-zinc-200 self-start mb-10">Daily spend</p>
-        <p className="text-[15px] text-zinc-200">No spend yet</p>
-        <p className="text-[13px] text-zinc-500 mt-1">Daily usage appears here as it's metered.</p>
+        <p className="text-[13.5px] text-zinc-200 self-start mb-10">Recent calls</p>
+        <p className="text-[15px] text-zinc-200">{requests?.byType ? Object.entries(requests.byType).map(([k, v]) => `${k} ${v}`).join(' · ') || 'No calls logged yet' : 'No calls logged yet'}</p>
+        <p className="text-[13px] text-zinc-500 mt-1">New API calls show up on Requests after you use Playground or Import.</p>
       </Panel>
     </div>
   );
@@ -259,6 +316,7 @@ export function UsageSettingsPage() {
 export function AdvancedSettingsPage() {
   const [keys, setKeys] = useState<ProviderKeys>(() => loadProviderKeys());
   const [saved, setSaved] = useState(false);
+  const [note, setNote] = useState('');
   return (
     <div className="max-w-[920px]">
       <PageHeader title="Advanced" subtitle="LLM provider keys, export, or reset the org." />
@@ -298,11 +356,17 @@ export function AdvancedSettingsPage() {
         </div>
       </Panel>
       <Panel className="mb-3">
-        <Row label="Export organization data" hint="Documents and memories with their container tags, as JSON. Emailed as a link, valid for 6 hours.">
-          <GhostButton>
+        <Row label="Export organization data" hint="Downloads your documents and current facts as JSON.">
+          <GhostButton
+            onClick={() => {
+              setNote('');
+              void downloadExport().catch((e) => setNote(e.message || 'Export failed'));
+            }}
+          >
             <Download size={13} /> Export
           </GhostButton>
         </Row>
+        {note ? <p className="px-4 pb-3 text-[12px] text-zinc-400">{note}</p> : null}
       </Panel>
       <Panel>
         <div className="px-4 py-3 text-[13.5px] text-red-400">Danger zone</div>
@@ -313,7 +377,17 @@ export function AdvancedSettingsPage() {
               Remove all documents, memories, connections, and org settings. Billing and members are kept.
             </p>
           </div>
-          <button className="h-8 px-3 rounded-lg border border-red-500/30 text-[13px] text-red-400 inline-flex items-center gap-1.5">
+          <button
+            type="button"
+            className="h-8 px-3 rounded-lg border border-red-500/30 text-[13px] text-red-400 inline-flex items-center gap-1.5"
+            onClick={() => {
+              if (!window.confirm('Remove all documents and memories in this account? API keys stay.')) return;
+              void engine
+                .resetAccount()
+                .then((out) => setNote(`Removed ${out.documents || 0} documents and ${out.facts || 0} facts.`))
+                .catch((e) => setNote(e.message || 'Reset failed'));
+            }}
+          >
             <RotateCcw size={13} /> Reset data
           </button>
         </div>
@@ -321,12 +395,10 @@ export function AdvancedSettingsPage() {
           <div>
             <p className="text-[13.5px] text-zinc-200">Delete organization</p>
             <p className="text-[12px] text-zinc-500 max-w-md">
-              Permanently delete this organization and all its data. This cancels your subscription.
+              Private beta accounts are not deleted from this screen. Reset data above if you want a clean memory.
             </p>
           </div>
-          <button className="h-8 px-3 rounded-lg border border-red-500/30 text-[13px] text-red-400 inline-flex items-center gap-1.5">
-            <Trash2 size={13} /> Delete organization
-          </button>
+          <span className="text-[12px] text-zinc-500">Unavailable</span>
         </div>
       </Panel>
     </div>
@@ -346,8 +418,7 @@ export function AccountSettingsPage() {
         </Row>
         <Row label="Email">
           <span className="text-[13px] text-zinc-300">
-            {user.email || '—'}{' '}
-            <button className="text-[#60a5fa] ml-2">Change</button>
+            {user.email || '—'}
           </span>
         </Row>
       </Panel>
@@ -367,9 +438,7 @@ export function AccountSettingsPage() {
               </p>
             </div>
           </div>
-          <Link to="/settings/billing" className="text-[13px] text-[#60a5fa] shrink-0">
-            Available on Scale, upgrade ↗
-          </Link>
+          <span className="text-[12px] text-zinc-500 shrink-0">Not in private beta</span>
         </div>
       </Panel>
       <Panel className="mb-3">
@@ -401,11 +470,15 @@ export function AccountSettingsPage() {
           <div>
             <p className="text-[13.5px] text-zinc-200">Export your data</p>
             <p className="text-[12px] text-zinc-500 max-w-md">
-              Your documents and memories with their container tags, as JSON. Emailed as a link, valid for 6 hours.
+              Downloads your documents and current facts as JSON.
             </p>
           </div>
-          <GhostButton>
-            <Mail size={14} /> Email me my data
+          <GhostButton
+            onClick={() => {
+              void downloadExport().catch(() => {});
+            }}
+          >
+            <Download size={14} /> Download my data
           </GhostButton>
         </div>
       </Panel>

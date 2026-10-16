@@ -6,7 +6,7 @@ import { jsPDF } from 'jspdf';
 import { isUsefulFact, looksLikeDurableFact, normalizePredicate } from './quality.js';
 
 const ENGINE = process.env.ENGINE_URL || 'http://127.0.0.1:5001';
-const APP = process.env.APP_URL || 'http://127.0.0.1:5173';
+const APP = process.env.APP_URL || 'http://localhost:5173';
 const USER = `d${Date.now().toString(36)}`;
 const TAG = `u_${USER}--suite`;
 const MARKER = `DurabilityTea${Date.now().toString(36)}`;
@@ -51,6 +51,8 @@ await check('quality: reject related_to junk', async () => {
   assert(isUsefulFact({ subject: 'Saiteja', predicate: 'prefers', object: 'double espresso' }), 'good fact rejected');
   assert(!looksLikeDurableFact('Thanks that was helpful'), 'thanks stored as fact');
   assert(looksLikeDurableFact('Please remember that I work at Rukmer'), 'please remember missed');
+  assert(looksLikeDurableFact('We decided the memory layer must store filtered facts, not whole chats'), 'decision dropped');
+  assert(isUsefulFact({ subject: 'User', predicate: 'decided', object: 'store filtered facts' }), 'user decision rejected');
 });
 
 await check('engine health', async () => {
@@ -194,7 +196,7 @@ await check('inject is high-signal', async () => {
     body: JSON.stringify({ query: MARKER, containerTag: TAG }),
   });
   const inj = String(data.injection || '');
-  assert(inj.includes('High-signal') || inj.includes('CURRENT FACTS'), inj.slice(0, 120));
+  assert(inj.includes('LONG-TERM PROFILE') && inj.includes('PASSAGES FOR THIS QUESTION'), inj.slice(0, 160));
   assert(!/related_to/.test(inj), 'related_to in injection');
   const current = data.current || [];
   assert(current.length <= 8, `too many facts ${current.length}`);

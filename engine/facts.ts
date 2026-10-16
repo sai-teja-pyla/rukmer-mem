@@ -1,5 +1,8 @@
-import { getState, saveState, uid, type TripleRec } from './core.js';
-import { isUsefulFact, normalizePredicate } from './quality.js';
+import { getState, sanitizeMeta, saveState, uid, type TripleRec } from './core.js';
+import { linkEntities } from './entities.js';
+import { horizonFor, isUsefulFact, normalizePredicate } from './quality.js';
+import { inferTemporal } from './temporal.js';
+import { scopeFromTag } from './tenancy.js';
 
 export type IncomingFact = {
   subject?: string;
@@ -7,13 +10,16 @@ export type IncomingFact = {
   object?: string;
   validFrom?: string;
   kind?: TripleRec['kind'];
+  metadata?: Record<string, string>;
+  occurredAt?: string | null;
+  temporal?: TripleRec['temporal'];
 };
 
 function keyOf(tag: string, subject: string, predicate: string) {
   return `${tag}::${subject.trim().toLowerCase()}::${predicate.trim().toLowerCase()}`;
 }
 
-export function upsertFacts(tag: string, facts: IncomingFact[], evidence: string) {
+export function upsertFacts(tag: string, facts: IncomingFact[], evidence = '') {
   const state = getState();
   const now = new Date().toISOString();
   let updates = 0;
@@ -52,16 +58,23 @@ export function upsertFacts(tag: string, facts: IncomingFact[], evidence: string
       subject,
       predicate,
       object,
-      evidence: evidence.slice(0, 400),
+      evidence: String(evidence || '').slice(0, 400),
       isLatest: true,
       derived: raw.kind === 'derive',
       validFrom: raw.validFrom || now,
       validTo: null,
       kind: raw.kind || (latest ? 'update' : 'assert'),
+      horizon: horizonFor(predicate),
     };
+    const when = inferTemporal(`${object} ${evidence}`, raw.validFrom || now);
+    rec.occurredAt = raw.occurredAt ?? when.occurredAt;
+    rec.temporal = raw.temporal || when.temporal;
+    rec.metadata = sanitizeMeta(raw.metadata);
+    rec.scope = scopeFromTag(tag);
     state.triples.push(rec);
   }
 
+  linkEntities(tag);
   saveState();
   return { updates, extends: extendsCount, asserts };
 }
@@ -85,8 +98,16 @@ export function deriveFacts(tag: string) {
     }
   }
 
+  for (const t of latest.filter((x) => x.predicate === 'partner_of')) {
+    incoming.push({ subject: t.object, predicate: 'partner_of', object: t.subject, kind: 'derive' });
+  }
+  for (const t of latest.filter((x) => x.predicate === 'reports_to')) {
+    const boss = latest.find((x) => x.subject.toLowerCase() === t.object.toLowerCase() && x.predicate === 'works_at');
+    if (boss) incoming.push({ subject: t.subject, predicate: 'member_of', object: boss.object, kind: 'derive' });
+  }
+
   const unique = incoming
-    .filter((f) => f.kind === 'derive' && f.predicate === 'located_in')
+    .filter((f) => f.kind === 'derive')
     .filter((f, i, arr) => {
       const k = `${f.subject}|${f.predicate}|${f.object}`.toLowerCase();
       return arr.findIndex((x) => `${x.subject}|${x.predicate}|${x.object}`.toLowerCase() === k) === i;

@@ -10,6 +10,7 @@ export default function ApiKeysPage() {
   const [secret, setSecret] = useState('');
   const [check, setCheck] = useState('');
   const [checkMsg, setCheckMsg] = useState('');
+  const [error, setError] = useState('');
 
   useEffect(() => {
     engine.keys().then((d) => setCreated(d.keys || [])).catch(() => {});
@@ -49,6 +50,7 @@ export default function ApiKeysPage() {
           </PrimaryButton>
         </div>
         {checkMsg && <p className="text-[12px] text-zinc-400 mt-2">{checkMsg}</p>}
+        {error && <p className="text-[12px] text-red-300 mt-2">{error}</p>}
       </Panel>
 
       <Panel>
@@ -73,12 +75,28 @@ export default function ApiKeysPage() {
           ) : (
             <div className="overflow-x-auto">
               {created.map((k) => (
-                <div key={k.id || k.prefix} className="grid grid-cols-5 min-w-[560px] px-4 py-3 text-[13px] text-zinc-300 border-t border-white/[0.06]">
-                  <span className="font-mono">{k.prefix}</span>
+                <div key={k.id || k.prefix} className="grid grid-cols-5 min-w-[560px] px-4 py-3 text-[13px] text-zinc-300 border-t border-white/[0.06] items-center">
+                  <span className="font-mono">{k.name ? `${k.name} · ${k.prefix}` : k.prefix}</span>
                   <span>Full</span>
                   <span>{k.createdAt ? new Date(k.createdAt).toLocaleDateString() : 'Just now'}</span>
                   <span>{k.lastUsed || '—'}</span>
-                  <span>{k.expires || 'Never'}</span>
+                  <button
+                    type="button"
+                    className="text-left text-[12px] text-red-300 hover:text-red-200"
+                    onClick={async () => {
+                      if (!k.id) return;
+                      if (!window.confirm(`Revoke ${k.name || k.prefix}?`)) return;
+                      try {
+                        await engine.revokeKey(k.id);
+                        setCreated((p) => p.filter((row) => row.id !== k.id));
+                        setError('');
+                      } catch (e: any) {
+                        setError(e.message || 'Could not revoke the key');
+                      }
+                    }}
+                  >
+                    Revoke
+                  </button>
                 </div>
               ))}
               <div className="p-3">
@@ -114,10 +132,15 @@ export default function ApiKeysPage() {
               </button>
               <PrimaryButton
                 onClick={async () => {
-                  const rec = await engine.createKey(name || 'Untitled');
-                  setCreated((p) => [rec, ...p]);
-                  setSecret(rec.secret || '');
-                  setName('');
+                  try {
+                    const rec = await engine.createKey(name || 'Untitled');
+                    setCreated((p) => [rec, ...p]);
+                    setSecret(rec.secret || '');
+                    setName('');
+                    setError('');
+                  } catch (e: any) {
+                    setError(e.message || 'Could not create a key');
+                  }
                 }}
               >
                 Create

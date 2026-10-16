@@ -1,4 +1,4 @@
-import { ingestDocument, searchMemory } from './pipeline.js';
+import { commitImportantMemory, searchMemory } from './pipeline.js';
 import { resolveOwnedTag } from './tenancy.js';
 
 export const MEMORY_TOOLS = [
@@ -6,7 +6,8 @@ export const MEMORY_TOOLS = [
     type: 'function',
     function: {
       name: 'searchMemories',
-      description: 'Search Rukmer long-term memory (vector + keyword + graph) for this user/container.',
+      description:
+        'Search this user\'s long-term memory before answering anything about their preferences, plans, people, projects, or past decisions.',
       parameters: {
         type: 'object',
         properties: {
@@ -21,7 +22,8 @@ export const MEMORY_TOOLS = [
     type: 'function',
     function: {
       name: 'addMemory',
-      description: 'Commit an important fact, note, or conversation excerpt into Rukmer memory.',
+      description:
+        'REQUIRED during chat. Save one important fact from the latest user message: decisions, plans, preferences, people, deadlines, constraints. Pass only the fact, never the whole transcript. Call this in the same turn the fact is said.',
       parameters: {
         type: 'object',
         properties: {
@@ -43,13 +45,11 @@ export async function runMemoryTool(name: string, args: any, uid?: string) {
     return searchMemory(String(args?.query || ''), { containerTag: tag, topK: 8, includeRelated: true });
   }
   if (name === 'addMemory') {
-    return ingestDocument({
-      title: args?.title || 'Agent memory',
+    return commitImportantMemory({
+      title: args?.title,
       text: String(args?.text || ''),
       containerTag: tag,
       source: 'tool',
-      mime: 'text/plain',
-      task: 'memory',
     });
   }
   throw new Error(`Unknown memory tool ${name}`);

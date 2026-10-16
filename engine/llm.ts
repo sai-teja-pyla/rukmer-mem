@@ -1,18 +1,20 @@
 import { sanitiseGraph } from './quality.js';
 
-function geminiKey() {
+export function geminiKey() {
   return process.env.GEMINI_API_KEY || process.env.VITE_GEMINI_API_KEY || '';
 }
 
-async function gemini(path: string, body: unknown) {
-  const GEMINI_KEY = geminiKey();
+async function gemini(path: string, body: unknown, timeoutMs = 12000) {
   if (!geminiKey()) throw new Error('Missing GEMINI_API_KEY');
   const url = `https://generativelanguage.googleapis.com/v1beta/${path}?key=${geminiKey()}`;
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
   const res = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
-  });
+    signal: ctrl.signal,
+  }).finally(() => clearTimeout(timer));
   if (!res.ok) {
     const err = await res.text();
     throw new Error(`Gemini ${res.status}: ${err.slice(0, 400)}`);
@@ -24,35 +26,47 @@ export function hasLlm() {
   return !!geminiKey();
 }
 
-export async function embedText(text: string): Promise<number[]> {
-  const clean = text.replace(/\s+/g, ' ').trim().slice(0, 8000);
-  if (!clean) return [];
-  if (!geminiKey()) return localEmbed(clean);
+const queryCache = new Map<string, number[]>();
+
+export async function embedMany(texts: string[], task: 'RETRIEVAL_DOCUMENT' | 'RETRIEVAL_QUERY' = 'RETRIEVAL_DOCUMENT') {
+  const clean = texts.map((t) => t.replace(/\s+/g, ' ').trim().slice(0, 8000));
+  if (!clean.length) return [];
+  if (!geminiKey()) return clean.map((t) => (t ? localEmbed(t) : []));
   try {
-    const data = await gemini('models/text-embedding-004:embedContent', {
-      model: 'models/text-embedding-004',
-      content: { parts: [{ text: clean }] },
-      taskType: 'RETRIEVAL_DOCUMENT',
-    });
-    return data.embedding?.values || [];
+    const data = await gemini(
+      'models/text-embedding-004:batchEmbedContents',
+      {
+        requests: clean.map((text) => ({
+          model: 'models/text-embedding-004',
+          content: { parts: [{ text: text || ' ' }] },
+          taskType: task,
+        })),
+      },
+      15000
+    );
+    const rows = data.embeddings || [];
+    return clean.map((text, i) => rows[i]?.values || localEmbed(text));
   } catch {
-    return localEmbed(clean);
+    return clean.map((t) => (t ? localEmbed(t) : []));
   }
+}
+
+export async function embedText(text: string): Promise<number[]> {
+  const [vec] = await embedMany([text], 'RETRIEVAL_DOCUMENT');
+  return vec || [];
 }
 
 export async function embedQuery(text: string): Promise<number[]> {
   const clean = text.replace(/\s+/g, ' ').trim().slice(0, 8000);
-  if (!geminiKey()) return localEmbed(clean);
-  try {
-    const data = await gemini('models/text-embedding-004:embedContent', {
-      model: 'models/text-embedding-004',
-      content: { parts: [{ text: clean }] },
-      taskType: 'RETRIEVAL_QUERY',
-    });
-    return data.embedding?.values || [];
-  } catch {
-    return localEmbed(clean);
+  const hit = queryCache.get(clean);
+  if (hit) return hit;
+  const [vec] = await embedMany([clean], 'RETRIEVAL_QUERY');
+  const out = vec || [];
+  if (out.length) {
+    queryCache.set(clean, out);
+    if (queryCache.size > 64) queryCache.delete(queryCache.keys().next().value || '');
   }
+  return out;
 }
 
 function localEmbed(text: string): number[] {
@@ -69,23 +83,28 @@ function localEmbed(text: string): number[] {
   return vec.map((v) => v / n);
 }
 
-export async function generateText(prompt: string, system?: string): Promise<string> {
+export async function generateText(prompt: string, system?: string, timeoutMs = 8000): Promise<string> {
   if (!geminiKey()) {
     return prompt.slice(0, 200);
   }
-  const models = ['gemini-3.8-flash', 'gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-flash-latest'];
+  const models = ['gemini-2.5-flash', 'gemini-2.0-flash'];
   let last = '';
   for (const model of models) {
     try {
-      const data = await gemini(`models/${model}:generateContent`, {
-        systemInstruction: system ? { parts: [{ text: system }] } : undefined,
-        contents: [{ role: 'user', parts: [{ text: prompt }] }],
-        generationConfig: { temperature: 0.3, maxOutputTokens: 1024 },
-      });
+      const data = await gemini(
+        `models/${model}:generateContent`,
+        {
+          systemInstruction: system ? { parts: [{ text: system }] } : undefined,
+          contents: [{ role: 'user', parts: [{ text: prompt }] }],
+          generationConfig: { temperature: 0.2, maxOutputTokens: 800 },
+        },
+        timeoutMs
+      );
       const text = data.candidates?.[0]?.content?.parts?.map((p: any) => p.text).join('') || '';
       if (text) return text;
     } catch (e: any) {
       last = e.message;
+      if (!/404|not found/i.test(last)) break;
     }
   }
   throw new Error(last || 'Gemini generate failed');
@@ -96,36 +115,53 @@ export async function extractGraph(text: string) {
   if (!geminiKey()) return sanitiseGraph(fallback);
   try {
     const raw = await generateText(
-      `Extract ONLY durable, user-relevant facts. Skip filler, pronouns, and chaining random nouns.
+      `You are the memory layer for this person's AI chats. Extract important filtered facts only. Do not store the conversation.
+Keep: preferences, identity, people, job, location, projects, decisions, plans, deadlines, constraints, requirements, tools they use, and next steps.
+Drop: greetings, thanks, questions, filler, and model speculation.
 Return JSON only:
-{"entities":[{"name":"","type":"person|org|place|topic"}],"triples":[{"subject":"","predicate":"prefers|works_at|lives_in|building|uses|member_of|founder_of|allergic_to|goal|name","object":"","validFrom":"","kind":"update|extend|assert"}]}
+{"entities":[{"name":"","type":"person|org|place|topic|decision"}],"triples":[{"subject":"","predicate":"","object":"","validFrom":"","kind":"assert"}]}
 Rules:
-- Max 8 triples.
-- Predicates must be from that list (snake_case).
-- No related_to.
-- Do not extract The, This, Container, Memory, User, Assistant.
-- Prefer stable profile facts (preferences, job, location, projects).
-TEXT:\n${text.slice(0, 5000)}`,
-      'JSON only. If nothing durable, return {"entities":[],"triples":[]}.'
+- Max 12 triples.
+- Subject is "User" for the account owner (I/me/my).
+- predicate is snake_case: prefers, dislikes, works_at, lives_in, building, uses, goal, name, decided, plans, deadline, constraint, next_step, member_of, founder_of.
+- Other specific snake_case predicates are allowed. Never use related_to.
+- object is the fact itself, a short phrase, not a sentence of chatter.
+- If nothing important was stated or agreed, return {"entities":[],"triples":[]}.
+TEXT:\n${text.slice(0, 6000)}`,
+      'JSON only. Store durable memory, not the chat transcript.'
     );
     const json = JSON.parse(raw.replace(/```json|```/g, '').trim());
+    const llm = sanitiseGraph({
+      entities: Array.isArray(json.entities) ? json.entities : [],
+      triples: Array.isArray(json.triples) ? json.triples : [],
+    });
+    const base = sanitiseGraph(fallback);
+    const seen = new Set(llm.triples.map((t) => `${t.subject}|${t.predicate}|${t.object}`.toLowerCase()));
     return sanitiseGraph({
-      entities: Array.isArray(json.entities) ? json.entities : fallback.entities,
-      triples: Array.isArray(json.triples) ? json.triples : fallback.triples,
+      entities: [...llm.entities, ...base.entities],
+      triples: [...llm.triples, ...base.triples.filter((t) => !seen.has(`${t.subject}|${t.predicate}|${t.object}`.toLowerCase()))],
     });
   } catch {
     return sanitiseGraph(fallback);
   }
 }
 
-function heuristicExtract(text: string) {
+export function heuristicExtract(text: string) {
   const triples: { subject: string; predicate: string; object: string }[] = [];
-  const prefer = text.match(/\b(?:I|we)\s+(?:prefer|like|love)\s+([^.,;\n]{2,80})/i);
-  if (prefer) triples.push({ subject: 'User', predicate: 'prefers', object: prefer[1].trim() });
-  const work = text.match(/\b(?:I|we)\s+(?:work(?:s)? at|joined|founded)\s+([^.,;\n]{2,60})/i);
-  if (work) triples.push({ subject: 'User', predicate: 'works_at', object: work[1].trim() });
-  const live = text.match(/\b(?:I|we)\s+(?:live|based)\s+(?:in\s+)?([^.,;\n]{2,40})/i);
-  if (live) triples.push({ subject: 'User', predicate: 'lives_in', object: live[1].trim() });
+  const take = (re: RegExp, predicate: string) => {
+    const m = text.match(re);
+    if (m?.[1]) triples.push({ subject: 'User', predicate, object: m[1].trim().slice(0, 140) });
+  };
+  take(/\b(?:I|we)\s+(?:prefer|like|love)\s+([^.,;\n]{2,80})/i, 'prefers');
+  take(/\b(?:I|we)\s+(?:work(?:s)? at|joined|founded)\s+([^.,;\n]{2,80})/i, 'works_at');
+  take(/\b(?:I|we)\s+(?:live|based)\s+(?:in\s+)?([^.,;\n]{2,60})/i, 'lives_in');
+  take(/\bmy name is\s+([^.,;\n]{2,60})/i, 'name');
+  take(/\b(?:I|we)\s+(?:decided|agreed)\s+(?:to|that|on)?\s*([^.,;\n]{4,120})/i, 'decided');
+  take(/\b(?:the plan is|we plan to|I plan to)\s+([^.,;\n]{4,120})/i, 'plans');
+  take(/\b(?:deadline|due|launch(?:es|ing)?(?: date)?)\s*(?:is|:)?\s*([^.,;\n]{2,80})/i, 'deadline');
+  take(/\b(?:must|need to|have to|constraint is)\s+([^.,;\n]{4,120})/i, 'constraint');
+  take(/\b(?:next step is|action item:?)\s+([^.,;\n]{4,120})/i, 'next_step');
+  take(/\b(?:I|we)\s+(?:am|are|'m)\s+building\s+([^.,;\n]{2,80})/i, 'building');
   const names = [...new Set(triples.flatMap((t) => [t.subject, t.object]))];
   return { entities: names.map((name) => ({ name, type: 'topic' })), triples };
 }

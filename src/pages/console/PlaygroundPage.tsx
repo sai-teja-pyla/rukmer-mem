@@ -21,6 +21,30 @@ import { homeTag as makeHomeTag } from '../../services/tenancy';
 
 type MemoryMode = 'agentic' | 'auto';
 type RequestTab = 'prompt' | 'curl' | 'ts' | 'py';
+type ChatMsg = { role: 'user' | 'assistant'; text: string };
+type Thread = { id: string; title: string; updatedAt: string; messages: ChatMsg[] };
+
+function threadStore(uid: string) {
+  return `rukmer.playground.${uid}`;
+}
+
+function loadThreads(uid: string): Thread[] {
+  try {
+    const raw = localStorage.getItem(threadStore(uid));
+    const parsed = raw ? JSON.parse(raw) : [];
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveThreads(uid: string, threads: Thread[]) {
+  localStorage.setItem(threadStore(uid), JSON.stringify(threads.slice(0, 40)));
+}
+
+function newThread(): Thread {
+  return { id: `chat_${Date.now()}`, title: 'New chat', updatedAt: new Date().toISOString(), messages: [] };
+}
 
 const MODELS = [
   { id: 'gemini-3.8-flash', label: 'Gemini 3.8 Flash', provider: 'gemini' },
@@ -135,9 +159,28 @@ export default function PlaygroundPage() {
   const [requestTab, setRequestTab] = useState<RequestTab>('prompt');
   const [copied, setCopied] = useState(false);
   const [modelOpen, setModelOpen] = useState(false);
-  const [messages, setMessages] = useState<{ role: 'user' | 'assistant'; text: string }[]>([]);
+  const [threads, setThreads] = useState<Thread[]>(() => {
+    const saved = loadThreads(user.uid);
+    return saved.length ? saved : [newThread()];
+  });
+  const [threadId, setThreadId] = useState(() => (loadThreads(user.uid)[0] || newThread()).id);
   const [hits, setHits] = useState<any[]>([]);
   const [busy, setBusy] = useState(false);
+  const thread = threads.find((t) => t.id === threadId) || threads[0];
+  const messages = thread?.messages || [];
+
+  const persistThreads = (next: Thread[], id = threadId) => {
+    setThreads(next);
+    saveThreads(user.uid, next);
+    setThreadId(id);
+  };
+
+  const startChat = () => {
+    const created = newThread();
+    persistThreads([created, ...threads], created.id);
+    setHits([]);
+    setInput('');
+  };
 
   useEffect(() => {
     if (mine) {
@@ -223,12 +266,18 @@ export default function PlaygroundPage() {
     const value = (text ?? input).trim();
     if (!value || busy) return;
     setBusy(true);
-    setMessages((prev) => [...prev, { role: 'user', text: value }]);
+    const withUser = threads.map((t) =>
+      t.id === threadId
+        ? { ...t, title: t.messages.length ? t.title : value.slice(0, 42), updatedAt: new Date().toISOString(), messages: [...t.messages, { role: 'user' as const, text: value }] }
+        : t
+    );
+    persistThreads(withUser);
     setInput('');
     const body = {
       query: value,
       prompt: value,
       containerTag: tag || mine,
+      sources: source,
       memoriesRetrieved: retrieved,
       matchStrictness: strictness,
       rerank,
@@ -236,19 +285,19 @@ export default function PlaygroundPage() {
       include,
       remember: true,
       source: 'playground',
-      history: messages.map((m) => ({ role: m.role, content: m.text })),
+      history: [...messages, { role: 'user' as const, text: value }].map((m) => ({ role: m.role, content: m.text })),
     };
     try {
       if (mode === 'search') {
         const out = await engine.search(body);
         setHits(out.matches || []);
-        setMessages((prev) => [
-          ...prev,
-          {
-            role: 'assistant',
-            text: `Found ${out.matches?.length || 0} memories in ${out.tookMs}ms · ${out.mode || 'hybrid'}`,
-          },
-        ]);
+        persistThreads(
+          withUser.map((t) =>
+            t.id === threadId
+              ? { ...t, updatedAt: new Date().toISOString(), messages: [...t.messages, { role: 'assistant', text: `Found ${out.matches?.length || 0} memories in ${out.tookMs}ms · ${out.mode || 'hybrid'}` }] }
+              : t
+          )
+        );
       } else {
         const history = [...messages, { role: 'user' as const, text: value }].map((m) => ({
           role: m.role,
@@ -274,16 +323,22 @@ export default function PlaygroundPage() {
         );
         const answer = out.answer || out.choices?.[0]?.message?.content || out.error || 'No answer.';
         setHits(out.rukmer ? [{ id: 'inj', title: `${out.rukmer.provider} · ${out.rukmer.matches} memories`, text: compare ? 'Compared without memory.' : 'Memory injected into the model system prompt.', score: out.rukmer.matches }] : []);
-        setMessages((prev) => [...prev, { role: 'assistant', text: typeof answer === 'string' ? answer : JSON.stringify(answer) }]);
+        persistThreads(
+          withUser.map((t) =>
+            t.id === threadId
+              ? { ...t, updatedAt: new Date().toISOString(), messages: [...t.messages, { role: 'assistant', text: typeof answer === 'string' ? answer : JSON.stringify(answer) }] }
+              : t
+          )
+        );
       }
     } catch (err: any) {
-      setMessages((prev) => [
-        ...prev,
-        {
-          role: 'assistant',
-          text: err.message || 'Memory engine is unreachable.',
-        },
-      ]);
+      persistThreads(
+        withUser.map((t) =>
+          t.id === threadId
+            ? { ...t, messages: [...t.messages, { role: 'assistant', text: err.message || 'Memory engine is unreachable.' }] }
+            : t
+        )
+      );
     } finally {
       setBusy(false);
     }
@@ -294,10 +349,11 @@ export default function PlaygroundPage() {
       <div className="shrink-0 mb-3">
         <h1 className="hidden lg:block text-[22px] font-semibold text-white tracking-tight">Playground</h1>
         <p className="text-[13px] text-zinc-400 mt-0.5">
-          Search memories, then chat here. Gemini can use Rukmer’s hosted key — no paste.{' '}
+          Chat here to save memory, or search what is already stored.{' '}
           <Link to="/connectors" className="text-[#60a5fa] hover:underline">
-            Connect Claude, ChatGPT, Gemini, or Grok ↗
+            Connect Claude, ChatGPT, or Grok
           </Link>
+          . Gemini connectors are coming soon.
         </p>
       </div>
 
@@ -322,9 +378,33 @@ export default function PlaygroundPage() {
                 <Search size={14} /> Search
               </button>
             </div>
-            <Link to="/connectors" className="text-[12.5px] text-zinc-500 hover:text-zinc-300">
-              Connect apps instead of keys
-            </Link>
+            <div className="flex items-center gap-2">
+              <select
+                aria-label="Chat thread"
+                value={threadId}
+                onChange={(e) => {
+                  setThreadId(e.target.value);
+                  setHits([]);
+                }}
+                className="h-8 max-w-[160px] px-2 rounded-lg border border-white/[0.08] bg-[#0c0c0e] text-[12px] text-zinc-300"
+              >
+                {threads.map((t) => (
+                  <option key={t.id} value={t.id}>
+                    {t.title}
+                  </option>
+                ))}
+              </select>
+              <button
+                type="button"
+                onClick={startChat}
+                className="h-8 px-3 rounded-lg border border-white/[0.08] text-[12.5px] text-zinc-200 hover:bg-white/[0.04] inline-flex items-center gap-1"
+              >
+                <Plus size={13} /> New chat
+              </button>
+              <Link to="/connectors" className="text-[12.5px] text-zinc-500 hover:text-zinc-300 hidden sm:inline">
+                Connect apps
+              </Link>
+            </div>
           </div>
 
           <div className="flex-1 min-h-0 overflow-y-auto px-3 sm:px-6 flex flex-col">
@@ -388,7 +468,13 @@ export default function PlaygroundPage() {
                 className="w-full bg-transparent px-3 text-[13.5px] text-zinc-200 outline-none resize-none min-h-[44px]"
               />
               <div className="flex flex-wrap items-center gap-2 px-2.5 pb-2">
-                <button className="h-7 w-7 rounded-md border border-white/[0.08] text-zinc-400 hover:text-white flex items-center justify-center">
+                <button
+                  type="button"
+                  onClick={startChat}
+                  className="h-7 w-7 rounded-md border border-white/[0.08] text-zinc-400 hover:text-white flex items-center justify-center"
+                  title="New chat"
+                  aria-label="Start a new chat"
+                >
                   <Plus size={14} />
                 </button>
                 <div className="relative">

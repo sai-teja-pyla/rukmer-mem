@@ -1,10 +1,12 @@
 import { useState, useEffect, useContext, createContext, useCallback } from 'react';
 import type { ReactNode } from 'react';
 import { auth, db } from '../firebase';
+import { onAuthStateChanged } from 'firebase/auth';
 import { doc, setDoc, onSnapshot } from 'firebase/firestore';
 
 export interface UserSettings {
   theme: string;
+  consoleTheme?: string;
   displayName?: string;
   email?: string;
   aiCreativity?: number;
@@ -32,49 +34,56 @@ const SettingsContext = createContext<SettingsContextValue>({
  */
 export function UserSettingsProvider({ children }: { children: ReactNode }) {
   const [settings, setSettings] = useState<UserSettings | null>(() => {
-    const savedTheme = localStorage.getItem('appTheme');
-    return { theme: savedTheme || 'light' };
+    const consoleTheme = localStorage.getItem('consoleTheme') || 'dark';
+    return { theme: consoleTheme, consoleTheme };
   });
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    const user = auth.currentUser;
-    if (!user) {
-      setSettings(null);
-      setLoading(false);
-      return;
-    }
-
-    const userRef = doc(db, "users", user.uid);
-    const unsubscribeSnapshot = onSnapshot(userRef, (docSnap) => {
-      if (docSnap.exists()) {
-        const data = docSnap.data();
-        setSettings(data);
-        if (data.theme) localStorage.setItem('appTheme', data.theme);
-      } else {
-        const defaults = {
-          displayName: user.displayName || "New User",
-          email: user.email,
-          theme: 'light',
-          aiCreativity: 0.7,
-          notifications: true,
-          plan: "free",
-          createdAt: new Date()
-        };
-        setDoc(userRef, defaults);
-        setSettings(defaults);
-        localStorage.setItem('appTheme', 'light');
+    let unsubscribeSnapshot = () => {};
+    const unsubscribeAuth = onAuthStateChanged(auth, (user) => {
+      unsubscribeSnapshot();
+      if (!user) {
+        setLoading(false);
+        return;
       }
-      setLoading(false);
+      const userRef = doc(db, 'users', user.uid);
+      unsubscribeSnapshot = onSnapshot(userRef, (docSnap) => {
+        if (docSnap.exists()) {
+          const data = docSnap.data() as UserSettings;
+          const consoleTheme = data.consoleTheme || localStorage.getItem('consoleTheme') || 'dark';
+          setSettings({ ...data, consoleTheme });
+          localStorage.setItem('consoleTheme', consoleTheme);
+        } else {
+          const consoleTheme = localStorage.getItem('consoleTheme') || 'dark';
+          const defaults = {
+            displayName: user.displayName || 'New User',
+            email: user.email,
+            theme: consoleTheme,
+            consoleTheme,
+            aiCreativity: 0.7,
+            notifications: true,
+            plan: 'free',
+            createdAt: new Date(),
+          };
+          setDoc(userRef, defaults);
+          setSettings(defaults);
+        }
+        setLoading(false);
+      });
     });
 
-    return () => unsubscribeSnapshot();
+    return () => {
+      unsubscribeAuth();
+      unsubscribeSnapshot();
+    };
   }, []);
 
   const updateSettings = useCallback(async (newSettings: Partial<UserSettings>) => {
     if (!auth.currentUser) return;
     setSettings(prev => {
       const updated = { ...prev, ...newSettings };
+      if (newSettings.consoleTheme) localStorage.setItem('consoleTheme', String(newSettings.consoleTheme));
       if (newSettings.theme) localStorage.setItem('appTheme', newSettings.theme);
       return updated;
     });

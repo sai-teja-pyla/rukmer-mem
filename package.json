@@ -7,6 +7,8 @@
     "start": "tsx server.ts",
     "engine": "tsx engine/server.ts",
     "durability": "tsx engine/durability-test.ts",
+    "eval": "tsx engine/eval-run.ts",
+    "pressure": "tsx engine/pressure-test.ts",
     "server": "nodemon --exec tsx server.ts",
     "dev": "vite",
     "build": "vite build",

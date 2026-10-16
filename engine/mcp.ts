@@ -29,7 +29,7 @@ async function handleOne(msg: any, uid?: string) {
       capabilities: { tools: { listChanged: false } },
       serverInfo: { name: 'rukmer-memory', version: '1.0.0' },
       instructions:
-        'Rukmer stores the user\'s long-term memory. Call searchMemories before answering personal questions. Call addMemory when the user states a durable fact. Do not invent profile details.',
+        'Rukmer is the user memory layer. On every turn: 1) call searchMemories before answering anything personal, 2) if the user stated or agreed a preference, decision, plan, person, deadline, constraint, or fact, call addMemory with only that fact before you finish. Do not store greetings, questions, or the transcript.',
     });
   }
   if (method === 'ping' || method === 'notifications/initialized') {

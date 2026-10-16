@@ -1,45 +1,46 @@
-import React, { useState, useEffect, useLayoutEffect } from 'react';
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'; 
+import React, { Suspense, lazy, useState, useEffect, useLayoutEffect } from 'react';
+import { BrowserRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom'; 
 import { auth } from './firebase';
 import { onAuthStateChanged, User as FirebaseUser } from 'firebase/auth';
 
-// Page Imports
-import LandingPage from './components/LandingPage';
-import Dashboard from './components/Dashboard';
-import HelpPage from './pages/HelpPage';
-import DocsPage from './pages/DocsPage';
 import LoginPage from './pages/LoginPage';
 import SignupPage from './pages/SignupPage';
 import PrivacyPage from './pages/PrivacyPage';
-import TermsPage from './pages/TermsPage'; 
-import SubscriptionPage from './pages/SubscriptionPage';
-import ConsoleLayout from './components/console/ConsoleLayout';
-import OverviewPage from './pages/console/OverviewPage';
-import PlaygroundPage from './pages/console/PlaygroundPage';
-import ContainerTagsPage from './pages/console/ContainerTagsPage';
-import MemoryGraphPage from './pages/console/MemoryGraphPage';
-import ConnectorsPage from './pages/console/ConnectorsPage';
-import ImportPage from './pages/console/ImportPage';
-import ApiKeysPage from './pages/console/ApiKeysPage';
-import AgentsMcpPage from './pages/console/AgentsMcpPage';
-import RequestsPage from './pages/console/RequestsPage';
-import UserInsightsPage from './pages/console/UserInsightsPage';
-import {
-  GeneralSettingsPage,
-  TeamSettingsPage,
-  BillingSettingsPage,
-  UsageSettingsPage,
-  AdvancedSettingsPage,
-  AccountSettingsPage,
-} from './pages/console/settingsPages';
+import TermsPage from './pages/TermsPage';
 import OAuthConsentPage from './pages/OAuthConsentPage';
 import { initAnalytics } from './hooks/analytics';
-
-// 1. IMPORT YOUR TYPES CORRECTLY
-import { UserProfile } from './types'; 
-
-// Hook Import
+import { UserProfile } from './types';
 import { useUserSettings, UserSettingsProvider } from './hooks/useUserSettings';
+import { safeNext } from './services/safeNext';
+
+const LandingPage = lazy(() => import('./components/LandingPage'));
+const Dashboard = lazy(() => import('./components/Dashboard'));
+const HelpPage = lazy(() => import('./pages/HelpPage'));
+const DocsPage = lazy(() => import('./pages/DocsPage'));
+const SubscriptionPage = lazy(() => import('./pages/SubscriptionPage'));
+const ConsoleLayout = lazy(() => import('./components/console/ConsoleLayout'));
+const OverviewPage = lazy(() => import('./pages/console/OverviewPage'));
+const PlaygroundPage = lazy(() => import('./pages/console/PlaygroundPage'));
+const ContainerTagsPage = lazy(() => import('./pages/console/ContainerTagsPage'));
+const MemoryGraphPage = lazy(() => import('./pages/console/MemoryGraphPage'));
+const ConnectorsPage = lazy(() => import('./pages/console/ConnectorsPage'));
+const ImportPage = lazy(() => import('./pages/console/ImportPage'));
+const ApiKeysPage = lazy(() => import('./pages/console/ApiKeysPage'));
+const AgentsMcpPage = lazy(() => import('./pages/console/AgentsMcpPage'));
+const RequestsPage = lazy(() => import('./pages/console/RequestsPage'));
+const UserInsightsPage = lazy(() => import('./pages/console/UserInsightsPage'));
+const GeneralSettingsPage = lazy(() => import('./pages/console/settingsPages').then((m) => ({ default: m.GeneralSettingsPage })));
+const TeamSettingsPage = lazy(() => import('./pages/console/settingsPages').then((m) => ({ default: m.TeamSettingsPage })));
+const BillingSettingsPage = lazy(() => import('./pages/console/settingsPages').then((m) => ({ default: m.BillingSettingsPage })));
+const UsageSettingsPage = lazy(() => import('./pages/console/settingsPages').then((m) => ({ default: m.UsageSettingsPage })));
+const AdvancedSettingsPage = lazy(() => import('./pages/console/settingsPages').then((m) => ({ default: m.AdvancedSettingsPage })));
+const AccountSettingsPage = lazy(() => import('./pages/console/settingsPages').then((m) => ({ default: m.AccountSettingsPage })));
+
+function ToLogin() {
+  const location = useLocation();
+  const next = `${location.pathname}${location.search}`;
+  return <Navigate to={`/login?next=${encodeURIComponent(next)}`} replace />;
+}
 
 export default function App() {
   // 2. DEFINE STATE WITH TYPES
@@ -105,6 +106,7 @@ export default function App() {
   return (
     <UserSettingsProvider>
     <BrowserRouter>
+      <Suspense fallback={<div className="min-h-screen bg-[#0a0a0b]" />}>
       <Routes>
         <Route path="/" element={<Navigate to={user ? '/overview' : '/login'} replace />} />
         <Route path="/welcome" element={!user ? <LandingPage onLoginSuccess={handleLoginSuccess} /> : <Navigate to="/overview" replace />} />
@@ -115,10 +117,7 @@ export default function App() {
               <LoginPage />
             ) : (
               <Navigate
-                to={(() => {
-                  const next = new URLSearchParams(window.location.search).get('next');
-                  return next && next.startsWith('/') ? next : '/overview';
-                })()}
+                to={safeNext(new URLSearchParams(window.location.search).get('next'))}
                 replace
               />
             )
@@ -129,7 +128,7 @@ export default function App() {
         <Route path="/privacy" element={<PrivacyPage />} />
         <Route path="/terms" element={<TermsPage />} />
 
-        <Route element={user ? <ConsoleLayout user={user} /> : <Navigate to="/login" replace />}>
+        <Route element={user ? <ConsoleLayout user={user} /> : <ToLogin />}>
           <Route path="/overview" element={<OverviewPage />} />
           <Route path="/playground" element={<PlaygroundPage />} />
           <Route path="/container-tags" element={<ContainerTagsPage />} />
@@ -152,17 +151,18 @@ export default function App() {
         <Route path="/dashboard" element={<Navigate to="/overview" replace />} />
         <Route
           path="/dashboard/:chatId"
-          element={user ? <Dashboard user={user} isPro={isPro} /> : <Navigate to="/" replace />}
+          element={user ? <Dashboard user={user} isPro={isPro} /> : <ToLogin />}
         />
-        <Route path="/help" element={user ? <HelpPage /> : <Navigate to="/" replace />} />
-        <Route path="/docs" element={user ? <DocsPage /> : <Navigate to="/" replace />} />
+        <Route path="/help" element={user ? <HelpPage /> : <ToLogin />} />
+        <Route path="/docs" element={user ? <DocsPage /> : <ToLogin />} />
         <Route
           path="/subscription"
-          element={user ? <SubscriptionPage user={user} isPro={isPro} /> : <Navigate to="/" replace />}
+          element={user ? <SubscriptionPage user={user} isPro={isPro} /> : <ToLogin />}
         />
 
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
+      </Suspense>
     </BrowserRouter>
     </UserSettingsProvider>
   );

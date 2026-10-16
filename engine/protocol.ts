@@ -5,11 +5,16 @@
  */
 export const MEMORY_PROTOCOL = {
   name: 'Rukmer Memory Protocol',
-  version: '1.0',
+  version: '1.2',
   stores: {
-    chunks: 'Semantic passages with embeddings for hybrid search (vector + BM25).',
-    facts: 'Durable triples only (prefers, works_at, lives_in, …) with isLatest / validFrom / validTo.',
-    scope: 'Each signed-in user gets a private home tag u_{uid}. Requests cannot read another user\'s tag.',
+    files: 'Original PDFs and images are kept beside the index. Search uses the extracted text, not the raw bytes.',
+    chunks: 'Passages with a document header, embedded for hybrid search (vector + keyword + graph).',
+    longTerm: 'Stable profile facts (name, work, home, preferences) stay until a newer fact replaces them.',
+    shortTerm: 'Recent decisions, plans, and deadlines stay about 21 days, then drop out of the live profile.',
+    scope: 'Memory is scoped to a user, a session, an agent, or a shared org. A session can be closed. An org is visible only to its members.',
+    index: 'Search uses a per-tag keyword index and a vector index. It does not score every chunk in the store.',
+    time: 'Facts keep when they happened, not only when they were written, so current and past questions rank differently.',
+    filters: 'Search accepts metadata filters (all / any) and profiles are split into topic buckets.',
   },
   doesNotStore: [
     'The LLM itself or its weights',
@@ -22,10 +27,10 @@ export const MEMORY_PROTOCOL = {
     playground: 'Chat inside Rukmer Playground uses Rukmer-hosted model keys when configured. That is a new session, not their website history.',
   },
   flow: [
-    { step: 'ingest', detail: 'Documents, PDFs, and stated facts are chunked and embedded.' },
-    { step: 'extract', detail: 'Only durable profile facts go on the graph. Updates close old isLatest rows.' },
-    { step: 'query', detail: 'Incoming prompt is analyzed, then hybrid-retrieved in that containerTag.' },
-    { step: 'inject', detail: 'Current facts + top passages are written into the system prompt.' },
+    { step: 'ingest', detail: 'Text, PDFs, and images enter through the API, import, or MCP. The original file is stored. Vision or PDF text is what gets indexed.' },
+    { step: 'extract', detail: 'Long-term profile facts and short-term context are written as triples. A newer fact closes the old one.' },
+    { step: 'query', detail: 'The question is matched with embeddings, keywords, and the fact graph inside that containerTag.' },
+    { step: 'inject', detail: 'Only the long-term profile, recent context, and a few matching passages go into the prompt.' },
     { step: 'generate', detail: 'The user’s chosen model (Gemini, GPT, Claude, Grok) produces the reply.' },
     { step: 'commit', detail: 'If the user stated a new durable fact, it is saved in the background.' },
   ],

@@ -1,4 +1,4 @@
-import React, { useEffect, useLayoutEffect, useMemo, useState } from 'react';
+import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import {
   LayoutDashboard,
@@ -23,6 +23,8 @@ import {
   User,
   Menu,
   X,
+  Moon,
+  Sun,
 } from 'lucide-react';
 import { signOut } from 'firebase/auth';
 import { auth } from '../../firebase';
@@ -66,23 +68,35 @@ const settingsNav: NavItem[] = [
 ];
 
 export default function ConsoleLayout({ user }: ConsoleLayoutProps) {
-  const { settings } = useUserSettings();
+  const { settings, updateSettings } = useUserSettings();
+  const appearance = (settings?.consoleTheme || localStorage.getItem('consoleTheme') || 'dark') === 'light' ? 'light' : 'dark';
   const navigate = useNavigate();
   const location = useLocation();
   const [query, setQuery] = useState('');
   const [menuOpen, setMenuOpen] = useState(false);
   const [navOpen, setNavOpen] = useState(false);
+  const searchRef = useRef<HTMLInputElement>(null);
 
   useLayoutEffect(() => {
-    document.body.classList.add('dark-mode');
-    document.body.classList.remove('light-mode');
-    document.body.style.backgroundColor = '#0a0a0b';
-  }, [location.pathname]);
+    document.body.style.backgroundColor = appearance === 'light' ? '#f4f5f7' : '#0a0a0b';
+  }, [appearance]);
 
   useEffect(() => {
     setNavOpen(false);
     setMenuOpen(false);
   }, [location.pathname]);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault();
+        setNavOpen(true);
+        searchRef.current?.focus();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
 
   useEffect(() => {
     if (!navOpen) return;
@@ -123,6 +137,7 @@ export default function ConsoleLayout({ user }: ConsoleLayoutProps) {
         <div className="flex-1 flex items-center gap-2 rounded-lg bg-[#141416] border border-white/[0.06] px-2.5 h-[34px]">
           <Search size={14} className="text-zinc-500 shrink-0" />
           <input
+            ref={searchRef}
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             placeholder="Search..."
@@ -207,13 +222,25 @@ export default function ConsoleLayout({ user }: ConsoleLayoutProps) {
           </button>
           {menuOpen && (
             <div className="absolute bottom-10 left-0 right-0 rounded-lg border border-white/[0.08] bg-[#161618] shadow-xl p-1 z-20">
-              <button
-                type="button"
-                onClick={() => {
-                  setMenuOpen(false);
-                  setNavOpen(false);
-                  navigate('/settings/account');
-                }}
+                <button
+                  type="button"
+                  onClick={() => {
+                    const next = appearance === 'light' ? 'dark' : 'light';
+                    localStorage.setItem('consoleTheme', next);
+                    void updateSettings({ consoleTheme: next });
+                    setMenuOpen(false);
+                  }}
+                  className="w-full text-left px-2.5 py-1.5 text-[12px] text-zinc-300 rounded-md hover:bg-white/[0.06]"
+                >
+                  {appearance === 'light' ? 'Dark theme' : 'Light theme'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setMenuOpen(false);
+                    setNavOpen(false);
+                    navigate('/settings/account');
+                  }}
                 className="w-full text-left px-2.5 py-1.5 text-[12px] text-zinc-300 rounded-md hover:bg-white/[0.06]"
               >
                 Account
@@ -239,7 +266,7 @@ export default function ConsoleLayout({ user }: ConsoleLayoutProps) {
   );
 
   return (
-    <div className="h-[100dvh] w-full max-w-[100vw] overflow-hidden bg-[#0a0a0b] text-zinc-200 flex">
+    <div className={`h-[100dvh] w-full max-w-[100vw] overflow-hidden bg-[#0a0a0b] text-zinc-200 flex ${appearance === 'light' ? 'theme-light' : ''}`}>
       {navOpen && (
         <button
           type="button"
@@ -267,7 +294,19 @@ export default function ConsoleLayout({ user }: ConsoleLayoutProps) {
           >
             <Menu size={18} />
           </button>
-          <p className="text-[14px] font-medium text-white truncate">{pageTitle}</p>
+          <p className="text-[14px] font-medium text-white truncate flex-1">{pageTitle}</p>
+          <button
+            type="button"
+            aria-label={appearance === 'light' ? 'Switch to dark theme' : 'Switch to light theme'}
+            onClick={() => {
+              const next = appearance === 'light' ? 'dark' : 'light';
+              localStorage.setItem('consoleTheme', next);
+              void updateSettings({ consoleTheme: next });
+            }}
+            className="h-9 w-9 rounded-lg border border-white/[0.08] text-zinc-200 flex items-center justify-center"
+          >
+            {appearance === 'light' ? <Moon size={16} /> : <Sun size={16} />}
+          </button>
         </header>
         <main
           className={`flex-1 min-h-0 min-w-0 bg-[#0f0f11] ${

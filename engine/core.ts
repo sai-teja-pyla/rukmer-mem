@@ -3,6 +3,8 @@ import path from 'path';
 import crypto from 'crypto';
 
 export type ContainerTag = string;
+export type MemoryScope = 'user' | 'session' | 'agent' | 'org';
+export type TemporalKind = 'past' | 'present' | 'future' | 'undated';
 
 export interface DocRec {
   id: string;
@@ -13,6 +15,9 @@ export interface DocRec {
   text: string;
   createdAt: string;
   forgotten: boolean;
+  fileId?: string;
+  metadata?: Record<string, string>;
+  scope?: MemoryScope;
 }
 
 export interface ChunkRec {
@@ -26,6 +31,8 @@ export interface ChunkRec {
   createdAt: string;
   forgotten: boolean;
   source: string;
+  metadata?: Record<string, string>;
+  scope?: MemoryScope;
 }
 
 export interface EntityRec {
@@ -33,6 +40,7 @@ export interface EntityRec {
   containerTag: string;
   name: string;
   type: string;
+  memoryIds?: string[];
 }
 
 export interface TripleRec {
@@ -47,6 +55,32 @@ export interface TripleRec {
   validFrom: string;
   validTo: string | null;
   kind: 'update' | 'extend' | 'derive' | 'assert';
+  horizon?: 'long' | 'short';
+  occurredAt?: string | null;
+  temporal?: TemporalKind;
+  metadata?: Record<string, string>;
+  scope?: MemoryScope;
+}
+
+export interface LinkRec {
+  id: string;
+  containerTag: string;
+  fromId: string;
+  toId: string;
+  reason: string;
+}
+
+export interface OrgRec {
+  id: string;
+  name: string;
+  createdBy: string;
+  createdAt: string;
+}
+
+export interface OrgMemberRec {
+  orgId: string;
+  uid: string;
+  role: 'owner' | 'member';
 }
 
 export interface ApiKeyRec {
@@ -67,6 +101,7 @@ export interface RequestRec {
   status: number;
   ms: number;
   type: string;
+  ownerUid?: string;
 }
 
 export interface OauthClientRec {
@@ -95,9 +130,13 @@ export interface EngineState {
   jobs: { id: string; status: string; message: string; at: string; ownerUid?: string; containerTag?: string }[];
   oauthClients: OauthClientRec[];
   oauthCodes: OauthCodeRec[];
+  orgs: OrgRec[];
+  orgMembers: OrgMemberRec[];
+  links: LinkRec[];
+  rev: number;
 }
 
-const DATA_DIR = process.env.K_SERVICE ? path.join('/tmp', 'rukmer-data') : path.join(process.cwd(), '.rukmer-data');
+export const DATA_DIR = process.env.MEMORY_DATA_DIR || (process.env.K_SERVICE ? path.join('/tmp', 'rukmer-data') : path.join(process.cwd(), '.rukmer-data'));
 const DATA_FILE = path.join(DATA_DIR, 'engine.json');
 
 function empty(): EngineState {
@@ -111,6 +150,10 @@ function empty(): EngineState {
     jobs: [],
     oauthClients: [],
     oauthCodes: [],
+    orgs: [],
+    orgMembers: [],
+    links: [],
+    rev: 0,
   };
 }
 
@@ -161,6 +204,10 @@ export async function loadState() {
   state.oauthClients = state.oauthClients || [];
   state.oauthCodes = state.oauthCodes || [];
   state.apiKeys = state.apiKeys || [];
+  state.orgs = state.orgs || [];
+  state.orgMembers = state.orgMembers || [];
+  state.links = state.links || [];
+  state.rev = state.rev || 0;
 }
 
 function writeLocal() {
@@ -175,6 +222,7 @@ function writeLocal() {
 }
 
 export function saveState() {
+  state.rev = (state.rev || 0) + 1;
   writeLocal();
   if (gcsTimer) clearTimeout(gcsTimer);
   gcsTimer = setTimeout(() => {
@@ -193,6 +241,21 @@ export async function persistNow() {
 
 export function getState() {
   return state;
+}
+
+export async function saveBlob(id: string, bytes: Buffer, mime = 'application/octet-stream') {
+  if (!/^[a-zA-Z0-9_-]{1,80}$/.test(id)) throw new Error('Invalid file id');
+  const dir = path.join(DATA_DIR, 'files');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, id), bytes);
+  const target = gcsTarget();
+  if (!target) return;
+  try {
+    const { Storage } = await import('@google-cloud/storage');
+    await new Storage().bucket(target.bucket).file(`engine/files/${id}`).save(bytes, { contentType: mime });
+  } catch (err) {
+    console.warn('file blob gcs skipped', (err as Error).message);
+  }
 }
 
 export function uid(prefix = 'id') {
@@ -227,7 +290,24 @@ export function normalizeTriple(
     validFrom: now,
     validTo: t.validTo ?? null,
     kind: t.kind || (t.derived ? 'derive' : 'assert'),
+    horizon: t.horizon === 'short' ? 'short' : t.horizon === 'long' ? 'long' : undefined,
+    occurredAt: t.occurredAt ?? null,
+    temporal: t.temporal === 'past' || t.temporal === 'present' || t.temporal === 'future' || t.temporal === 'undated' ? t.temporal : undefined,
+    metadata: t.metadata,
+    scope: t.scope,
   };
+}
+
+export function sanitizeMeta(input: unknown): Record<string, string> | undefined {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) return undefined;
+  const out: Record<string, string> = {};
+  for (const [k, v] of Object.entries(input as Record<string, unknown>)) {
+    if (!/^[a-zA-Z0-9_.:-]{1,40}$/.test(k)) continue;
+    if (typeof v !== 'string' && typeof v !== 'number' && typeof v !== 'boolean') continue;
+    out[k] = String(v).slice(0, 200);
+    if (Object.keys(out).length >= 20) break;
+  }
+  return Object.keys(out).length ? out : undefined;
 }
 
 export function chunkText(text: string, size = 480, overlap = 90): string[] {
@@ -251,7 +331,28 @@ export function chunkText(text: string, size = 480, overlap = 90): string[] {
   return out.filter(Boolean);
 }
 
-export function cosine(a: number[], b: number[]) {
+export function chunkCode(text: string, size = 900): string[] {
+  const clean = text.replace(/\r/g, '').trim();
+  if (!clean) return [];
+  const parts = clean
+    .split(/\n(?=(?:export\s+)?(?:async\s+)?(?:function|class|def|interface|type|const|let)\s+)/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+  const out: string[] = [];
+  let buf = '';
+  for (const part of parts.length ? parts : [clean]) {
+    if ((buf + '\n' + part).length > size && buf) {
+      out.push(buf.trim());
+      buf = part;
+    } else {
+      buf = buf ? `${buf}\n${part}` : part;
+    }
+  }
+  if (buf.trim()) out.push(buf.trim());
+  return out;
+}
+
+export function cosine(a: ArrayLike<number>, b: ArrayLike<number>) {
   if (!a.length || !b.length || a.length !== b.length) return 0;
   let dot = 0, na = 0, nb = 0;
   for (let i = 0; i < a.length; i++) {

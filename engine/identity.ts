@@ -28,7 +28,7 @@ function bearer(req: Request) {
 export function extractAccessToken(req: Request) {
   const q = req.query || {};
   const body = req.body && typeof req.body === 'object' ? (req.body as Record<string, unknown>) : {};
-  const fromBody = String(body.secret || body.api_key || body.access_token || '').trim();
+  const fromBody = String(body.api_key || body.access_token || '').trim();
   return (
     bearer(req) ||
     headerVal(req, 'x-api-key') ||
@@ -39,30 +39,62 @@ export function extractAccessToken(req: Request) {
   );
 }
 
-function authRequired() {
-  return !!(process.env.K_SERVICE || process.env.MEMORY_REQUIRE_AUTH === '1');
+function isLoopback(req: Request) {
+  const ip = req.socket?.remoteAddress || '';
+  return ip === '127.0.0.1' || ip === '::1' || ip === '::ffff:127.0.0.1';
 }
 
-function decodeJwtSub(token: string) {
-  try {
-    const part = token.split('.')[1];
-    if (!part) return '';
-    const json = JSON.parse(Buffer.from(part.replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf8'));
-    return sanitizeUid(String(json.user_id || json.sub || json.uid || ''));
-  } catch {
-    return '';
-  }
-}
+type TokenCheck = { status: 'ok'; uid: string } | { status: 'invalid' } | { status: 'unavailable' };
 
-async function verifyFirebase(token: string) {
+async function verifyWithAdmin(token: string): Promise<TokenCheck> {
   try {
     const admin = (await import('firebase-admin')).default;
-    if (!admin.apps.length) return '';
+    if (!admin.apps.length) {
+      const fs = await import('fs');
+      const path = await import('path');
+      const file = path.join(process.cwd(), 'service-account.json');
+      if (!fs.existsSync(file)) return { status: 'unavailable' };
+      const cred = JSON.parse(fs.readFileSync(file, 'utf8'));
+      admin.initializeApp({ credential: admin.credential.cert(cred) });
+    }
     const decoded = await admin.auth().verifyIdToken(token);
-    return sanitizeUid(decoded.uid);
+    const uid = sanitizeUid(decoded.uid);
+    return uid ? { status: 'ok', uid } : { status: 'invalid' };
   } catch {
-    return '';
+    return { status: 'invalid' };
   }
+}
+
+async function verifyWithIdentityToolkit(token: string): Promise<TokenCheck> {
+  const key = process.env.FIREBASE_WEB_API_KEY || process.env.VITE_FIREBASE_API_KEY || '';
+  if (!key) return { status: 'unavailable' };
+  try {
+    const res = await fetch(`https://identitytoolkit.googleapis.com/v1/accounts:lookup?key=${encodeURIComponent(key)}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ idToken: token }),
+      signal: AbortSignal.timeout(8000),
+    });
+    if (!res.ok) return res.status >= 500 ? { status: 'unavailable' } : { status: 'invalid' };
+    const data = (await res.json()) as { users?: { localId?: string }[] };
+    const uid = sanitizeUid(String(data.users?.[0]?.localId || ''));
+    return uid ? { status: 'ok', uid } : { status: 'invalid' };
+  } catch {
+    return { status: 'unavailable' };
+  }
+}
+
+async function verifyFirebase(token: string): Promise<TokenCheck> {
+  const admin = await verifyWithAdmin(token);
+  if (admin.status === 'ok') return admin;
+  const toolkit = await verifyWithIdentityToolkit(token);
+  if (toolkit.status === 'ok' || toolkit.status === 'invalid') return toolkit;
+  if (admin.status === 'invalid' && toolkit.status === 'unavailable') {
+    const fs = await import('fs');
+    const path = await import('path');
+    if (fs.existsSync(path.join(process.cwd(), 'service-account.json'))) return { status: 'invalid' };
+  }
+  return toolkit.status === 'unavailable' && admin.status === 'unavailable' ? admin : toolkit;
 }
 
 function uidFromApiKey(token: string) {
@@ -85,15 +117,10 @@ export async function resolveIdentity(req: Request): Promise<MemoryUser> {
   }
   if (token && token.split('.').length === 3) {
     const verified = await verifyFirebase(token);
-    if (verified) return { uid: verified, via: 'firebase' };
-    if (!authRequired()) {
-      const sub = decodeJwtSub(token);
-      if (sub) return { uid: sub, via: 'firebase' };
-    } else {
-      throw Object.assign(new Error('Invalid Firebase token'), { status: 401 });
-    }
+    if (verified.status === 'ok') return { uid: verified.uid, via: 'firebase' };
+    if (verified.status === 'invalid') throw Object.assign(new Error('Invalid Firebase token'), { status: 401 });
   }
-  if (!authRequired()) {
+  if (isLoopback(req)) {
     const dev = sanitizeUid(String(req.headers['x-rukmer-user'] || ''));
     if (dev) return { uid: dev, via: 'dev' };
   }

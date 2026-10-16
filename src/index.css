@@ -1,7 +1,5 @@
 @import "tailwindcss";
 
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
-
 :root {
   --teams: 139, 92, 246;
   --outlook: 59, 130, 246;
@@ -17,7 +15,7 @@ html, body, #root {
   max-width: 100%;
   margin: 0;
   overflow-x: hidden;
-  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'SF Pro Display', sans-serif;
+  font-family: Inter, -apple-system, BlinkMacSystemFont, 'SF Pro Display', sans-serif;
   -webkit-font-smoothing: antialiased;
 }
 
@@ -90,3 +88,109 @@ body {
 .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
 .custom-scrollbar::-webkit-scrollbar-thumb { background: rgba(0, 0, 0, 0.10); border-radius: 3px; }
 .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: rgba(0, 0, 0, 0.18); }
+
+/* Light console. Dark stays the default. */
+.theme-light {
+  color-scheme: light;
+  background: #f4f5f7 !important;
+  color: #18181b !important;
+}
+.theme-light [class*="bg-[#0a0a0b]"],
+.theme-light [class*="bg-[#0c0c0e]"],
+.theme-light [class*="bg-[#0f0f11]"],
+.theme-light [class*="bg-[#111113]"],
+.theme-light [class*="bg-[#121214]"],
+.theme-light [class*="bg-[#141416]"],
+.theme-light [class*="bg-[#161618]"],
+.theme-light [class*="bg-[#16181e]"],
+.theme-light [class*="bg-[#18181b]"],
+.theme-light [class*="bg-[#1a1a1e]"] {
+  background-color: #ffffff !important;
+}
+.theme-light [class*="bg-[#252528]"] {
+  background-color: #e4e4e7 !important;
+  color: #18181b !important;
+}
+.theme-light .text-white { color: #18181b !important; }
+.theme-light .text-zinc-100,
+.theme-light .text-zinc-200 { color: #27272a !important; }
+.theme-light .text-zinc-300 { color: #3f3f46 !important; }
+.theme-light .text-zinc-400,
+.theme-light .text-zinc-500 { color: #52525b !important; }
+.theme-light .text-zinc-600 { color: #71717a !important; }
+.theme-light [class*="border-white"] { border-color: rgba(24, 24, 27, 0.12) !important; }
+.theme-light [class*="bg-[#2563eb]"],
+.theme-light [class*="bg-[#1d4ed8]"],
+.theme-light [class*="bg-[#1e4b8c]"] {
+  background-color: #2563eb !important;
+  color: #ffffff !important;
+}
+.theme-light [class*="bg-[#2563eb]"] .text-white,
+.theme-light [class*="bg-[#1d4ed8]"] .text-white,
+.theme-light [class*="bg-[#2563eb]"] *,
+.theme-light [class*="bg-[#1d4ed8]"] * {
+  color: #ffffff !important;
+}
+.theme-light svg text { fill: #3f3f46; }
+.theme-light input,
+.theme-light textarea,
+.theme-light select {
+  color: #18181b;
+}
+
+/* Memory graph follows the console appearance, not a separate navy palette. */
+.memory-graph {
+  --graph-bg: #0f0f11;
+  --graph-grid: rgba(255, 255, 255, 0.06);
+  --graph-panel: #141416;
+  --graph-border: rgba(255, 255, 255, 0.1);
+  --graph-text: #e4e4e7;
+  --graph-muted: #a1a1aa;
+  --graph-faint: #71717a;
+  --graph-line: #71717a;
+  --graph-hub: #18181b;
+  --graph-hub-stroke: #d4d4d8;
+  --graph-doc: #a1a1aa;
+  --graph-memory: #60a5fa;
+  --graph-memory-old: #3b82f6;
+  --graph-latest: #34d399;
+  --graph-ring: #71717a;
+  --graph-version: #a78bfa;
+  --graph-hover: rgba(255, 255, 255, 0.06);
+  --graph-glow: 0 0 0 1px rgba(37, 99, 235, 0.55), 0 0 22px rgba(37, 99, 235, 0.18);
+  background: var(--graph-bg);
+  color: var(--graph-text);
+}
+.theme-light .memory-graph {
+  --graph-bg: #f4f5f7;
+  --graph-grid: rgba(24, 24, 27, 0.07);
+  --graph-panel: #ffffff;
+  --graph-border: rgba(24, 24, 27, 0.12);
+  --graph-text: #18181b;
+  --graph-muted: #52525b;
+  --graph-faint: #71717a;
+  --graph-line: #a1a1aa;
+  --graph-hub: #ffffff;
+  --graph-hub-stroke: #3f3f46;
+  --graph-doc: #71717a;
+  --graph-memory: #2563eb;
+  --graph-memory-old: #1d4ed8;
+  --graph-latest: #059669;
+  --graph-ring: #94a3b8;
+  --graph-version: #7c3aed;
+  --graph-hover: rgba(24, 24, 27, 0.05);
+  --graph-glow: 0 0 0 1px rgba(37, 99, 235, 0.45), 0 8px 24px rgba(24, 24, 27, 0.08);
+}
+.memory-graph .graph-panel {
+  background: var(--graph-panel);
+  border-color: var(--graph-border);
+  color: var(--graph-text);
+}
+.memory-graph .graph-chip {
+  background: var(--graph-panel);
+  color: var(--graph-text);
+  box-shadow: var(--graph-glow);
+}
+.memory-graph .graph-muted { color: var(--graph-muted); }
+.memory-graph .graph-faint { color: var(--graph-faint); }
+.memory-graph .graph-hover:hover { background: var(--graph-hover); }

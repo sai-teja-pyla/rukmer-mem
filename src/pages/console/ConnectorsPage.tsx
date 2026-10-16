@@ -1,16 +1,14 @@
-import React, { useMemo, useState } from 'react';
-import { useOutletContext } from 'react-router-dom';
-import { Search, ChevronRight, MoreHorizontal, Copy, Check, ExternalLink } from 'lucide-react';
+import React, { useEffect, useMemo, useState } from 'react';
+import { Search, ChevronRight, Copy, Check, ExternalLink } from 'lucide-react';
 import { PageHeader, DocLink, Panel, GhostButton, PrimaryButton } from '../../components/console/ui';
 import {
   loadConnectedApps,
-  mcpUrl,
   mcpUrlWithKey,
   openApiUrl,
   setAppConnected,
   type AiAppId,
 } from '../../services/aiConnectors';
-import type { UserProfile } from '../../types';
+import { engine } from '../../services/engineClient';
 
 type Kind = 'ai' | 'oauth' | 'service';
 
@@ -51,12 +49,15 @@ const AI_APPS: {
   where: string;
   open: string;
   steps: string[];
+  connectHint: string;
+  comingSoon?: boolean;
 }[] = [
   {
     id: 'claude',
     name: 'Claude',
-    where: 'claude.ai → Customize → Connectors',
+    where: 'claude.ai → Settings → Connectors',
     open: 'https://claude.ai/settings/connectors',
+    connectHint: 'Copy the MCP URL, then open Claude and add a custom connector. Sign in to Rukmer when asked.',
     steps: [
       'Open Claude → Settings → Connectors → Add custom connector.',
       'Paste the Rukmer MCP URL. Claude starts Rukmer OAuth in the browser — Allow.',
@@ -66,23 +67,25 @@ const AI_APPS: {
   {
     id: 'chatgpt',
     name: 'ChatGPT',
-    where: 'chatgpt.com → Settings → Connectors (Developer mode)',
-    open: 'https://chatgpt.com/',
+    where: 'chatgpt.com → Settings → Connectors',
+    open: 'https://chatgpt.com/#settings/Connectors',
+    connectHint: 'Copy the MCP URL and the OpenAPI file, then add a connector in ChatGPT. Sign in to Rukmer once.',
     steps: [
-      'Turn on ChatGPT Developer mode, then Settings → Connectors → Create.',
-      'Paste the Rukmer MCP URL. ChatGPT uses OAuth — sign in to Rukmer and Allow.',
-      'Fallback: Custom GPT Actions with the OpenAPI file plus a Rukmer API key.',
+      'In ChatGPT, open Settings → Connectors (Developer mode if you do not see it).',
+      'Create a connector and paste the Rukmer MCP URL. ChatGPT starts Rukmer login — Allow.',
+      'If that screen is missing, create a Custom GPT Action with the OpenAPI file and a Rukmer API key.',
     ],
   },
   {
     id: 'gemini',
     name: 'Gemini',
-    where: 'Gemini CLI, or chat in Rukmer Playground',
-    open: 'https://gemini.google.com/',
+    where: 'Gemini connectors',
+    open: 'https://gemini.google.com/app',
+    comingSoon: true,
+    connectHint: 'Gemini connectors are coming soon. Until then, chat with Gemini in Playground.',
     steps: [
-      'Gemini’s website cannot import old chats. For CLI: gemini mcp add rukmer <MCP URL with api_key>.',
-      'Or chat in Playground with Gemini selected — memory stays in this workspace.',
-      'Going forward, searchMemories / addMemory write facts into your graph.',
+      'A Gemini connector is not available yet.',
+      'Playground can still use Gemini while this connector is in progress.',
     ],
   },
   {
@@ -90,6 +93,7 @@ const AI_APPS: {
     name: 'Grok',
     where: 'grok.com → Connectors',
     open: 'https://grok.com/connectors',
+    connectHint: 'Copy the MCP URL, then add a custom MCP server in Grok and sign in to Rukmer.',
     steps: [
       'Open grok.com → Connectors and add a custom MCP server.',
       'Paste the Rukmer MCP URL and complete Rukmer OAuth, or append ?api_key=.',
@@ -99,16 +103,28 @@ const AI_APPS: {
 ];
 
 export default function ConnectorsPage() {
-  const { user } = useOutletContext<{ user: UserProfile; homeTag: string }>();
   const [tab, setTab] = useState<'ai' | 'all' | Kind>('ai');
   const [q, setQ] = useState('');
   const [copied, setCopied] = useState<string | null>(null);
-  const [open, setOpen] = useState<AiAppId | null>(null);
   const [connected, setConnected] = useState<AiAppId[]>(() => loadConnectedApps());
   const [key, setKey] = useState('');
-  const url = mcpUrl();
-  const keyed = mcpUrlWithKey(key);
+  const [readyKey, setReadyKey] = useState('');
+  const [busyApp, setBusyApp] = useState<AiAppId | null>(null);
+  const [connectNote, setConnectNote] = useState('');
+  const [importProvider, setImportProvider] = useState<'github' | 'notion' | 's3' | 'web'>('web');
+  const [importValue, setImportValue] = useState('');
+  const [importStatus, setImportStatus] = useState('');
+  const liveKey = readyKey || key;
+  const keyed = mcpUrlWithKey(liveKey);
   const spec = openApiUrl();
+
+  useEffect(() => {
+    const saved = sessionStorage.getItem('rukmer.mcpKey') || '';
+    if (saved.startsWith('rk_live_')) {
+      setReadyKey(saved);
+      setKey(saved);
+    }
+  }, []);
 
   const copy = async (id: string, text: string) => {
     try {
@@ -117,7 +133,47 @@ export default function ConnectorsPage() {
       /* ignore */
     }
     setCopied(id);
-    setTimeout(() => setCopied(null), 1200);
+    setTimeout(() => setCopied(null), 1400);
+  };
+
+  const ensureKey = async () => {
+    if (liveKey.startsWith('rk_live_')) return liveKey;
+    const rec = await engine.createKey('Chat app connector');
+    const secret = String(rec.secret || '');
+    if (!secret.startsWith('rk_live_')) throw new Error('Could not create a Rukmer key');
+    setReadyKey(secret);
+    setKey(secret);
+    sessionStorage.setItem('rukmer.mcpKey', secret);
+    return secret;
+  };
+
+  const connectApp = async (app: (typeof AI_APPS)[number]) => {
+    if (app.comingSoon) return;
+    setBusyApp(app.id);
+    setConnectNote('');
+    try {
+      const secret = await ensureKey();
+      const withKey = mcpUrlWithKey(secret);
+      if (app.id === 'gemini') {
+        const cmd = `gemini mcp add rukmer ${withKey}`;
+        await copy('gemini-cmd', cmd);
+        setConnectNote('Copied the Gemini command. Paste it in a terminal, then mark this connected.');
+      } else if (app.id === 'chatgpt') {
+        await copy('chatgpt-mcp', withKey);
+        window.open(app.open, '_blank', 'noreferrer');
+        setConnectNote('Copied the MCP URL and opened ChatGPT. Add a connector, then Allow Rukmer.');
+      } else {
+        await copy(`${app.id}-mcp`, withKey);
+        window.open(app.open, '_blank', 'noreferrer');
+        setConnectNote(`Copied the MCP URL and opened ${app.name}. Add the connector, then Allow Rukmer.`);
+      }
+      const next = setAppConnected(app.id, true);
+      setConnected(next);
+    } catch (err: any) {
+      setConnectNote(err.message || 'Could not start the connection');
+    } finally {
+      setBusyApp(null);
+    }
   };
 
   const list = useMemo(
@@ -142,7 +198,7 @@ export default function ConnectorsPage() {
         title="Connectors"
         subtitle={
           <>
-            Plug Claude, ChatGPT, Gemini, and Grok into Rukmer memory — or sync files you own.{' '}
+            Each chat app has its own section. Sign in to Rukmer once, then plug in Claude, ChatGPT, or Grok. Gemini is coming soon.{' '}
             <DocLink>How connectors work ↗</DocLink>
           </>
         }
@@ -152,13 +208,13 @@ export default function ConnectorsPage() {
         <p className="text-zinc-200">You do not paste ChatGPT, Gemini, Claude, or Grok API keys.</p>
         <p>
           Those apps connect with <span className="text-zinc-300">Rukmer OAuth</span> or a{' '}
-          <span className="text-zinc-300">Rukmer API key</span> from API Keys. They still cannot export old chat history.
+          <span className="text-zinc-300">Rukmer API key</span>. They still cannot export old chat history.
         </p>
         <div className="flex flex-col sm:flex-row gap-2 pt-1">
           <input
             value={key}
             onChange={(e) => setKey(e.target.value)}
-            placeholder="Optional rk_live_ key to embed in the MCP URL"
+            placeholder="Optional rk_live_ key, or click Connect on an app to mint one"
             className="flex-1 h-9 px-3 rounded-lg border border-white/[0.08] bg-[#0c0c0e] text-[12px] font-mono outline-none"
           />
           <button
@@ -169,6 +225,11 @@ export default function ConnectorsPage() {
           </button>
         </div>
         <p className="text-[11px] font-mono text-zinc-500 break-all">{keyed}</p>
+        {connectNote && (
+          <p className="text-[12px] text-emerald-400" role="status">
+            {connectNote}
+          </p>
+        )}
       </Panel>
 
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 sm:gap-3 mb-3">
@@ -177,9 +238,7 @@ export default function ConnectorsPage() {
             <button
               key={id}
               onClick={() => setTab(id)}
-              className={`h-8 px-3 rounded-md text-[13px] ${
-                tab === id ? 'bg-[#252528] text-white' : 'text-zinc-400'
-              }`}
+              className={`h-8 px-3 rounded-md text-[13px] ${tab === id ? 'bg-[#252528] text-white' : 'text-zinc-400'}`}
             >
               {id === 'ai' ? 'AI apps' : id === 'oauth' ? 'Files (OAuth)' : id === 'service' ? 'Services' : 'All'}
             </button>
@@ -197,109 +256,167 @@ export default function ConnectorsPage() {
       </div>
 
       {showAi && (
-        <Panel className="mb-4">
+        <div className="grid md:grid-cols-2 gap-3 mb-4">
           {apps.map((app) => {
-            const on = connected.includes(app.id);
-            const expanded = open === app.id;
+            const on = !app.comingSoon && connected.includes(app.id);
             return (
-              <div key={app.id} className="border-b border-white/[0.06] last:border-b-0">
-                <div className="flex flex-wrap items-center gap-3 px-3 sm:px-4 py-3.5">
-                  <div className="h-8 w-8 rounded-md bg-white/[0.04] border border-white/[0.06] flex items-center justify-center text-[11px] text-zinc-300">
-                    {app.name.slice(0, 1)}
+              <Panel key={app.id} className="p-4 flex flex-col min-h-[240px]">
+                <div className="flex items-start justify-between gap-3 mb-3">
+                  <div>
+                    <p className="text-[15px] font-medium text-white">{app.name}</p>
+                    <p className="text-[12px] text-zinc-500">{app.where}</p>
                   </div>
-                  <div className="flex-1 min-w-0">
-                    <p className="text-[13.5px] text-zinc-100">{app.name}</p>
-                    <p className="text-[12px] text-zinc-500 truncate">{on ? 'Connected — tools enabled in that app' : app.where}</p>
-                  </div>
-                  {on && (
+                  {app.comingSoon ? (
+                    <span className="text-[11px] text-amber-200/90 border border-amber-400/30 bg-amber-400/10 rounded px-1.5 py-0.5">Coming soon</span>
+                  ) : on ? (
                     <span className="text-[11px] text-emerald-400 border border-emerald-500/20 rounded px-1.5 py-0.5">On</span>
+                  ) : (
+                    <span className="text-[11px] text-zinc-500 border border-white/[0.08] rounded px-1.5 py-0.5">Off</span>
                   )}
-                  <GhostButton onClick={() => setOpen(expanded ? null : app.id)}>{expanded ? 'Hide' : 'Connect'}</GhostButton>
                 </div>
-                {expanded && (
-                  <div className="px-4 pb-4 space-y-2">
-                    <ol className="list-decimal pl-4 text-[13px] text-zinc-400 space-y-1">
-                      {app.steps.map((s) => (
-                        <li key={s}>{s}</li>
-                      ))}
-                    </ol>
-                    <div className="flex flex-wrap gap-2 pt-2">
-                      <button
-                        onClick={() => copy(app.id, keyed)}
-                        className="h-8 px-3 rounded-lg border border-white/[0.08] bg-[#0c0c0e] text-[12px] font-mono text-zinc-300"
-                      >
-                        {copied === app.id ? 'Copied MCP URL' : url}
-                      </button>
-                      {app.id === 'chatgpt' && (
-                        <button
-                          onClick={() => copy('oa', spec)}
-                          className="h-8 px-3 rounded-lg border border-white/[0.08] text-[12px] text-zinc-400"
-                        >
-                          {copied === 'oa' ? 'Copied' : 'Copy OpenAPI'}
-                        </button>
-                      )}
-                      <a
-                        href={app.open}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="h-8 px-3 rounded-lg border border-white/[0.08] text-[12px] text-zinc-300 inline-flex items-center gap-1"
-                      >
-                        Open {app.name} <ExternalLink size={12} />
-                      </a>
-                      <PrimaryButton
-                        onClick={() => {
-                          const next = setAppConnected(app.id, !on);
-                          setConnected(next);
-                        }}
-                      >
-                        {on ? 'Disconnect' : "I've connected this"}
-                      </PrimaryButton>
-                    </div>
-                  </div>
-                )}
-              </div>
+                <p className="text-[13px] text-zinc-400 leading-relaxed mb-3">{app.connectHint}</p>
+                <ol className="list-decimal pl-4 text-[12.5px] text-zinc-500 space-y-1 mb-4">
+                  {app.steps.map((s) => (
+                    <li key={s}>{s}</li>
+                  ))}
+                </ol>
+                <div className="mt-auto flex flex-wrap gap-2">
+                  {app.comingSoon ? (
+                    <button type="button" disabled className="h-8 px-3 rounded-lg border border-white/[0.08] text-[12px] text-zinc-500 cursor-not-allowed">
+                      Coming soon
+                    </button>
+                  ) : (
+                  <PrimaryButton onClick={() => void connectApp(app)}>
+                    {busyApp === app.id ? 'Connecting…' : on ? 'Reconnect' : `Connect ${app.name}`}
+                  </PrimaryButton>
+                  )}
+                  {!app.comingSoon && (
+                  <button
+                    onClick={() => copy(`${app.id}-url`, keyed)}
+                    className="h-8 px-3 rounded-lg border border-white/[0.08] text-[12px] text-zinc-300 inline-flex items-center gap-1"
+                  >
+                    {copied === `${app.id}-url` || copied === `${app.id}-mcp` || copied === 'gemini-cmd' ? <Check size={12} /> : <Copy size={12} />}
+                    Copy MCP URL
+                  </button>
+                  )}
+                  {app.id === 'chatgpt' && (
+                    <button
+                      onClick={() => copy('oa', spec)}
+                      className="h-8 px-3 rounded-lg border border-white/[0.08] text-[12px] text-zinc-400"
+                    >
+                      {copied === 'oa' ? 'Copied OpenAPI' : 'Copy OpenAPI'}
+                    </button>
+                  )}
+                  {!app.comingSoon && (
+                  <a
+                    href={app.open}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="h-8 px-3 rounded-lg border border-white/[0.08] text-[12px] text-zinc-300 inline-flex items-center gap-1"
+                  >
+                    Open {app.name} <ExternalLink size={12} />
+                  </a>
+                  )}
+                  {on && (
+                    <GhostButton
+                      onClick={() => {
+                        setConnected(setAppConnected(app.id, false));
+                      }}
+                    >
+                      Disconnect
+                    </GhostButton>
+                  )}
+                </div>
+              </Panel>
             );
           })}
-          <div className="px-3 sm:px-4 py-3 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 sm:gap-3 border-t border-white/[0.06]">
-            <p className="text-[12px] text-zinc-500">Same MCP URL for every app. OAuth signs the connector into your private tag.</p>
-            <button
-              onClick={() => copy('mcp', keyed)}
-              className="h-8 px-3 rounded-lg border border-white/[0.08] text-[12px] text-zinc-300 inline-flex items-center gap-1"
-            >
-              {copied === 'mcp' ? <Check size={12} /> : <Copy size={12} />} {copied === 'mcp' ? 'Copied' : 'Copy MCP URL'}
-            </button>
-          </div>
-        </Panel>
+        </div>
       )}
 
       {showFiles && (
-        <Panel>
-          {list.map((c) => (
-            <div
-              key={c.id}
-              className="flex flex-wrap items-center gap-3 px-3 sm:px-4 py-3.5 border-b border-white/[0.06] last:border-b-0"
+        <>
+          <Panel>
+            {list.map((c) => (
+              <div
+                key={c.id}
+                className="flex flex-wrap items-center gap-3 px-3 sm:px-4 py-3.5 border-b border-white/[0.06] last:border-b-0"
+              >
+                <div className="h-8 w-8 rounded-md bg-white/[0.04] border border-white/[0.06] flex items-center justify-center overflow-hidden">
+                  {c.icon ? <img src={c.icon} alt="" className="h-5 w-5 object-contain" /> : <span className="text-[11px] text-zinc-400">W</span>}
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="text-[13.5px] text-zinc-100">{c.name}</p>
+                  <p className="text-[12px] text-zinc-500">Imports files you own, not AI chat history</p>
+                </div>
+                <ChevronRight size={16} className="text-zinc-600" />
+                {c.id === 'notion' || c.id === 'github' || c.id === 's3' || c.id === 'crawler' ? (
+                  <GhostButton
+                    onClick={() => {
+                      setImportProvider(c.id === 'crawler' ? 'web' : c.id);
+                      document.getElementById('connector-value')?.focus();
+                    }}
+                  >
+                    Use the import form
+                  </GhostButton>
+                ) : (
+                  <span className="text-[12px] text-zinc-500">OAuth file sync is not on this server</span>
+                )}
+              </div>
+            ))}
+          </Panel>
+          <Panel className="p-4 mt-3">
+            <form
+              className="space-y-2"
+              onSubmit={async (e) => {
+                e.preventDefault();
+                setImportStatus('Importing…');
+                try {
+                  const body =
+                    importProvider === 'github' || importProvider === 'notion'
+                      ? { provider: importProvider, token: importValue }
+                      : { provider: importProvider === 's3' ? 's3' : 'web', url: importValue };
+                  const out = await engine.importConnector(body);
+                  setImportStatus(`Imported ${out.imported} item${out.imported === 1 ? '' : 's'}`);
+                  setImportValue('');
+                } catch (err: any) {
+                  setImportStatus(err.message || 'Import failed');
+                }
+              }}
             >
-              <div className="h-8 w-8 rounded-md bg-white/[0.04] border border-white/[0.06] flex items-center justify-center overflow-hidden">
-                {c.icon ? <img src={c.icon} alt="" className="h-5 w-5 object-contain" /> : <span className="text-[11px] text-zinc-400">W</span>}
+              <label className="block text-[13px] text-zinc-200" htmlFor="connector-provider">
+                Import from GitHub, Notion, S3, or a web page
+              </label>
+              <div className="flex flex-col sm:flex-row gap-2">
+                <select
+                  id="connector-provider"
+                  aria-label="Connector to import from"
+                  value={importProvider}
+                  onChange={(e) => setImportProvider(e.target.value as typeof importProvider)}
+                  className="h-9 rounded-lg border border-white/[0.08] bg-[#111113] px-2 text-[13px] text-zinc-200"
+                >
+                  <option value="web">Web page URL</option>
+                  <option value="github">GitHub token</option>
+                  <option value="notion">Notion token</option>
+                  <option value="s3">S3 presigned URL</option>
+                </select>
+                <input
+                  aria-label={importProvider === 'github' || importProvider === 'notion' ? 'Access token, used once and not stored' : 'https URL to import'}
+                  id="connector-value"
+                  value={importValue}
+                  onChange={(e) => setImportValue(e.target.value)}
+                  placeholder={importProvider === 'github' || importProvider === 'notion' ? 'Token (used once, not stored)' : 'https://'}
+                  className="h-9 flex-1 rounded-lg border border-white/[0.08] bg-[#111113] px-3 text-[13px] text-zinc-200"
+                />
+                <button type="submit" className="h-9 px-3 rounded-lg bg-[#2563eb] text-[12px] text-white">
+                  Import into memory
+                </button>
               </div>
-              <div className="flex-1 min-w-0">
-                <p className="text-[13.5px] text-zinc-100">{c.name}</p>
-                <p className="text-[12px] text-zinc-500">Private beta · Pro access for every account · imports files you own, not AI chat history</p>
-              </div>
-              <ChevronRight size={16} className="text-zinc-600" />
-              {c.href && user?.uid ? (
-                <a href={c.href(user.uid)} className="h-8 px-3 rounded-lg bg-[#2563eb] text-[12px] text-white inline-flex items-center">
-                  Connect
-                </a>
-              ) : (
-                <GhostButton>Coming soon</GhostButton>
-              )}
-              <button className="h-8 w-8 rounded-md text-zinc-500 hover:text-zinc-300 flex items-center justify-center">
-                <MoreHorizontal size={16} />
-              </button>
-            </div>
-          ))}
-        </Panel>
+              <p className="text-[12px] text-zinc-500" role="status">
+                {importStatus || 'Tokens are sent once to read your files and are not saved.'}
+              </p>
+            </form>
+          </Panel>
+        </>
       )}
     </div>
   );

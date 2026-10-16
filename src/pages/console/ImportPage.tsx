@@ -6,47 +6,49 @@ import { engine } from '../../services/engineClient';
 import type { UserProfile } from '../../types';
 import { homeTag as makeHomeTag } from '../../services/tenancy';
 
-const TYPES = ['TXT', 'MD', 'JSON', 'CSV', 'HTML', 'PDF'];
+const TYPES = ['TXT', 'MD', 'JSON', 'CSV', 'HTML', 'PDF', 'PNG', 'JPG'];
 
 export default function ImportPage() {
   const { user, homeTag } = useOutletContext<{ user: UserProfile; homeTag: string }>();
   const mine = homeTag || makeHomeTag(user.uid);
   const [url, setUrl] = useState('');
-  const [staged, setStaged] = useState<{ title: string; text?: string; pdfBase64?: string; mime?: string; source: string }[]>([]);
+  const [staged, setStaged] = useState<{ title: string; text?: string; pdfBase64?: string; imageBase64?: string; mime?: string; source: string }[]>([]);
   const [tag, setTag] = useState(mine);
   const [tags, setTags] = useState<string[]>(mine ? [mine] : []);
   const [task, setTask] = useState<'memory' | 'rag'>('memory');
   const [jobs, setJobs] = useState<any[]>([]);
+  const [docs, setDocs] = useState<any[]>([]);
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState('');
 
   const refresh = () => {
     engine.tags().then((d) => setTags([...new Set([mine, ...(d.tags || []).map((t: any) => t.tag)].filter(Boolean))])).catch(() => {});
     engine.jobs().then((d) => setJobs(d.jobs || [])).catch(() => {});
+    engine.listDocs(tag || mine).then((d) => setDocs(d.documents || [])).catch(() => setDocs([]));
   };
 
   useEffect(() => {
     refresh();
-  }, []);
+  }, [tag, mine]);
 
   const addFiles = async (list: FileList | null) => {
     if (!list) return;
-    const next: { title: string; text?: string; pdfBase64?: string; mime?: string; source: string }[] = [];
+    const next: { title: string; text?: string; pdfBase64?: string; imageBase64?: string; mime?: string; source: string }[] = [];
+    const toB64 = async (file: File) => {
+      const bytes = new Uint8Array(await file.arrayBuffer());
+      let binary = '';
+      bytes.forEach((b) => {
+        binary += String.fromCharCode(b);
+      });
+      return btoa(binary);
+    };
     for (const file of Array.from(list)) {
       const isPdf = file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf');
+      const isImage = file.type.startsWith('image/') || /\.(png|jpe?g|gif|webp)$/i.test(file.name);
       if (isPdf) {
-        const buf = await file.arrayBuffer();
-        const bytes = new Uint8Array(buf);
-        let binary = '';
-        bytes.forEach((b) => {
-          binary += String.fromCharCode(b);
-        });
-        next.push({
-          title: file.name,
-          pdfBase64: btoa(binary),
-          mime: 'application/pdf',
-          source: 'pdf',
-        });
+        next.push({ title: file.name, pdfBase64: await toB64(file), mime: 'application/pdf', source: 'pdf' });
+      } else if (isImage) {
+        next.push({ title: file.name, imageBase64: await toB64(file), mime: file.type || 'image/png', source: 'image' });
       } else {
         const text = await file.text();
         next.push({ title: file.name, text, mime: file.type || 'text/plain', source: 'upload' });
@@ -91,7 +93,7 @@ export default function ImportPage() {
               addFiles(e.dataTransfer.files);
             }}
           >
-            <input type="file" multiple className="hidden" accept=".txt,.md,.json,.csv,.html,.htm,.pdf,application/pdf" onChange={(e) => addFiles(e.target.files)} />
+            <input type="file" multiple className="hidden" accept=".txt,.md,.json,.csv,.html,.htm,.pdf,application/pdf,image/png,image/jpeg,image/webp,image/gif" onChange={(e) => addFiles(e.target.files)} />
             <div className="mx-auto h-10 w-10 rounded-lg border border-white/[0.08] flex items-center justify-center text-zinc-500 mb-3">
               <Upload size={18} />
             </div>
@@ -164,7 +166,7 @@ export default function ImportPage() {
             <div className="px-4 py-2 text-[12px] text-zinc-500 space-y-1">
               {staged.map((s) => (
                 <p key={s.title}>
-                  • {s.title} {s.pdfBase64 ? '(PDF)' : `(${(s.text || '').length} chars)`}
+                  • {s.title} {s.pdfBase64 ? '(PDF)' : s.imageBase64 ? '(image)' : `(${(s.text || '').length} chars)`}
                 </p>
               ))}
             </div>
@@ -178,7 +180,25 @@ export default function ImportPage() {
           </Panel>
         </div>
 
-        <Panel className="min-h-[220px] p-4">
+        <div className="space-y-3">
+        <Panel className="p-4">
+          <p className="text-[13.5px] text-zinc-200 mb-3">Imported files</p>
+          {docs.length === 0 ? (
+            <p className="text-[12.5px] text-zinc-500">Nothing stored in this tag yet. After Import finishes, files appear here.</p>
+          ) : (
+            <div className="space-y-2 max-h-[320px] overflow-y-auto">
+              {docs.map((d) => (
+                <div key={d.id} className="rounded-lg border border-white/[0.06] p-2.5">
+                  <p className="text-[13px] text-zinc-200 truncate">{d.title}</p>
+                  <p className="text-[11px] text-zinc-500">
+                    {d.folder || d.source} · {d.chars || 0} chars · {d.createdAt ? new Date(d.createdAt).toLocaleString() : 'just now'}
+                  </p>
+                </div>
+              ))}
+            </div>
+          )}
+        </Panel>
+        <Panel className="min-h-[180px] p-4">
           <p className="text-[13.5px] text-zinc-200 mb-4">Processing</p>
           {jobs.length === 0 ? (
             <div className="flex flex-col items-center justify-center text-center py-10">
@@ -196,6 +216,7 @@ export default function ImportPage() {
             </div>
           )}
         </Panel>
+        </div>
       </div>
     </div>
   );

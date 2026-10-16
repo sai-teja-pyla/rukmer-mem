@@ -38,7 +38,7 @@ export default function OAuthConsentPage() {
         <p className="text-[11px] tracking-[0.14em] text-zinc-500 mb-2">RUKMER MEMORY</p>
         <h1 className="text-[22px] font-semibold text-white mb-2">Allow this app to use your memory?</h1>
         <p className="text-[13px] text-zinc-400 leading-relaxed mb-4">
-          {client} wants to search and save durable facts in your private Rukmer space. It cannot read other users, and it cannot import ChatGPT/Claude history.
+          {client} wants to search and save durable facts in your private Rukmer space. Allow once. ChatGPT, Gemini, Claude, and Grok then use this memory going forward. They cannot import old website threads.
         </p>
         {redirect && <p className="text-[11px] font-mono text-zinc-500 break-all mb-4">{redirect}</p>}
         {error && <p className="text-[13px] text-red-400 mb-3">{error}</p>}

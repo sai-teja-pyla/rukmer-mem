@@ -1,4 +1,4 @@
-import { usefulFacts } from './quality.js';
+import { buildProfile } from './memory.js';
 import type { SearchOpts } from './pipeline.js';
 
 export type ChatMessage = { role: string; content?: string; text?: string; parts?: { text?: string }[] };
@@ -24,28 +24,26 @@ export async function buildMemoryInjection(query: string, containerTag: string, 
   const retrieved = await searchMemory(query || 'profile preferences work history', {
     ...opts,
     containerTag: tag,
-    topK: opts.topK ?? 8,
+    topK: opts.topK ?? 6,
     includeRelated: true,
   });
-  const { current, historical } = usefulFacts(tag, query, 8, 4);
+  const profile = buildProfile(tag);
   const chunks = retrieved.matches.slice(0, 5).map((m, i) => `[${i + 1}] (${m.title}) ${m.text.slice(0, 420)}`).join('\n');
-  const injection = `High-signal memory for "${tag}". Ignore anything not listed here.
+  const injection = `Memory for this user. Use only what is listed. Do not invent profile details. Do not repeat the whole chat.
 
-CURRENT FACTS:
-${current.map((t) => `- ${t.subject} ${t.predicate} ${t.object}${t.derived ? ' [derived]' : ''}`).join('\n') || '(none)'}
+LONG-TERM PROFILE:
+${profile.bucketText || profile.staticText || '(none)'}
 
-OLDER FACTS (only if the user asks about the past):
-${historical.map((t) => `- ${t.subject} ${t.predicate} ${t.object} (${t.validFrom.slice(0, 10)}–${t.validTo?.slice(0, 10) || '?'})`).join('\n') || '(none)'}
+RECENT CONTEXT (short-term, may expire):
+${profile.dynamicText || '(none)'}
 
-RETRIEVED PASSAGES:
-${chunks || '(none)'}
-
-Use these facts when relevant. Do not invent profile details.`;
+PASSAGES FOR THIS QUESTION:
+${chunks || '(none)'}`;
 
   const system =
     'You have Rukmer Memory injected into this prompt. Treat injected facts as the user\'s long-term memory across Gemini, GPT, Claude, and this app.';
 
-  return { system, injection, retrieved, current, historical, containerTag: tag };
+  return { system, injection, retrieved, current: profile.static, historical: profile.dynamic, containerTag: tag };
 }
 
 export function injectOpenAIMessages(messages: ChatMessage[], injection: string, systemLead: string) {

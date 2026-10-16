@@ -1,17 +1,24 @@
 import React, { useEffect, useState } from 'react';
-import { Activity, ChevronDown } from 'lucide-react';
-import { PageHeader, DocLink, Panel, EmptyState, FilterChip } from '../../components/console/ui';
+import { Activity } from 'lucide-react';
+import { PageHeader, DocLink, Panel, EmptyState } from '../../components/console/ui';
 import { engine } from '../../services/engineClient';
 
 export default function RequestsPage() {
   const [data, setData] = useState<any>({ requests: [], byType: {}, ok: 0, avgMs: 0 });
+  const [type, setType] = useState('all');
+  const [status, setStatus] = useState('all');
 
   useEffect(() => {
     engine.requests().then(setData).catch(() => {});
   }, []);
 
-  const rows = data.requests || [];
-  const total = rows.length;
+  const rows = (data.requests || []).filter((r: any) => {
+    if (type !== 'all' && r.type !== type) return false;
+    if (status === '2xx' && (r.status < 200 || r.status >= 300)) return false;
+    if (status === 'errors' && r.status < 400) return false;
+    return true;
+  });
+  const total = (data.requests || []).length;
 
   return (
     <div className="max-w-[1100px] mx-auto">
@@ -24,9 +31,24 @@ export default function RequestsPage() {
         }
       />
       <div className="flex flex-wrap gap-2 mb-3">
-        <FilterChip>All types <ChevronDown size={12} /></FilterChip>
-        <FilterChip>All statuses <ChevronDown size={12} /></FilterChip>
-        <FilterChip>Last 30 days <ChevronDown size={12} /></FilterChip>
+        <label className="h-8 px-2 rounded-lg border border-white/[0.08] bg-[#0c0c0e] text-[12.5px] text-zinc-300 inline-flex items-center gap-1">
+          Type
+          <select aria-label="Request type" value={type} onChange={(e) => setType(e.target.value)} className="bg-transparent outline-none">
+            <option value="all">All types</option>
+            <option value="search">Search</option>
+            <option value="chat">Chat</option>
+            <option value="ingest">Ingest</option>
+            <option value="other">Other</option>
+          </select>
+        </label>
+        <label className="h-8 px-2 rounded-lg border border-white/[0.08] bg-[#0c0c0e] text-[12.5px] text-zinc-300 inline-flex items-center gap-1">
+          Status
+          <select aria-label="Request status" value={status} onChange={(e) => setStatus(e.target.value)} className="bg-transparent outline-none">
+            <option value="all">All statuses</option>
+            <option value="2xx">2xx</option>
+            <option value="errors">Errors</option>
+          </select>
+        </label>
       </div>
       <div className="grid md:grid-cols-3 gap-3 mb-3">
         <Panel className="p-4 min-h-[120px]">

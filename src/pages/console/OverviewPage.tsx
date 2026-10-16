@@ -59,7 +59,7 @@ Keep secrets in .env — never commit keys.`;
             </div>
             <h1 className="text-[26px] sm:text-[32px] font-semibold tracking-tight text-white mb-3">Get started</h1>
             <p className="text-[14px] text-zinc-400 leading-relaxed max-w-[340px]">
-              Paste one prompt into Claude Code, Cursor, Codex or OpenCode. Your agent creates a key, learns the API, and wires memory into this project.
+              Start in Playground, import a file, then connect Claude Code, Cursor, or Codex. Chat apps use Connectors.
             </p>
 
             <div className="flex flex-wrap items-center gap-3 mt-7">
@@ -81,15 +81,18 @@ Keep secrets in .env — never commit keys.`;
 
             {manualOpen && (
               <div className="mt-4 rounded-lg border border-white/[0.07] bg-black/25 p-3 text-[12.5px] text-zinc-400 space-y-1.5 max-w-[360px]">
-                <p>1. Add keys to <code className="text-zinc-300">.env</code> and place <code className="text-zinc-300">service-account.json</code> in the project root.</p>
-                <p>2. Run <code className="text-zinc-300">npm run dev</code> and <code className="text-zinc-300">PORT=5001 npm start</code>.</p>
-                <p>3. Connect apps from Connectors, then try queries in Playground.</p>
+                <p>1. Open <Link to="/playground" className="text-zinc-200">Playground</Link> and ask what Rukmer knows.</p>
+                <p>2. Add files from <Link to="/import" className="text-zinc-200">Import</Link>. They show up on the memory graph.</p>
+                <p>3. Connect <Link to="/agents-mcp" className="text-zinc-200">Claude Code, Cursor, or Codex</Link>, or a chat app from <Link to="/connectors" className="text-zinc-200">Connectors</Link>.</p>
               </div>
             )}
 
-            <Link to="/agents-mcp" className="mt-10 text-[13px] text-zinc-500 hover:text-zinc-300 w-fit">
-              Looking for plugins?
-            </Link>
+            <div className="mt-8 flex flex-col gap-2 text-[13px]">
+              <Link to="/playground" className="text-zinc-300 hover:text-white w-fit">1. Try Playground</Link>
+              <Link to="/import" className="text-zinc-300 hover:text-white w-fit">2. Import a document</Link>
+              <Link to="/agents-mcp" className="text-zinc-300 hover:text-white w-fit">3. Connect Claude Code, Cursor, or Codex</Link>
+              <Link to="/connectors" className="text-zinc-500 hover:text-zinc-300 w-fit">Chat apps (Gemini coming soon)</Link>
+            </div>
           </div>
 
           <div className="relative rounded-xl border border-white/[0.08] bg-[#0c0c0e] overflow-hidden min-h-[240px] sm:min-h-[360px]">
@@ -111,7 +114,7 @@ Keep secrets in .env — never commit keys.`;
               ))}
             </pre>
             <div className="absolute bottom-3 right-3 flex items-center gap-2 text-[12px] text-zinc-400">
-              <span>Include an API key</span>
+              <span>Include auth steps</span>
               <button
                 role="switch"
                 aria-checked={includeKey}
@@ -127,9 +130,9 @@ Keep secrets in .env — never commit keys.`;
 
       <h2 className="text-[16px] font-medium text-zinc-200 mt-8 mb-3">Explore</h2>
       <div className="grid md:grid-cols-3 gap-3">
-        <ExploreCard to="/playground" icon={<Play size={16} />} title="Live Demo" subtitle="See Rukmer memory in action" />
-        <ExploreCard to="/playground" icon={<Globe size={16} />} title="Playground" subtitle="Test the API interactively" />
-        <ExploreCard to="/docs" icon={<FileText size={16} />} title="Documentation" subtitle="Read the full API reference" />
+        <ExploreCard to="/playground" icon={<Play size={16} />} title="Playground" subtitle="Ask what this account already remembers" />
+        <ExploreCard to="/import" icon={<Globe size={16} />} title="Import" subtitle="Add a file or note, then search it" />
+        <ExploreCard to="/memory-graph" icon={<FileText size={16} />} title="Memory graph" subtitle="See documents and facts after import" />
       </div>
     </div>
   );

@@ -1,18 +1,24 @@
 import React, { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Search, ChevronDown, Tag, Download } from 'lucide-react';
-import { PageHeader, DocLink, Panel, EmptyState, FilterChip, TableHead, PrimaryButton } from '../../components/console/ui';
+import { Search, Tag, Download } from 'lucide-react';
+import { PageHeader, DocLink, Panel, EmptyState, TableHead, PrimaryButton } from '../../components/console/ui';
 import { engine } from '../../services/engineClient';
 
 export default function ContainerTagsPage() {
   const [q, setQ] = useState('');
+  const [kind, setKind] = useState<'all' | 'documents' | 'memories'>('all');
   const [tags, setTags] = useState<any[]>([]);
 
   useEffect(() => {
     engine.tags().then((d) => setTags(d.tags || [])).catch(() => {});
   }, []);
 
-  const filtered = tags.filter((t) => t.tag.toLowerCase().includes(q.toLowerCase()));
+  const filtered = tags.filter((t) => {
+    if (!t.tag.toLowerCase().includes(q.toLowerCase())) return false;
+    if (kind === 'documents') return Number(t.documents) > 0;
+    if (kind === 'memories') return Number(t.memories) > 0;
+    return true;
+  });
 
   return (
     <div className="max-w-[1100px] mx-auto">
@@ -29,9 +35,16 @@ export default function ContainerTagsPage() {
           <Search size={13} className="text-zinc-500" />
           <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search tags..." className="bg-transparent text-[13px] outline-none w-full placeholder:text-zinc-600" />
         </div>
-        <FilterChip>All documents <ChevronDown size={12} /></FilterChip>
-        <FilterChip>All memories <ChevronDown size={12} /></FilterChip>
-        <FilterChip>All activity <ChevronDown size={12} /></FilterChip>
+        {(['all', 'documents', 'memories'] as const).map((id) => (
+          <button
+            key={id}
+            type="button"
+            onClick={() => setKind(id)}
+            className={`h-8 px-3 rounded-lg border text-[12.5px] ${kind === id ? 'border-blue-400/40 bg-blue-500/10 text-white' : 'border-white/[0.08] bg-[#0c0c0e] text-zinc-300'}`}
+          >
+            {id === 'all' ? 'All tags' : id === 'documents' ? 'Has documents' : 'Has memories'}
+          </button>
+        ))}
       </div>
       <Panel>
         <TableHead cols={['CONTAINER TAG', 'DOCUMENTS', 'MEMORIES', 'ACTIVITY']} />

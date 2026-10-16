@@ -13,7 +13,7 @@ function waitForAuth() {
     setTimeout(() => {
       unsub();
       resolve(auth.currentUser);
-    }, 4000);
+    }, 1200);
   });
 }
 
@@ -70,9 +70,15 @@ export const engine = {
   requests: () => req('/v3/requests'),
   keys: () => req('/v3/keys'),
   createKey: (name: string) => req('/v3/keys', { method: 'POST', body: JSON.stringify({ name }) }),
+  revokeKey: (id: string) => req(`/v3/keys/${encodeURIComponent(id)}`, { method: 'DELETE' }),
   verifyKey: (secret: string) => req('/v3/keys/verify', { method: 'POST', body: JSON.stringify({ secret }) }),
+  exportData: () => req('/v3/export'),
+  resetAccount: () => req('/v4/account/reset', { method: 'POST', body: JSON.stringify({ confirm: 'reset' }) }),
   oauthCode: (body: any) => req('/oauth/code', { method: 'POST', body: JSON.stringify(body) }),
   models: () => req('/v1/models'),
   complete: (body: any, headers?: Record<string, string>) =>
     req('/v1/chat/completions', { method: 'POST', headers, body: JSON.stringify(body) }),
+  importConnector: (body: any) => req('/v4/connectors/import', { method: 'POST', body: JSON.stringify(body) }),
+  createOrg: (name: string) => req('/v4/orgs', { method: 'POST', body: JSON.stringify({ name }) }),
+  closeSession: (sessionId: string) => req('/v4/sessions/close', { method: 'POST', body: JSON.stringify({ sessionId }) }),
 };

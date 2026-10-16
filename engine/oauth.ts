@@ -7,13 +7,18 @@ const ALLOWED_REDIRECT = [
   'claude.com',
   'anthropic.com',
   'chatgpt.com',
+  'chat.openai.com',
   'openai.com',
   'oaistatic.com',
+  'oaiusercontent.com',
+  'platform.openai.com',
   'grok.com',
   'x.ai',
   'google.com',
   'googleusercontent.com',
   'gemini.google.com',
+  'aistudio.google.com',
+  'makersuite.google.com',
   'localhost',
   '127.0.0.1',
   'app.rukmer.com',
@@ -29,6 +34,7 @@ function hostOk(redirectUri: string) {
   try {
     const u = new URL(redirectUri);
     if (u.protocol !== 'https:' && u.hostname !== 'localhost' && u.hostname !== '127.0.0.1') return false;
+    if (u.hostname.endsWith('.openai.com') || u.hostname.endsWith('.google.com') || u.hostname.endsWith('.anthropic.com')) return true;
     return ALLOWED_REDIRECT.some((h) => u.hostname === h || u.hostname.endsWith(`.${h}`));
   } catch {
     return false;
