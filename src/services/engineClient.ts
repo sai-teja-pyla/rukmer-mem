@@ -55,6 +55,7 @@ export const engine = {
   ingestBatch: (body: any) => req('/v3/documents/batch', { method: 'POST', body: JSON.stringify(body) }),
   listDocs: (containerTag?: string) =>
     req('/v3/documents/list', { method: 'POST', body: JSON.stringify({ containerTag }) }),
+  getDoc: (id: string) => req(`/v3/documents/${encodeURIComponent(id)}`),
   tags: () => req('/v3/tags'),
   search: (body: any) => req('/v4/search', { method: 'POST', body: JSON.stringify(body) }),
   chat: (body: any) => req('/v4/chat', { method: 'POST', body: JSON.stringify(body) }),

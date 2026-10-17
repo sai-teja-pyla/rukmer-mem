@@ -17,6 +17,8 @@ type Fact = {
   horizon?: 'long' | 'short';
   validFrom?: string;
   validTo?: string | null;
+  recordedAt?: string;
+  updatedAt?: string;
 };
 
 type GraphNode = {
@@ -113,8 +115,16 @@ function nodeFlags(node: GraphNode) {
     const end = Date.parse(f.validTo);
     return end > now && end - now < 14 * 86400000;
   });
-  const created = node.createdAt ? Date.parse(node.createdAt) : NaN;
-  const fresh = !Number.isNaN(created) && now - created < 7 * 86400000;
+  const recorded = (node.facts || []).flatMap((f) => [f.recordedAt, f.updatedAt]).filter(Boolean) as string[];
+  const basis =
+    node.kind === 'document'
+      ? [node.createdAt]
+      : recorded.length
+        ? recorded
+        : [node.createdAt, ...(node.facts || []).map((f) => f.validFrom)];
+  const stamps = basis.map((value) => (value ? Date.parse(value) : NaN)).filter((value) => !Number.isNaN(value));
+  const newest = stamps.length ? Math.max(...stamps) : NaN;
+  const fresh = !Number.isNaN(newest) && newest - now < 2 * 86400000 && now - newest < 7 * 86400000;
   return { expiring, fresh };
 }
 
@@ -169,6 +179,15 @@ function orbitOf(nodes: GraphNode[]) {
   });
 }
 
+function PlusBadge({ x, y }: { x: number; y: number }) {
+  return (
+    <g transform={`translate(${x + 20} ${y - 20})`} style={{ pointerEvents: 'none' }}>
+      <circle r="9" fill="#3dd68c" stroke="#06281c" strokeWidth="1" />
+      <path d="M-4.2 0 H4.2 M0 -4.2 V4.2" stroke="#06281c" strokeWidth="2" strokeLinecap="round" />
+    </g>
+  );
+}
+
 function HexMark({ filled, muted }: { filled?: boolean; muted?: boolean }) {
   return (
     <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden>
@@ -194,7 +213,7 @@ function Legend() {
         <div className="space-y-1.5">
           <p className="flex items-center gap-2"><span className="w-4 text-center text-[#f07178] text-[13px] leading-none">✕</span> Forgotten</p>
           <p className="flex items-center gap-2"><span className="w-4 flex justify-center"><span className="h-2.5 w-2.5 rounded-full bg-[#f0a202]" /></span> Expiring soon</p>
-          <p className="flex items-center gap-2"><span className="w-4 flex justify-center text-[#3dd68c] text-[14px] leading-none">✚</span> New memory</p>
+          <p className="flex items-center gap-2"><span className="w-4 h-4 rounded-full bg-[#3dd68c] text-[#06281c] text-[12px] leading-4 text-center font-semibold">+</span> New memory</p>
         </div>
       </div>
       <div>
@@ -278,7 +297,12 @@ export default function MemoryGraphPage() {
     }
     return [...documents].sort((a, b) => (score.get(b.id) || 0) - (score.get(a.id) || 0))[0];
   }, [documents, graph.edges]);
-  const orbit = useMemo(() => orbitOf(memories.length ? memories : documents.filter((d) => d.id !== hub?.id)), [memories, documents, hub?.id]);
+  const orbit = useMemo(() => {
+    const rest = documents.filter((d) => d.id !== hub?.id);
+    const freshDocs = rest.filter((d) => nodeFlags(d).fresh);
+    const nodes = memories.length ? [...memories, ...freshDocs] : rest;
+    return orbitOf(nodes);
+  }, [memories, documents, hub?.id]);
 
   useEffect(() => {
     if (dismissed.current || selectedId) return;
@@ -318,7 +342,7 @@ export default function MemoryGraphPage() {
         className="absolute inset-0 w-full h-full z-[1] cursor-grab active:cursor-grabbing"
         viewBox={`0 0 ${VIEW_W} ${VIEW_H}`}
         preserveAspectRatio="xMidYMid meet"
-        style={{ touchAction: 'none' }}
+        style={{ touchAction: 'none', overflow: 'visible' }}
         onPointerDown={(e) => {
           if ((e.target as Element).closest('[data-node]')) return;
           drag.current = { px: e.clientX, py: e.clientY, x: view.x, y: view.y };
@@ -379,11 +403,13 @@ export default function MemoryGraphPage() {
                 ) : null}
                 <polygon points={hexPoints(x, y, 18)} fill="transparent" stroke={stroke} strokeWidth={active ? 1.8 : 1.35} />
                 {latest && !isDoc ? <circle cx={x} cy={y} r="5.2" fill="var(--graph-latest)" /> : null}
-                {flags.expiring ? <circle cx={x + 16} cy={y - 16} r="3.4" fill="#f0a202" /> : null}
-                {!flags.expiring && flags.fresh ? <circle cx={x + 16} cy={y - 16} r="3.4" fill="#3dd68c" /> : null}
+                {flags.expiring ? <circle cx={x - 16} cy={y - 16} r="3.4" fill="#f0a202" /> : null}
               </g>
             );
           })}
+
+          {hub && nodeFlags(hub).fresh ? <PlusBadge x={HUB.x} y={HUB.y} /> : null}
+          {orbit.map((node) => (nodeFlags(node).fresh ? <PlusBadge key={`plus-${node.id}`} x={node.x ?? 0} y={node.y ?? 0} /> : null))}
         </g>
       </svg>
 

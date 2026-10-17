@@ -54,6 +54,8 @@ export interface TripleRec {
   derived: boolean;
   validFrom: string;
   validTo: string | null;
+  recordedAt?: string;
+  updatedAt?: string;
   kind: 'update' | 'extend' | 'derive' | 'assert';
   horizon?: 'long' | 'short';
   occurredAt?: string | null;
@@ -289,6 +291,8 @@ export function normalizeTriple(
     derived: !!t.derived,
     validFrom: now,
     validTo: t.validTo ?? null,
+    recordedAt: t.recordedAt,
+    updatedAt: t.updatedAt,
     kind: t.kind || (t.derived ? 'derive' : 'assert'),
     horizon: t.horizon === 'short' ? 'short' : t.horizon === 'long' ? 'long' : undefined,
     occurredAt: t.occurredAt ?? null,

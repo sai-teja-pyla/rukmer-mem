@@ -471,6 +471,23 @@ export function listTags(uid?: string) {
   return rows;
 }
 
+export function readDocument(id: string, uid?: string) {
+  const doc = getState().documents.find((d) => d.id === id && !d.forgotten);
+  if (!doc) return null;
+  if (uid && !canAccessTag(uid, doc.containerTag)) return null;
+  return {
+    id: doc.id,
+    title: doc.title,
+    source: doc.source,
+    mime: doc.mime,
+    createdAt: doc.createdAt,
+    containerTag: doc.containerTag,
+    chars: (doc.text || '').length,
+    folder: folderOf(doc),
+    text: String(doc.text || '').slice(0, 20000),
+  };
+}
+
 export function listDocuments(containerTag?: string | null, uid?: string) {
   return getState()
     .documents.filter((d) => {
@@ -490,6 +507,7 @@ export function listDocuments(containerTag?: string | null, uid?: string) {
       fileId: d.fileId,
       chars: (d.text || '').length,
       folder: folderOf(d),
+      preview: String(d.text || '').slice(0, 4000),
     }));
 }
 
@@ -501,6 +519,12 @@ export function folderOf(d: { source?: string; mime?: string; title?: string; co
   if (d.source === 'conversation' || d.source === 'playground' || d.source === 'memory') return 'Chats';
   if (/\.(ts|tsx|js|py|go|rs|java)$/i.test(d.title || '') || /code|javascript|typescript|python/.test(d.mime || '')) return 'Code';
   return d.containerTag?.includes('--') ? 'Projects' : 'Documents';
+}
+
+function addedAt(facts: { recordedAt?: string; updatedAt?: string; validFrom?: string }[]) {
+  const stamped = facts.flatMap((f) => [f.recordedAt, f.updatedAt]).filter(Boolean) as string[];
+  const basis = stamped.length ? stamped : (facts.map((f) => f.validFrom).filter(Boolean) as string[]);
+  return basis.sort().at(-1);
 }
 
 export function graphPayload(containerTag?: string | null, uid?: string) {
@@ -550,6 +574,8 @@ export function graphPayload(containerTag?: string | null, uid?: string) {
     horizon: t.horizon,
     validFrom: t.validFrom,
     validTo: t.validTo,
+    recordedAt: t.recordedAt,
+    updatedAt: t.updatedAt,
   });
 
   const factsAbout = (name: string) => {
@@ -629,7 +655,7 @@ export function graphPayload(containerTag?: string | null, uid?: string) {
           kind: 'memory' as const,
           type: e.type,
           containerTag: e.containerTag,
-          createdAt: facts.map((f) => f.validFrom).filter(Boolean).sort()[0],
+          createdAt: addedAt(facts),
           facts,
         };
       }),
@@ -638,7 +664,7 @@ export function graphPayload(containerTag?: string | null, uid?: string) {
         return {
           ...n,
           containerTag: facts[0]?.containerTag,
-          createdAt: facts.map((f) => f.validFrom).filter(Boolean).sort()[0],
+          createdAt: addedAt(facts),
           facts,
         };
       }),

@@ -12,6 +12,7 @@ import {
   ingestUrl,
   insights,
   listDocuments,
+  readDocument,
   listTags,
   logRequest,
   rememberTranscript,
@@ -170,6 +171,16 @@ export function mountMemoryEngine(app: Express) {
       res.json({ count: results.length, results });
     } catch (e: any) {
       res.status(e.status || 400).json({ error: e.message });
+    }
+  });
+
+  app.get('/v3/documents/:id', (req, res) => {
+    try {
+      const doc = readDocument(String(req.params.id || ''), uidOf(req));
+      if (!doc) return res.status(404).json({ error: 'Document not found' });
+      res.json(doc);
+    } catch (e: any) {
+      res.status(e.status || 401).json({ error: e.message });
     }
   });
 

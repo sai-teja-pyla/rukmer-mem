@@ -40,6 +40,8 @@ export function upsertFacts(tag: string, facts: IncomingFact[], evidence = '') {
     if (latest && sameObject) {
       latest.evidence = `${latest.evidence} | ${evidence}`.slice(0, 900);
       latest.kind = 'extend';
+      latest.updatedAt = now;
+      if (!latest.recordedAt) latest.recordedAt = latest.validFrom || now;
       extendsCount += 1;
       continue;
     }
@@ -63,6 +65,8 @@ export function upsertFacts(tag: string, facts: IncomingFact[], evidence = '') {
       derived: raw.kind === 'derive',
       validFrom: raw.validFrom || now,
       validTo: null,
+      recordedAt: now,
+      updatedAt: now,
       kind: raw.kind || (latest ? 'update' : 'assert'),
       horizon: horizonFor(predicate),
     };

@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { useOutletContext } from 'react-router-dom';
 import { Upload, Zap, Plus } from 'lucide-react';
 import { PageHeader, DocLink, Panel, PrimaryButton, GhostButton } from '../../components/console/ui';
@@ -18,18 +18,60 @@ export default function ImportPage() {
   const [task, setTask] = useState<'memory' | 'rag'>('memory');
   const [jobs, setJobs] = useState<any[]>([]);
   const [docs, setDocs] = useState<any[]>([]);
+  const [openId, setOpenId] = useState<string | null>(null);
+  const [openDoc, setOpenDoc] = useState<any>(null);
+  const [openError, setOpenError] = useState('');
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState('');
+  const readerRef = useRef<HTMLDivElement>(null);
+  const openReq = useRef(0);
 
-  const refresh = () => {
+  const refresh = async () => {
     engine.tags().then((d) => setTags([...new Set([mine, ...(d.tags || []).map((t: any) => t.tag)].filter(Boolean))])).catch(() => {});
     engine.jobs().then((d) => setJobs(d.jobs || [])).catch(() => {});
-    engine.listDocs(tag || mine).then((d) => setDocs(d.documents || [])).catch(() => setDocs([]));
+    try {
+      const d = await engine.listDocs(tag || mine);
+      const documents = d.documents || [];
+      setDocs(documents);
+      return documents as any[];
+    } catch {
+      setDocs([]);
+      return [] as any[];
+    }
   };
 
   useEffect(() => {
     refresh();
   }, [tag, mine]);
+
+  useEffect(() => {
+    if (openId) readerRef.current?.scrollIntoView({ block: 'nearest' });
+  }, [openId]);
+
+  const closeFile = () => {
+    openReq.current += 1;
+    setOpenId(null);
+    setOpenDoc(null);
+    setOpenError('');
+  };
+
+  const openFile = (id: string, listed?: any) => {
+    const token = ++openReq.current;
+    const row = listed || docs.find((d) => d.id === id);
+    setOpenId(id);
+    setOpenError('');
+    setOpenDoc(row ? { ...row, text: row.preview || row.text || '' } : null);
+    engine
+      .getDoc(id)
+      .then((doc) => {
+        if (openReq.current !== token) return;
+        setOpenDoc(doc);
+      })
+      .catch((e) => {
+        if (openReq.current !== token) return;
+        if (!(row?.preview || row?.text)) setOpenError(e.message || 'Could not open this file');
+      });
+  };
 
   const addFiles = async (list: FileList | null) => {
     if (!list) return;
@@ -65,7 +107,8 @@ export default function ImportPage() {
       await engine.ingestBatch({ containerTag: tag, task, documents: staged });
       setStaged([]);
       setStatus('Import complete');
-      refresh();
+      const documents = await refresh();
+      if (documents[0]?.id) openFile(documents[0].id, documents[0]);
     } catch (e: any) {
       setStatus(e.message);
     } finally {
@@ -83,6 +126,32 @@ export default function ImportPage() {
           </>
         }
       />
+      {openId ? (
+        <div ref={readerRef}>
+        <Panel className="p-4 mb-3">
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0">
+              <p className="text-[14px] text-zinc-100 truncate">{openDoc?.title || 'Opening file…'}</p>
+              <p className="text-[12px] text-zinc-500">
+                {openDoc
+                  ? `${openDoc.folder || openDoc.source || 'File'} · ${openDoc.chars || (openDoc.text || '').length} chars`
+                  : 'Loading the stored text'}
+              </p>
+            </div>
+            <button type="button" onClick={closeFile} className="text-[12px] text-zinc-400 hover:text-zinc-200 shrink-0">
+              Close
+            </button>
+          </div>
+          {openError ? <p className="mt-3 text-[13px] text-red-300">{openError}</p> : null}
+          {!openDoc && !openError ? <p className="mt-3 text-[13px] text-zinc-500">Opening…</p> : null}
+          {openDoc ? (
+            <div className="mt-3 max-h-[360px] overflow-y-auto rounded-lg border border-white/[0.06] bg-[#0c0c0e] p-3 text-[13px] leading-relaxed text-zinc-200 whitespace-pre-wrap break-words">
+              {String(openDoc.text || '').trim() || 'No text was extracted from this file.'}
+            </div>
+          ) : null}
+        </Panel>
+        </div>
+      ) : null}
       <div className="grid lg:grid-cols-[minmax(0,1fr)_280px] gap-3">
         <div className="space-y-3">
           <label
@@ -124,7 +193,8 @@ export default function ImportPage() {
                     await engine.ingest({ url: url.trim(), containerTag: tag, task });
                     setUrl('');
                     setStatus('URL ingested');
-                    refresh();
+                    const documents = await refresh();
+                    if (documents[0]?.id) openFile(documents[0].id, documents[0]);
                   } catch (e: any) {
                     setStatus(e.message);
                   } finally {
@@ -186,15 +256,24 @@ export default function ImportPage() {
           {docs.length === 0 ? (
             <p className="text-[12.5px] text-zinc-500">Nothing stored in this tag yet. After Import finishes, files appear here.</p>
           ) : (
-            <div className="space-y-2 max-h-[320px] overflow-y-auto">
-              {docs.map((d) => (
-                <div key={d.id} className="rounded-lg border border-white/[0.06] p-2.5">
-                  <p className="text-[13px] text-zinc-200 truncate">{d.title}</p>
-                  <p className="text-[11px] text-zinc-500">
-                    {d.folder || d.source} · {d.chars || 0} chars · {d.createdAt ? new Date(d.createdAt).toLocaleString() : 'just now'}
-                  </p>
-                </div>
-              ))}
+            <div className="space-y-2 max-h-[420px] overflow-y-auto">
+              {docs.map((d) => {
+                const open = openId === d.id;
+                return (
+                  <button
+                    key={d.id}
+                    type="button"
+                    onClick={() => openFile(d.id)}
+                    className={`w-full text-left rounded-lg border p-2.5 ${open ? 'border-blue-400/40 bg-blue-500/10' : 'border-white/[0.06] hover:bg-white/[0.03]'}`}
+                  >
+                    <p className="text-[13px] text-zinc-200 truncate">{d.title}</p>
+                    <p className="text-[11px] text-zinc-500">
+                      {d.folder || d.source} · {d.chars || 0} chars · {d.createdAt ? new Date(d.createdAt).toLocaleString() : 'just now'}
+                    </p>
+                    <p className="text-[11px] text-blue-300/80 mt-1">{open ? 'Open' : 'Click to open'}</p>
+                  </button>
+                );
+              })}
             </div>
           )}
         </Panel>
