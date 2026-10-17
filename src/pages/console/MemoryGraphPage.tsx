@@ -372,11 +372,12 @@ export default function MemoryGraphPage() {
             const stroke = isDoc ? 'var(--graph-doc)' : latest ? 'var(--graph-memory)' : 'var(--graph-memory-old)';
             const flags = nodeFlags(node);
             return (
-              <g key={node.id} data-node onClick={() => pick(node.id)} className="cursor-pointer">
+              <g key={node.id} data-node onClick={() => pick(node.id)} className="cursor-pointer" style={{ pointerEvents: 'all' }}>
+                <circle cx={x} cy={y} r="26" fill="transparent" />
                 {active ? (
-                  <polygon points={hexPoints(x, y, 28)} fill="none" stroke="var(--graph-ring)" strokeWidth="1.2" strokeDasharray="3 3" />
+                  <polygon points={hexPoints(x, y, 28)} fill="none" stroke="var(--graph-ring)" strokeWidth="1.2" strokeDasharray="3 3" style={{ pointerEvents: 'none' }} />
                 ) : null}
-                <polygon points={hexPoints(x, y, 18)} fill="none" stroke={stroke} strokeWidth={active ? 1.8 : 1.35} />
+                <polygon points={hexPoints(x, y, 18)} fill="transparent" stroke={stroke} strokeWidth={active ? 1.8 : 1.35} />
                 {latest && !isDoc ? <circle cx={x} cy={y} r="5.2" fill="var(--graph-latest)" /> : null}
                 {flags.expiring ? <circle cx={x + 16} cy={y - 16} r="3.4" fill="#f0a202" /> : null}
                 {!flags.expiring && flags.fresh ? <circle cx={x + 16} cy={y - 16} r="3.4" fill="#3dd68c" /> : null}
