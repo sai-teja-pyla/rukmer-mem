@@ -20,6 +20,7 @@ import type { UserProfile } from '../../types';
 import { homeTag as makeHomeTag } from '../../services/tenancy';
 
 type MemoryMode = 'agentic' | 'auto';
+type Retrieval = 'hybrid' | 'semantic' | 'keyword';
 type RequestTab = 'prompt' | 'curl' | 'ts' | 'py';
 type ChatMsg = { role: 'user' | 'assistant'; text: string };
 type Thread = { id: string; title: string; updatedAt: string; messages: ChatMsg[] };
@@ -152,6 +153,7 @@ export default function PlaygroundPage() {
   const [retrieved, setRetrieved] = useState(10);
   const [strictness, setStrictness] = useState(0.4);
   const [rerank, setRerank] = useState(false);
+  const [retrieval, setRetrieval] = useState<Retrieval>('hybrid');
   const [rewrite, setRewrite] = useState(false);
   const [aggregate, setAggregate] = useState(false);
   const [include, setInclude] = useState(DEFAULT_INCLUDE);
@@ -213,13 +215,14 @@ export default function PlaygroundPage() {
       memoriesRetrieved: retrieved,
       matchStrictness: strictness,
       rerank,
+      retrieval,
       rewriteQuery: rewrite,
       aggregate,
       include,
       compareWithoutMemory: compare,
       prompt: input || null,
     }),
-    [mode, memoryMode, model, tag, source, useProfile, retrieved, strictness, rerank, rewrite, aggregate, include, compare, input]
+    [mode, memoryMode, model, tag, source, useProfile, retrieved, strictness, rerank, retrieval, rewrite, aggregate, include, compare, input]
   );
 
   const requestPreview = useMemo(() => {
@@ -246,6 +249,7 @@ export default function PlaygroundPage() {
     setRetrieved(10);
     setStrictness(0.4);
     setRerank(false);
+    setRetrieval('hybrid');
     setRewrite(false);
     setAggregate(false);
     setInclude(DEFAULT_INCLUDE);
@@ -281,6 +285,7 @@ export default function PlaygroundPage() {
       memoriesRetrieved: retrieved,
       matchStrictness: strictness,
       rerank,
+      retrieval,
       rewriteQuery: rewrite,
       include,
       remember: true,
@@ -611,6 +616,17 @@ export default function PlaygroundPage() {
             </Row>
             <Row label="Match strictness">
               <Stepper value={strictness} onChange={setStrictness} step={0.05} min={0} max={1} format={(n) => n.toFixed(2)} />
+            </Row>
+            <Row label="Retrieval">
+              <select
+                value={retrieval}
+                onChange={(e) => setRetrieval(e.target.value as Retrieval)}
+                className="bg-transparent text-[12.5px] text-zinc-300 outline-none border border-white/[0.08] rounded-md h-7 px-2"
+              >
+                <option value="hybrid" className="bg-[#161618]">Hybrid</option>
+                <option value="semantic" className="bg-[#161618]">Semantic</option>
+                <option value="keyword" className="bg-[#161618]">Keyword</option>
+              </select>
             </Row>
             <Row label="Rerank results">
               <Toggle on={rerank} onClick={() => setRerank((v) => !v)} />

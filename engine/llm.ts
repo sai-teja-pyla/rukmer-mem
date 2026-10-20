@@ -27,25 +27,54 @@ export function hasLlm() {
 }
 
 const queryCache = new Map<string, number[]>();
+const queryInflight = new Map<string, Promise<number[]>>();
+
+export const EMBED_MODEL = 'gemini-embedding-001';
+
+export function isNeuralEmbed(vec?: number[]) {
+  return !!vec && vec.length > 256;
+}
+
+async function embedOne(text: string, task: 'RETRIEVAL_DOCUMENT' | 'RETRIEVAL_QUERY', timeoutMs: number) {
+  const data = await gemini(
+    `models/${EMBED_MODEL}:embedContent`,
+    {
+      content: { parts: [{ text: text || ' ' }] },
+      taskType: task,
+      outputDimensionality: 768,
+    },
+    timeoutMs
+  );
+  const values = data.embedding?.values;
+  return Array.isArray(values) ? (values as number[]) : [];
+}
+
+async function poolMap<T, R>(items: T[], limit: number, fn: (item: T, index: number) => Promise<R>) {
+  const out = new Array<R>(items.length);
+  let cursor = 0;
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (cursor < items.length) {
+      const index = cursor++;
+      out[index] = await fn(items[index], index);
+    }
+  });
+  await Promise.all(workers);
+  return out;
+}
 
 export async function embedMany(texts: string[], task: 'RETRIEVAL_DOCUMENT' | 'RETRIEVAL_QUERY' = 'RETRIEVAL_DOCUMENT') {
   const clean = texts.map((t) => t.replace(/\s+/g, ' ').trim().slice(0, 8000));
   if (!clean.length) return [];
   if (!geminiKey()) return clean.map((t) => (t ? localEmbed(t) : []));
   try {
-    const data = await gemini(
-      'models/text-embedding-004:batchEmbedContents',
-      {
-        requests: clean.map((text) => ({
-          model: 'models/text-embedding-004',
-          content: { parts: [{ text: text || ' ' }] },
-          taskType: task,
-        })),
-      },
-      15000
-    );
-    const rows = data.embeddings || [];
-    return clean.map((text, i) => rows[i]?.values || localEmbed(text));
+    const rows = await poolMap(clean, 4, async (text) => {
+      try {
+        return await embedOne(text, task, 8000);
+      } catch {
+        return [] as number[];
+      }
+    });
+    return clean.map((text, i) => (rows[i]?.length ? rows[i] : localEmbed(text)));
   } catch {
     return clean.map((t) => (t ? localEmbed(t) : []));
   }
@@ -56,17 +85,36 @@ export async function embedText(text: string): Promise<number[]> {
   return vec || [];
 }
 
-export async function embedQuery(text: string): Promise<number[]> {
-  const clean = text.replace(/\s+/g, ' ').trim().slice(0, 8000);
+export function localQueryEmbed(text: string) {
+  return localEmbed(text);
+}
+
+export async function embedQuery(text: string, timeoutMs = 1200): Promise<number[]> {
+  const clean = text.replace(/\s+/g, ' ').trim().slice(0, 2000);
+  if (!clean) return [];
   const hit = queryCache.get(clean);
   if (hit) return hit;
-  const [vec] = await embedMany([clean], 'RETRIEVAL_QUERY');
-  const out = vec || [];
+  const pending = queryInflight.get(clean);
+  if (pending) return pending;
+  const job = resolveQueryVector(clean, timeoutMs).finally(() => queryInflight.delete(clean));
+  queryInflight.set(clean, job);
+  const out = await job;
   if (out.length) {
     queryCache.set(clean, out);
-    if (queryCache.size > 64) queryCache.delete(queryCache.keys().next().value || '');
+    while (queryCache.size > 256) queryCache.delete(queryCache.keys().next().value || '');
   }
   return out;
+}
+
+async function resolveQueryVector(clean: string, timeoutMs: number): Promise<number[]> {
+  if (!geminiKey()) return localEmbed(clean);
+  try {
+    const values = await embedOne(clean, 'RETRIEVAL_QUERY', timeoutMs);
+    if (values.length) return values;
+  } catch {
+    /* keyword channel still answers */
+  }
+  return [];
 }
 
 function localEmbed(text: string): number[] {

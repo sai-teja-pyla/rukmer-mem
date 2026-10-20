@@ -27,6 +27,7 @@ export interface ChunkRec {
   text: string;
   index: number;
   embedding: number[];
+  embeddingModel?: string;
   hash: string;
   createdAt: string;
   forgotten: boolean;
@@ -56,6 +57,7 @@ export interface TripleRec {
   validTo: string | null;
   recordedAt?: string;
   updatedAt?: string;
+  embedding?: number[];
   kind: 'update' | 'extend' | 'derive' | 'assert';
   horizon?: 'long' | 'short';
   occurredAt?: string | null;
@@ -293,6 +295,7 @@ export function normalizeTriple(
     validTo: t.validTo ?? null,
     recordedAt: t.recordedAt,
     updatedAt: t.updatedAt,
+    embedding: Array.isArray(t.embedding) && t.embedding.length ? t.embedding : undefined,
     kind: t.kind || (t.derived ? 'derive' : 'assert'),
     horizon: t.horizon === 'short' ? 'short' : t.horizon === 'long' ? 'long' : undefined,
     occurredAt: t.occurredAt ?? null,

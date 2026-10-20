@@ -15,7 +15,7 @@ import {
   type ChunkRec,
   type DocRec,
 } from './core.js';
-import { embedMany, embedQuery, extractGraph, generateText, hasLlm, heuristicExtract, llmRerank } from './llm.js';
+import { EMBED_MODEL, embedMany, embedQuery, extractGraph, generateText, hasLlm, heuristicExtract, isNeuralEmbed, llmRerank, localQueryEmbed } from './llm.js';
 import { deriveFacts, upsertFacts } from './facts.js';
 import { looksLikePdf, textFromPdf, textFromPdfBase64 } from './pdf.js';
 import { describeImage } from './vision.js';
@@ -23,7 +23,7 @@ import { isChatter, isUsefulFact, looksLikeDurableFact, sanitiseGraph } from './
 import { applyDecay } from './memory.js';
 import { buildMemoryInjection } from './inject.js';
 import { canAccessTag, homeTag, ownsTag, scopeFromTag, uidFromTag } from './tenancy.js';
-import { rankTagged, type MetaFilter } from './search-index.js';
+import { ensureIndex, rankTagged, tagCount, vectorDim, type MetaFilter, type Retrieval } from './search-index.js';
 
 export type SearchOpts = {
   containerTag?: string | null;
@@ -37,6 +37,7 @@ export type SearchOpts = {
   includeRelated?: boolean;
   filters?: MetaFilter;
   containerTags?: string[];
+  retrieval?: Retrieval;
 };
 
 function scopedChunks(tag?: string | null, includeForgotten = false) {
@@ -94,6 +95,7 @@ export async function ingestDocument(input: {
     text: `${header}\n${piece.text}`,
     index: piece.index,
     embedding: vectors[i] || [],
+    embeddingModel: isNeuralEmbed(vectors[i]) ? EMBED_MODEL : undefined,
     hash: piece.hash,
     createdAt: doc.createdAt,
     source: doc.source,
@@ -125,6 +127,7 @@ export async function ingestDocument(input: {
     containerTag: tag,
   });
   saveState();
+  void embedMissingFacts(12).catch(() => undefined);
   return { document: doc, chunks: chunks.length, entities: getState().entities.filter((e) => e.containerTag === tag).length };
 }
 
@@ -230,24 +233,85 @@ export async function ingestPayload(item: {
   });
 }
 
+function retrievalOf(value?: string): Retrieval {
+  return value === 'semantic' || value === 'keyword' ? value : 'hybrid';
+}
+
+export async function embedMissingFacts(limit = 16) {
+  const state = getState();
+  const pending = state.triples.filter((t) => isUsefulFact(t) && !isNeuralEmbed(t.embedding)).slice(0, limit);
+  if (!pending.length) return 0;
+  const vecs = await embedMany(
+    pending.map((t) => `${t.subject} ${t.predicate.replace(/_/g, ' ')} ${t.object}. ${t.evidence || ''}`.slice(0, 1000))
+  );
+  let wrote = 0;
+  pending.forEach((t, i) => {
+    if (isNeuralEmbed(vecs[i])) {
+      t.embedding = vecs[i];
+      wrote += 1;
+    }
+  });
+  if (wrote) saveState();
+  return wrote;
+}
+
+async function embedMissingChunks(limit = 12) {
+  const state = getState();
+  const pending = state.chunks.filter((c) => !c.forgotten && c.embeddingModel !== EMBED_MODEL).slice(0, limit);
+  if (!pending.length) return 0;
+  const vecs = await embedMany(pending.map((c) => c.text.slice(0, 2000)));
+  let wrote = 0;
+  pending.forEach((c, i) => {
+    if (isNeuralEmbed(vecs[i])) {
+      c.embedding = vecs[i];
+      c.embeddingModel = EMBED_MODEL;
+      wrote += 1;
+    }
+  });
+  if (wrote) saveState();
+  return wrote;
+}
+
+export async function warmFactEmbeddings() {
+  for (let i = 0; i < 8; i++) {
+    const chunks = await embedMissingChunks(12);
+    const facts = await embedMissingFacts(12);
+    if (!chunks && !facts) break;
+  }
+}
+
 export async function searchMemory(query: string, opts: SearchOpts = {}) {
   const started = Date.now();
+  const retrieval = retrievalOf(opts.retrieval);
   const { normalized, expanded } = expandQuery(query.slice(0, 2000));
   const q = opts.rewrite ? expanded : normalized;
   const topK = opts.topK ?? 10;
   const strict = opts.strictness ?? 0.4;
   const tags = (opts.containerTags?.length ? opts.containerTags : [opts.containerTag]).filter((t): t is string => !!t);
   for (const tag of tags) applyDecay(tag);
+  const wantVector = retrieval !== 'keyword';
+  const embedP = wantVector ? embedQuery(q, retrieval === 'semantic' ? 1800 : 1200) : Promise.resolve([] as number[]);
+  ensureIndex();
   const live = getState();
-  const has = tags.some(
-    (tag) => live.chunks.some((c) => c.containerTag === tag && !c.forgotten) || live.triples.some((t) => t.containerTag === tag && isUsefulFact(t))
-  );
+  const has = tags.some((tag) => tagCount(tag) > 0);
   if (!tags.length || !has) {
-    return { query: q, intent: classifyIntent(q), matches: [], tookMs: Date.now() - started, mode: 'empty', stats: { chunks: 0, documents: 0 } };
+    void embedP.then(() => undefined).catch(() => undefined);
+    return {
+      query: q,
+      intent: classifyIntent(q),
+      matches: [],
+      tookMs: Date.now() - started,
+      embedMs: 0,
+      mode: 'empty',
+      channels: { semantic: false, keyword: false, graph: false },
+      stats: { chunks: 0, documents: 0 },
+    };
   }
-  const chunksExist = tags.some((tag) => live.chunks.some((c) => c.containerTag === tag && !c.forgotten && c.embedding?.length));
-  const qVec = chunksExist ? await embedQuery(q) : [];
-  let ranked = rankTagged(q, tags, qVec, { topK, strict, filter: opts.filters, includeForgotten: opts.includeForgotten });
+  const embedStarted = Date.now();
+  let qVec = await embedP;
+  if (!qVec.length && wantVector && vectorDim(tags) === 256) qVec = localQueryEmbed(q);
+  const embedMs = wantVector ? Date.now() - embedStarted : 0;
+  let ranked = rankTagged(q, tags, qVec, { topK, strict, filter: opts.filters, includeForgotten: opts.includeForgotten, retrieval });
   if (opts.rerank && ranked.ranked.length) {
     const llm = await llmRerank(
       q,
@@ -281,7 +345,9 @@ export async function searchMemory(query: string, opts: SearchOpts = {}) {
     matches,
     related: opts.includeRelated === false ? [] : ranked.related,
     tookMs: Date.now() - started,
-    mode: hasLlm() ? 'index+llm' : 'index',
+    embedMs,
+    mode: retrieval === 'hybrid' && !qVec.length ? 'keyword' : retrieval,
+    channels: ranked.channels,
     stats: {
       chunks: tags.reduce((n, tag) => n + live.chunks.filter((c) => c.containerTag === tag && !c.forgotten).length, 0),
       documents: tags.reduce((n, tag) => n + live.documents.filter((d) => d.containerTag === tag && !d.forgotten).length, 0),

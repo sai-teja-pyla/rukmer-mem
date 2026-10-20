@@ -18,6 +18,7 @@ import {
   rememberTranscript,
   searchMemory,
   stats,
+  warmFactEmbeddings,
   flushConsolidation,
 } from './pipeline.js';
 import { upsertFacts } from './facts.js';
@@ -62,6 +63,7 @@ export async function bootMemoryEngine() {
       upsertFacts(doc.containerTag, graph.triples || [], doc.text.slice(0, 240));
     }
   }
+  void warmFactEmbeddings().catch(() => undefined);
   return stats();
 }
 
@@ -223,6 +225,7 @@ export function mountMemoryEngine(app: Express) {
         strictness: req.body?.matchStrictness ?? req.body?.strictness ?? 0.4,
         rerank: !!req.body?.rerank,
         rewrite: !!req.body?.rewriteQuery,
+        retrieval: req.body?.retrieval === 'semantic' || req.body?.retrieval === 'keyword' ? req.body.retrieval : 'hybrid',
         includeForgotten: !!req.body?.include?.forgotten,
         includeRelated: req.body?.include?.related !== false,
         filters: req.body?.filters,

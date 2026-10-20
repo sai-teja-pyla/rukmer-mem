@@ -1,4 +1,4 @@
-import { cosine, getState, sanitizeMeta, tokenize, type TemporalKind } from './core.js';
+import { getState, sanitizeMeta, tokenize, type TemporalKind } from './core.js';
 import { isUsefulFact } from './quality.js';
 import { queryTimeIntent, timeMultiplier } from './temporal.js';
 
@@ -23,13 +23,18 @@ type Rec = {
   predicate?: string;
   object?: string;
   embedding?: Float32Array;
+  len: number;
 };
+
+export type Retrieval = 'hybrid' | 'semantic' | 'keyword';
 
 let builtRev = -1;
 const postings = new Map<string, Map<string, Posting[]>>();
 const idsByTag = new Map<string, string[]>();
+const vectorIds = new Map<string, string[]>();
 const records = new Map<string, Rec>();
 const entityIds = new Map<string, Map<string, string[]>>();
+const avgLen = new Map<string, number>();
 const lsh = new Map<string, Map<string, string[]>>();
 const planes = new Map<number, Float32Array[]>();
 
@@ -101,14 +106,50 @@ function addText(tag: string, id: string, text: string) {
   }
 }
 
+function unit(vec: ArrayLike<number>) {
+  let n = 0;
+  for (let i = 0; i < vec.length; i++) n += vec[i] * vec[i];
+  n = Math.sqrt(n);
+  const out = new Float32Array(vec.length);
+  if (!n) return out;
+  for (let i = 0; i < vec.length; i++) out[i] = vec[i] / n;
+  return out;
+}
+
+function dot(a: ArrayLike<number>, b: ArrayLike<number>) {
+  let s = 0;
+  const n = Math.min(a.length, b.length);
+  for (let i = 0; i < n; i++) s += a[i] * b[i];
+  return s;
+}
+
+function indexVector(tag: string, id: string, vec: Float32Array) {
+  const ids = vectorIds.get(tag) || [];
+  ids.push(id);
+  vectorIds.set(tag, ids);
+  let table = lsh.get(tag);
+  if (!table) {
+    table = new Map();
+    lsh.set(tag, table);
+  }
+  const key = String(lshKey(vec));
+  const bucket = table.get(key) || [];
+  bucket.push(id);
+  table.set(key, bucket);
+}
+
 function rebuild() {
   postings.clear();
   idsByTag.clear();
+  vectorIds.clear();
   records.clear();
   entityIds.clear();
+  avgLen.clear();
   lsh.clear();
   const state = getState();
+  const lenSum = new Map<string, { n: number; sum: number }>();
   for (const c of state.chunks) {
+    const tokens = tokenize(c.text);
     const rec: Rec = {
       id: c.id,
       kind: 'chunk',
@@ -123,29 +164,30 @@ function rebuild() {
       temporal: 'undated',
       occurredAt: null,
       metadata: c.metadata,
-      embedding: c.embedding?.length ? Float32Array.from(c.embedding) : undefined,
+      embedding: c.embedding?.length ? unit(c.embedding) : undefined,
+      len: Math.max(tokens.length, 1),
     };
     records.set(c.id, rec);
     const ids = idsByTag.get(c.containerTag) || [];
     ids.push(c.id);
     idsByTag.set(c.containerTag, ids);
-    if (!c.forgotten) addText(c.containerTag, c.id, c.text);
-    if (rec.embedding && !c.forgotten) {
-      let table = lsh.get(c.containerTag);
-      if (!table) {
-        table = new Map();
-        lsh.set(c.containerTag, table);
-      }
-      const key = String(lshKey(rec.embedding));
-      const bucket = table.get(key) || [];
-      bucket.push(c.id);
-      table.set(key, bucket);
+    if (!c.forgotten) {
+      addText(c.containerTag, c.id, c.text);
+      const acc = lenSum.get(c.containerTag) || { n: 0, sum: 0 };
+      acc.n += 1;
+      acc.sum += rec.len;
+      lenSum.set(c.containerTag, acc);
     }
+    if (rec.embedding && !c.forgotten) indexVector(c.containerTag, c.id, rec.embedding);
   }
   const titleByDoc = new Map(state.documents.map((d) => [d.id, d.title]));
   for (const rec of records.values()) {
-    if (rec.kind === 'chunk' && !rec.title) rec.title = titleByDoc.get(rec.docId) || 'Untitled';
+    if (rec.kind === 'chunk' && !rec.title) {
+      rec.title = titleByDoc.get(rec.docId) || 'Untitled';
+      if (!rec.forgotten && rec.title && rec.title !== 'Untitled') addText(rec.tag, rec.id, rec.title);
+    }
   }
+  for (const [tag, acc] of lenSum) avgLen.set(tag, acc.sum / Math.max(acc.n, 1));
   for (const t of state.triples) {
     if (!isUsefulFact(t)) continue;
     const text = `${t.subject} ${t.predicate.replace(/_/g, ' ')} ${t.object} ${t.evidence || ''}`;
@@ -166,8 +208,11 @@ function rebuild() {
       subject: t.subject,
       predicate: t.predicate,
       object: t.object,
+      embedding: t.embedding?.length ? unit(t.embedding) : undefined,
+      len: Math.max(tokenize(text).length, 1),
     };
     records.set(t.id, rec);
+    if (rec.embedding && t.isLatest !== false) indexVector(t.containerTag, t.id, rec.embedding);
     const ids = idsByTag.get(t.containerTag) || [];
     ids.push(t.id);
     idsByTag.set(t.containerTag, ids);
@@ -196,15 +241,53 @@ function rebuild() {
   }
 }
 
+const SYN: Record<string, string[]> = {
+  prefer: ['prefers', 'like', 'likes'],
+  prefers: ['prefer', 'like', 'likes'],
+  like: ['likes', 'prefer', 'prefers'],
+  likes: ['like', 'prefer'],
+  work: ['works', 'job'],
+  works: ['work', 'job'],
+  live: ['lives', 'based'],
+  lives: ['live', 'based'],
+  name: ['called'],
+};
+
+function queryTokens(query: string) {
+  const base = [...new Set(tokenize(query))];
+  const extra: string[] = [];
+  for (const token of base) {
+    for (const alt of SYN[token] || []) {
+      if (!base.includes(alt) && extra.length < 4) extra.push(alt);
+    }
+  }
+  return [...base, ...extra];
+}
+
+export function tagCount(tag: string) {
+  ensureIndex();
+  return (idsByTag.get(tag) || []).reduce((n, id) => n + (records.get(id)?.forgotten ? 0 : 1), 0);
+}
+
+export function vectorDim(tags: string[]) {
+  ensureIndex();
+  for (const tag of tags) {
+    const id = (vectorIds.get(tag) || [])[0];
+    const dim = id ? records.get(id)?.embedding?.length : 0;
+    if (dim) return dim;
+  }
+  return 0;
+}
+
 function keywordSearch(tag: string, query: string) {
   const inv = postings.get(tag);
   if (!inv) return [];
-  const qTokens = [...new Set(tokenize(query))];
+  const qTokens = queryTokens(query);
   const N = Math.max((idsByTag.get(tag) || []).length, 1);
   const scores = new Map<string, number>();
   const k1 = 1.2;
   const b = 0.75;
-  const avg = 40;
+  const avg = avgLen.get(tag) || 40;
   for (const qt of qTokens) {
     const list = inv.get(qt) || [];
     const n = list.length;
@@ -217,11 +300,11 @@ function keywordSearch(tag: string, query: string) {
   return [...scores.entries()].map(([id, score]) => ({ id, score })).filter((x) => x.score > 0);
 }
 
-function vectorSearch(tag: string, qVec: number[]) {
-  const ids = (idsByTag.get(tag) || []).filter((id) => records.get(id)?.embedding && !records.get(id)?.forgotten);
+function vectorSearch(tag: string, qVec: Float32Array) {
+  const ids = vectorIds.get(tag) || [];
   if (!ids.length || !qVec.length) return [];
   let pool = ids;
-  if (ids.length > 500) {
+  if (ids.length > 3000) {
     const table = lsh.get(tag);
     const hit = new Set<string>();
     if (table) {
@@ -229,12 +312,19 @@ function vectorSearch(tag: string, qVec: number[]) {
         for (const id of table.get(String(key)) || []) hit.add(id);
       }
     }
-    if (hit.size >= 8) pool = [...hit];
+    if (hit.size >= 12) pool = [...hit];
+  }
+  const out: { id: string; score: number }[] = [];
+  const dim = qVec.length;
+  for (const id of pool) {
+    const rec = records.get(id);
+    const vec = rec?.embedding;
+    if (!rec || rec.forgotten || !vec || vec.length !== dim) continue;
+    const score = dot(qVec, vec);
+    if (score > 0.05) out.push({ id, score });
   }
   lastQueryStats.vectorCompared += pool.length;
-  return pool
-    .map((id) => ({ id, score: cosine(qVec, records.get(id)!.embedding!) }))
-    .filter((x) => x.score > 0.05);
+  return out;
 }
 
 function entitySearch(tag: string, query: string) {
@@ -264,26 +354,34 @@ export function rankTagged(
   query: string,
   tags: string[],
   qVec: number[],
-  opts: { topK: number; strict: number; filter?: MetaFilter; includeForgotten?: boolean }
+  opts: { topK: number; strict: number; filter?: MetaFilter; includeForgotten?: boolean; retrieval?: Retrieval }
 ) {
   ensureIndex();
+  const retrieval: Retrieval = opts.retrieval || 'hybrid';
   const intent = queryTimeIntent(query);
+  const useVec = retrieval !== 'keyword' && qVec.length > 0;
+  const useKw = retrieval !== 'semantic';
+  const useEnt = retrieval === 'hybrid';
+  const qUnit = useVec ? unit(qVec) : new Float32Array();
   lastQueryStats = { vectorCompared: 0, keywordDocs: 0, tags: tags.length, indexed: records.size };
-  const lists: { id: string; score: number }[][] = [];
-  const kwAll: { id: string; score: number }[] = [];
-  const vecAll: { id: string; score: number }[] = [];
-  const entAll: { id: string; score: number }[] = [];
+  const kwMap = new Map<string, number>();
+  const vecMap = new Map<string, number>();
+  const entMap = new Map<string, number>();
   for (const tag of tags) {
-    const kw = keywordSearch(tag, query);
-    kwAll.push(...kw);
-    if (qVec.length) vecAll.push(...vectorSearch(tag, qVec));
-    entAll.push(...entitySearch(tag, query));
+    if (useKw) for (const row of keywordSearch(tag, query)) kwMap.set(row.id, (kwMap.get(row.id) || 0) + row.score);
+    if (useVec) for (const row of vectorSearch(tag, qUnit)) vecMap.set(row.id, Math.max(vecMap.get(row.id) || 0, row.score));
+    if (useEnt) for (const row of entitySearch(tag, query)) entMap.set(row.id, (entMap.get(row.id) || 0) + row.score);
   }
-  lastQueryStats.keywordDocs = new Set(kwAll.map((x) => x.id)).size;
-  if (vecAll.length) lists.push(vecAll.filter((x) => x.score > 0.05));
-  if (kwAll.length) lists.push(kwAll);
-  if (entAll.length) lists.push(entAll);
+  lastQueryStats.keywordDocs = kwMap.size;
+  const lists: { id: string; score: number }[][] = [];
+  if (vecMap.size) lists.push([...vecMap].map(([id, score]) => ({ id, score })));
+  if (kwMap.size) lists.push([...kwMap].map(([id, score]) => ({ id, score })));
+  if (entMap.size) lists.push([...entMap].map(([id, score]) => ({ id, score })));
   const fused = rrf(lists);
+  const vecMax = Math.max(0, ...vecMap.values());
+  const kwMax = Math.max(0, ...kwMap.values());
+  const needle = query.trim().toLowerCase();
+  const semanticFloor = opts.strict <= 0 ? 0.05 : Math.max(0.12, opts.strict * 0.55);
   const ranked = fused
     .map((row) => {
       const rec = records.get(row.id);
@@ -291,10 +389,19 @@ export function rankTagged(
       if (rec.forgotten && !opts.includeForgotten) return null;
       if (!matchMeta(rec.metadata, opts.filter)) return null;
       if (rec.kind === 'fact' && !rec.isLatest && intent !== 'past') return null;
-      const mult = timeMultiplier(intent, rec.temporal, rec.isLatest);
-      const vectorScore = vecAll.find((v) => v.id === row.id)?.score || 0;
-      const score = row.score * mult;
-      if (!(vectorScore >= opts.strict * 0.15 || score > 0.012)) return null;
+      const vectorScore = vecMap.get(row.id) || 0;
+      const kw = kwMap.get(row.id) || 0;
+      const phrase = needle.length >= 3 && `${rec.title}\n${rec.text}`.toLowerCase().includes(needle);
+      const vn = vecMax ? vectorScore / vecMax : 0;
+      const kn = kwMax ? kw / kwMax : 0;
+      let score =
+        retrieval === 'semantic'
+          ? vectorScore + (phrase ? 0.02 : 0)
+          : row.score + vn * 0.22 + kn * 0.08 + (vectorScore > 0 && kw > 0 ? 0.06 : 0) + (phrase ? 0.15 : 0);
+      score *= timeMultiplier(intent, rec.temporal, rec.isLatest);
+      if (retrieval === 'semantic') {
+        if (vectorScore < semanticFloor) return null;
+      } else if (!(vectorScore >= semanticFloor || score > 0.012)) return null;
       return { ...rec, score, vectorScore };
     })
     .filter((r): r is Rec & { score: number; vectorScore: number } => !!r)
@@ -324,7 +431,13 @@ export function rankTagged(
       derived: false,
     }));
 
-  return { intent, ranked: ranked.slice(0, opts.topK), related, stats: { ...lastQueryStats } };
+  return {
+    intent,
+    ranked: ranked.slice(0, opts.topK),
+    related,
+    channels: { semantic: useVec, keyword: useKw, graph: useEnt },
+    stats: { ...lastQueryStats },
+  };
 }
 
 function rrf(lists: { id: string; score: number }[][], k = 60) {

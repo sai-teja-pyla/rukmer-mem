@@ -12,7 +12,7 @@ export const MEMORY_PROTOCOL = {
     longTerm: 'Stable profile facts (name, work, home, preferences) stay until a newer fact replaces them.',
     shortTerm: 'Recent decisions, plans, and deadlines stay about 21 days, then drop out of the live profile.',
     scope: 'Memory is scoped to a user, a session, an agent, or a shared org. A session can be closed. An org is visible only to its members.',
-    index: 'Search uses a per-tag keyword index and a vector index. It does not score every chunk in the store.',
+    index: 'Hybrid search fuses semantic vectors, keyword rank, and the fact graph. Semantic search ranks by meaning. Small spaces are scored directly so latency stays on the embedding call.',
     time: 'Facts keep when they happened, not only when they were written, so current and past questions rank differently.',
     filters: 'Search accepts metadata filters (all / any) and profiles are split into topic buckets.',
   },
