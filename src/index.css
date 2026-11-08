@@ -194,3 +194,31 @@ body {
 .memory-graph .graph-muted { color: var(--graph-muted); }
 .memory-graph .graph-faint { color: var(--graph-faint); }
 .memory-graph .graph-hover:hover { background: var(--graph-hover); }
+
+.term-cursor {
+  display: inline-block;
+  width: 0.55em;
+  height: 0.95em;
+  margin-left: 2px;
+  background: #000;
+  vertical-align: -1px;
+  animation: term-blink 1.05s steps(1) infinite;
+}
+.term-input {
+  caret-color: #000;
+  caret-shape: block;
+}
+.term-form {
+  animation: term-in 0.4s ease;
+}
+@keyframes term-blink {
+  50% { opacity: 0; }
+}
+@keyframes term-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .term-cursor { animation: none; }
+  .term-form { animation: none; }
+}

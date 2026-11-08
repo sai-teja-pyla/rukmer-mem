@@ -1,7 +1,8 @@
 import React, { useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { auth } from '../firebase';
-import { safeNext } from '../services/safeNext'; 
+import { safeNext } from '../services/safeNext';
+import TerminalAuth, { signInLines } from '../components/TerminalAuth'; 
 import { 
   signInWithEmailAndPassword, 
   GoogleAuthProvider, 
@@ -14,6 +15,7 @@ export default function LoginPage() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
+  const [notice, setNotice] = useState('');
   const [loading, setLoading] = useState(false);
 
   const handleLogin = async (e) => {
@@ -48,8 +50,8 @@ export default function LoginPage() {
     }
     try {
       await sendPasswordResetEmail(auth, email);
-      alert("🚀 Password reset link sent! Please check your inbox (and spam folder).");
-      setError(''); // Clear any previous errors
+      setNotice('Reset link sent. Check your inbox.');
+      setError('');
     } catch (err) {
       console.error("Reset Error:", err);
       if (err.code === 'auth/user-not-found') {
@@ -61,106 +63,67 @@ export default function LoginPage() {
   };
 
   return (
-    <div className="min-h-screen w-full bg-gray-50 flex flex-col">
-      
-      {/* Main Content Area */}
-      <div className="flex-grow flex flex-col items-center justify-center p-4">
-        <div className="w-full max-w-md bg-white p-5 sm:p-8 rounded-2xl shadow-xl border border-gray-100">
-          
-          {/* Header */}
-          <div className="text-center mb-8">
-              <h2 className="text-3xl font-bold text-gray-900">Welcome back</h2>
-              <p className="text-sm text-gray-500 mt-1">Continue your journey</p>
-          </div>
+    <TerminalAuth title="SIGN IN" lines={signInLines}>
+      <form onSubmit={handleLogin} className="space-y-4">
+        {error && <p>&gt; {error}</p>}
+        {notice && <p>&gt; {notice}</p>}
 
-          {error && (
-              <div className="mb-4 p-3 bg-red-50 text-red-600 text-sm rounded-lg border border-red-100">
-                  {error}
-              </div>
-          )}
+        <label className="block">
+          <span className="block mb-1">&gt; email</span>
+          <input
+            type="email"
+            required
+            autoComplete="email"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            placeholder="you@example.com"
+            className="term-input w-full bg-transparent border-0 border-b border-black/15 focus:border-black outline-none py-2 text-black placeholder:text-black/30"
+          />
+        </label>
 
-          <form onSubmit={handleLogin} className="space-y-5">
-            <div>
-              <label className="block text-sm font-bold text-gray-900 mb-2">Email address</label>
-              <input
-                type="email"
-                required
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                placeholder="you@example.com"
-                className="w-full px-4 py-3 rounded-lg border border-gray-300 bg-white !text-black focus:ring-2 focus:ring-[#7c3aed] focus:border-[#7c3aed] outline-none transition-all placeholder:text-gray-400"
-                style={{ color: '#000000' }}
-              />
-            </div>
-
-            <div>
-              <div className="flex justify-between items-center mb-2">
-                  <label className="block text-sm font-bold text-gray-900">Password</label>
-                  {/* FORGOT PASSWORD BUTTON */}
-                  <button 
-                    type="button"
-                    onClick={handleForgotPassword}
-                    className="text-xs text-[#7c3aed] font-semibold hover:underline transition-colors"
-                  >
-                    Forgot?
-                  </button>
-              </div>
-              <input
-                type="password"
-                required
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                placeholder="********"
-                className="w-full px-4 py-3 rounded-lg border border-gray-300 bg-white !text-black focus:ring-2 focus:ring-[#7c3aed] focus:border-[#7c3aed] outline-none transition-all placeholder:text-gray-400"
-                style={{ color: '#000000' }}
-              />
-            </div>
-
-            <button
-              type="submit"
-              disabled={loading}
-              className="w-full bg-[#7c3aed] hover:bg-[#6d28d9] text-white font-bold py-3.5 rounded-lg shadow-sm disabled:opacity-50 transition-colors"
-            >
-              {loading ? 'Signing In...' : 'Sign In'}
+        <label className="block">
+          <span className="flex items-center justify-between mb-1">
+            <span>&gt; password</span>
+            <button type="button" onClick={handleForgotPassword} className="text-black/60 hover:text-black">
+              forgot?
             </button>
+          </span>
+          <input
+            type="password"
+            required
+            autoComplete="current-password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            placeholder="********"
+            className="term-input w-full bg-transparent border-0 border-b border-black/15 focus:border-black outline-none py-2 text-black placeholder:text-black/30"
+          />
+        </label>
 
-            <button
-              type="button"
-              onClick={handleGoogleLogin}
-              className="w-full bg-white hover:bg-gray-50 text-gray-900 font-medium py-3.5 rounded-lg border border-gray-300 transition-colors flex items-center justify-center gap-2"
-            >
-              <img src="https://www.svgrepo.com/show/475656/google-color.svg" alt="Google" className="w-5 h-5" />
-              Continue with Google
-            </button>
+        <button
+          type="submit"
+          disabled={loading}
+          className="w-full bg-black text-white py-3 tracking-[0.18em] hover:bg-neutral-800 disabled:opacity-60"
+        >
+          {loading ? 'AUTHENTICATING...' : 'SIGN IN'}
+        </button>
+        {loading && (
+          <div className="h-2.5 bg-black origin-left" style={{ width: '40%', animation: 'term-in 0.6s ease' }} />
+        )}
 
-            <div className="text-center pt-2">
-              <Link to="/signup" className="text-[#7c3aed] hover:underline font-bold text-sm">
-                New here? Create account
-              </Link>
-            </div>
+        <button
+          type="button"
+          onClick={handleGoogleLogin}
+          className="w-full flex items-center justify-center gap-2 border border-black/15 py-3 hover:border-black"
+        >
+          <img src="https://www.svgrepo.com/show/475656/google-color.svg" alt="" className="w-4 h-4" />
+          CONTINUE WITH GOOGLE
+        </button>
 
-            <div className="mt-6 text-center border-t border-gray-100 pt-6">
-               <p className="text-sm text-gray-500">
-                Welcome back. Please login to your account to continue.
-               </p>
-            </div>
-          </form>
-        </div>
-      </div>
-
-      {/* FOOTER */}
-      <footer className="w-full py-8 border-t border-gray-200 bg-white text-center">
-        <div className="flex flex-col items-center gap-2">
-          <div className="flex justify-center space-x-6 text-sm text-gray-500">
-            <a href="/terms.html" target="_blank" rel="noopener noreferrer" className="hover:text-slate-900 transition-colors">Terms</a>
-            <a href="/privacy.html" target="_blank" rel="noopener noreferrer" className="hover:text-slate-900 transition-colors">Privacy</a>
-            <a href="/cookies.html" target="_blank" rel="noopener noreferrer" className="hover:text-slate-900 transition-colors">Cookies</a>
-          </div>
-          <p className="text-xs text-gray-400">
-            &copy; 2026 Rukmer Inc. All rights reserved.
-          </p>
-        </div>
-      </footer>
-    </div>
+        <p>
+          &gt; new here?{' '}
+          <Link to="/signup" className="underline underline-offset-4">create account</Link>
+        </p>
+      </form>
+    </TerminalAuth>
   );
 }
