@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useOutletContext } from 'react-router-dom';
 import {
   MessageSquare,
@@ -161,6 +161,9 @@ export default function PlaygroundPage() {
   const [requestTab, setRequestTab] = useState<RequestTab>('prompt');
   const [copied, setCopied] = useState(false);
   const [modelOpen, setModelOpen] = useState(false);
+  const modelBtnRef = useRef<HTMLButtonElement>(null);
+  const modelMenuRef = useRef<HTMLDivElement>(null);
+  const [modelBox, setModelBox] = useState<{ left: number; maxHeight: number; top?: number; bottom?: number } | null>(null);
   const [threads, setThreads] = useState<Thread[]>(() => {
     const saved = loadThreads(user.uid);
     return saved.length ? saved : [newThread()];
@@ -183,6 +186,41 @@ export default function PlaygroundPage() {
     setHits([]);
     setInput('');
   };
+
+  useEffect(() => {
+    if (!modelOpen) return;
+    const place = () => {
+      const el = modelBtnRef.current;
+      if (!el) return;
+      const rect = el.getBoundingClientRect();
+      const gap = 6;
+      const width = 224;
+      const left = Math.max(8, Math.min(rect.left, window.innerWidth - width - 8));
+      const spaceAbove = Math.max(0, rect.top - 8);
+      const spaceBelow = Math.max(0, window.innerHeight - rect.bottom - 8);
+      const openUp = spaceAbove >= 180 || spaceAbove > spaceBelow;
+      const maxHeight = Math.max(120, Math.min(320, (openUp ? spaceAbove : spaceBelow) - gap));
+      setModelBox(
+        openUp
+          ? { left, maxHeight, bottom: window.innerHeight - rect.top + gap }
+          : { left, maxHeight, top: rect.bottom + gap }
+      );
+    };
+    place();
+    const close = (event: PointerEvent) => {
+      const target = event.target as Node;
+      if (modelBtnRef.current?.contains(target) || modelMenuRef.current?.contains(target)) return;
+      setModelOpen(false);
+    };
+    window.addEventListener('resize', place);
+    window.addEventListener('scroll', place, true);
+    window.addEventListener('pointerdown', close);
+    return () => {
+      window.removeEventListener('resize', place);
+      window.removeEventListener('scroll', place, true);
+      window.removeEventListener('pointerdown', close);
+    };
+  }, [modelOpen]);
 
   useEffect(() => {
     if (mine) {
@@ -455,7 +493,7 @@ export default function PlaygroundPage() {
           </div>
 
           <div className="px-4 pb-3 pt-1">
-            <div className="rounded-xl border border-white/[0.09] bg-[#0c0c0e] overflow-hidden">
+            <div className="rounded-xl border border-white/[0.09] bg-[#0c0c0e]">
               <div className="px-3 pt-2.5 pb-1 text-[12.5px] text-zinc-500">
                 {mode === 'chat' ? 'Pick a container tag below to start' : 'Enter a query, then pick a container tag'}
               </div>
@@ -482,26 +520,40 @@ export default function PlaygroundPage() {
                 >
                   <Plus size={14} />
                 </button>
-                <div className="relative">
+                <div>
                   <button
+                    ref={modelBtnRef}
+                    type="button"
                     onClick={() => setModelOpen((v) => !v)}
                     className="h-7 px-2 rounded-md text-[12.5px] text-zinc-200 hover:bg-white/[0.04] inline-flex items-center gap-1"
+                    aria-expanded={modelOpen}
+                    aria-haspopup="listbox"
                   >
                     {model.label}
                     <span className="text-zinc-500 text-[11px] inline-flex items-center gap-0.5">
                       {memoryMode === 'agentic' ? 'Agentic' : 'Auto'} <ChevronDown size={12} />
                     </span>
                   </button>
-                  {modelOpen && (
-                    <div className="absolute bottom-8 left-0 z-20 w-56 rounded-lg border border-white/[0.08] bg-[#161618] p-1 shadow-xl">
+                  {modelOpen && modelBox && (
+                    <div
+                      ref={modelMenuRef}
+                      role="listbox"
+                      style={{ top: modelBox.top, bottom: modelBox.bottom, left: modelBox.left, maxHeight: modelBox.maxHeight }}
+                      className="fixed z-50 w-56 overflow-y-auto rounded-lg border border-white/[0.08] bg-[#161618] p-1 shadow-xl"
+                    >
                       {MODELS.map((m) => (
                         <button
                           key={m.id}
+                          type="button"
+                          role="option"
+                          aria-selected={m.id === model.id}
                           onClick={() => {
                             setModel(m);
                             setModelOpen(false);
                           }}
-                          className="w-full text-left px-2.5 py-1.5 text-[12.5px] rounded-md hover:bg-white/[0.06] text-zinc-200"
+                          className={`w-full text-left px-2.5 py-1.5 text-[12.5px] rounded-md hover:bg-white/[0.06] text-zinc-200 ${
+                            m.id === model.id ? 'bg-white/[0.06]' : ''
+                          }`}
                         >
                           {m.label}
                           <span className="block text-[10px] text-zinc-500">{m.provider}{serverProviders[m.provider] || keys[m.provider] ? ' · ready' : ' · use Connectors or a key'}</span>
