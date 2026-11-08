@@ -1,6 +1,6 @@
 import type { Express, Request } from 'express';
 import crypto from 'crypto';
-import { encryptionAtRest, encryptionWarning, getState, loadState, persistNow, saveState, sha, shortestPath, uid } from './core.js';
+import { encryptionAtRest, encryptionWarning, getState, loadState, persistNow, readBlob, saveState, sha, shortestPath, uid } from './core.js';
 import {
   chatWithMemory,
   forgetById,
@@ -39,10 +39,13 @@ import { applyDecay, buildProfile } from './memory.js';
 import { mountOauth } from './oauth.js';
 import {
   addTeamMember,
+  audit,
   auditFor,
+  canRead,
   createTeam,
   exportTenant,
   governanceView,
+  isTenantAdmin,
   scopeTagsForActor,
   migrateGovernance,
   runExpiry,
@@ -50,11 +53,30 @@ import {
   setRetention,
   startRetentionLoop,
 } from './governance.js';
+import { isProduction, publicError, rateLimit, rejectIdentityOverride, sanitizePlain, securityStatus } from './security.js';
+import { sendLoiCopy } from '../src/utils/mailer.js';
+import { LOI_VERSION } from '../src/legal/loi.js';
 
 function uidOf(req: Request) {
   const uid = req.memoryUser?.uid;
   if (!uid) throw Object.assign(new Error('Sign in required for memory'), { status: 401 });
   return uid;
+}
+
+function emailClaim(token: string) {
+  const part = token.split('.')[1];
+  if (!part) return '';
+  try {
+    const json = JSON.parse(Buffer.from(part, 'base64url').toString('utf8')) as { email?: string };
+    return sanitizePlain(json.email, 200);
+  } catch {
+    return '';
+  }
+}
+
+function fail(res: { status: (code: number) => { json: (body: unknown) => void } }, e: { status?: number; message?: string }) {
+  const err = publicError(e);
+  res.status(err.status).json(err.body);
 }
 
 function tagOf(req: Request) {
@@ -81,12 +103,15 @@ export async function bootMemoryEngine() {
       upsertFacts(doc.containerTag, graph.triples || [], doc.text.slice(0, 240));
     }
   }
+  if (isProduction() && !encryptionAtRest()) console.warn(encryptionWarning());
   void warmFactEmbeddings().catch(() => undefined);
   return stats();
 }
 
 export function mountMemoryEngine(app: Express) {
   app.use(memoryAuth);
+  app.use(rejectIdentityOverride);
+  app.use(rateLimit);
   mountOauth(app);
   app.use((req, res, next) => {
     const start = Date.now();
@@ -122,10 +147,41 @@ export function mountMemoryEngine(app: Express) {
       isolation: 'per-user',
       encryptionAtRest: encryptionAtRest(),
       encryptionWarning: encryptionWarning(),
+      rateLimiting: true,
+      corsMode: 'allowlist',
+      debugMode: !isProduction(),
       training: false,
       providers: providerStatus(),
       llm: stats().llm,
     });
+  });
+
+  app.get('/v4/client', (req, res) => {
+    const forwarded = String(req.headers['x-forwarded-for'] || '').split(',')[0].trim();
+    res.json({ ip: forwarded || req.ip || req.socket?.remoteAddress || '' });
+  });
+
+  app.post('/api/loi-accepted', async (req, res) => {
+    try {
+      const uid = uidOf(req);
+      const token = String(req.headers.authorization || '').replace(/^Bearer\s+/i, '');
+      const claimEmail = emailClaim(token);
+      const email = claimEmail || sanitizePlain(req.body?.email, 200);
+      const name = sanitizePlain(req.body?.name, 200);
+      const forwarded = String(req.headers['x-forwarded-for'] || '').split(',')[0].trim();
+      const result = await sendLoiCopy({
+        name,
+        email,
+        uid,
+        acceptedAt: new Date().toISOString(),
+        ip: forwarded || req.ip || req.socket?.remoteAddress || '',
+        userAgent: sanitizePlain(req.headers['user-agent'], 400),
+      });
+      if (!result.success) return res.status(502).json({ error: 'Could not store the letter copy' });
+      res.json({ ok: true, version: LOI_VERSION });
+    } catch (e: any) {
+      fail(res, e);
+    }
   });
 
   app.get('/v3/me', (req, res) => {
@@ -133,8 +189,12 @@ export function mountMemoryEngine(app: Express) {
       const uid = uidOf(req);
       res.json({ uid, homeTag: homeTag(uid), via: req.memoryUser?.via });
     } catch (e: any) {
-      res.status(e.status || 401).json({ error: e.message });
+      fail(res, e);
     }
+  });
+
+  app.get('/v4/security', (_req, res) => {
+    res.json(securityStatus());
   });
 
   app.get('/v4/protocol', (_req, res) => {
@@ -177,7 +237,7 @@ export function mountMemoryEngine(app: Express) {
       });
       res.json(out);
     } catch (e: any) {
-      res.status(e.status || 400).json({ error: e.message });
+      fail(res, e);
     }
   });
 
@@ -209,7 +269,24 @@ export function mountMemoryEngine(app: Express) {
       }
       res.json({ count: results.length, results });
     } catch (e: any) {
-      res.status(e.status || 400).json({ error: e.message });
+      fail(res, e);
+    }
+  });
+
+  app.get('/v3/files/:id', (req, res) => {
+    try {
+      const id = String(req.params.id || '');
+      const uid = uidOf(req);
+      const doc = getState().documents.find((d) => d.fileId === id && canRead(uid, d));
+      const bytes = doc ? readBlob(id) : null;
+      if (!doc || !bytes) return res.status(404).json({ error: 'File not found' });
+      res.setHeader('Content-Type', doc.mime || 'application/octet-stream');
+      res.setHeader('Content-Disposition', 'attachment');
+      res.setHeader('Cache-Control', 'private, no-store');
+      res.setHeader('X-Content-Type-Options', 'nosniff');
+      res.send(bytes);
+    } catch (e: any) {
+      fail(res, e);
     }
   });
 
@@ -219,7 +296,7 @@ export function mountMemoryEngine(app: Express) {
       if (!doc) return res.status(404).json({ error: 'Document not found' });
       res.json(doc);
     } catch (e: any) {
-      res.status(e.status || 401).json({ error: e.message });
+      fail(res, e);
     }
   });
 
@@ -229,7 +306,7 @@ export function mountMemoryEngine(app: Express) {
       const tag = tagOf(req);
       res.json({ documents: listDocuments(tag, uid), tags: listTags(uid), homeTag: homeTag(uid) });
     } catch (e: any) {
-      res.status(e.status || 401).json({ error: e.message });
+      fail(res, e);
     }
   });
 
@@ -237,13 +314,13 @@ export function mountMemoryEngine(app: Express) {
     try {
       res.json({ tags: listTags(uidOf(req)), homeTag: homeTag(uidOf(req)) });
     } catch (e: any) {
-      res.status(e.status || 401).json({ error: e.message });
+      fail(res, e);
     }
   });
 
   const searchHandler = async (req: Request, res: any) => {
     try {
-      const q = String(req.body?.query || req.body?.q || req.body?.prompt || '');
+      const q = sanitizePlain(req.body?.query || req.body?.q || req.body?.prompt || '', 2000);
       const uid = uidOf(req);
       const primary = tagOf(req);
       const extra = req.body?.union
@@ -295,7 +372,7 @@ export function mountMemoryEngine(app: Express) {
       }
       res.json(out);
     } catch (e: any) {
-      res.status(e.status || 400).json({ error: e.message });
+      fail(res, e);
     }
   };
 
@@ -304,7 +381,7 @@ export function mountMemoryEngine(app: Express) {
 
   app.post('/v4/chat', async (req, res) => {
     try {
-      const q = String(req.body?.query || req.body?.prompt || '');
+      const q = sanitizePlain(req.body?.query || req.body?.prompt || '', 2000);
       const out = await chatWithMemory(q, {
         containerTag: tagOf(req),
         topK: req.body?.memoriesRetrieved || 10,
@@ -321,13 +398,13 @@ export function mountMemoryEngine(app: Express) {
       });
       res.json(out);
     } catch (e: any) {
-      res.status(e.status || 400).json({ error: e.message });
+      fail(res, e);
     }
   });
 
   app.post('/v4/inject', async (req, res) => {
     try {
-      const q = String(req.body?.query || req.body?.prompt || '');
+      const q = sanitizePlain(req.body?.query || req.body?.prompt || '', 2000);
       const tag = tagOf(req);
       const out = await buildMemoryInjection(q, tag, {
         topK: req.body?.topK || 8,
@@ -338,7 +415,7 @@ export function mountMemoryEngine(app: Express) {
       });
       res.json(out);
     } catch (e: any) {
-      res.status(e.status || 400).json({ error: e.message });
+      fail(res, e);
     }
   });
 
@@ -351,7 +428,7 @@ export function mountMemoryEngine(app: Express) {
       const out = await runMemoryTool(name, args, uidOf(req));
       res.json(out);
     } catch (e: any) {
-      res.status(e.status || 400).json({ error: e.message });
+      fail(res, e);
     }
   });
 
@@ -373,22 +450,22 @@ export function mountMemoryEngine(app: Express) {
   });
 
   app.post('/v1/chat/completions', (req, res) => {
-    void completeChat(req, res).catch((e) => res.status(e.status || 400).json({ error: e.message }));
+    void completeChat(req, res).catch((e) => fail(res, e));
   });
   app.post('/v1/openai/chat/completions', (req, res) => {
-    void routeOpenAI(req, res).catch((e) => res.status(e.status || 400).json({ error: e.message }));
+    void routeOpenAI(req, res).catch((e) => fail(res, e));
   });
   app.post('/v1/xai/chat/completions', (req, res) => {
-    void routeGrok(req, res).catch((e) => res.status(e.status || 400).json({ error: e.message }));
+    void routeGrok(req, res).catch((e) => fail(res, e));
   });
   app.post('/v1/anthropic/messages', (req, res) => {
-    void routeAnthropic(req, res).catch((e) => res.status(e.status || 400).json({ error: e.message }));
+    void routeAnthropic(req, res).catch((e) => fail(res, e));
   });
   app.post('/v1/google/models/:model/generateContent', (req, res) => {
-    void routeGemini(req, res).catch((e) => res.status(e.status || 400).json({ error: e.message }));
+    void routeGemini(req, res).catch((e) => fail(res, e));
   });
   app.post('/v1/google/generateContent', (req, res) => {
-    void routeGemini(req, res).catch((e) => res.status(e.status || 400).json({ error: e.message }));
+    void routeGemini(req, res).catch((e) => fail(res, e));
   });
 
   app.post('/v4/remember', async (req, res) => {
@@ -403,7 +480,7 @@ export function mountMemoryEngine(app: Express) {
       });
       res.json(out);
     } catch (e: any) {
-      res.status(e.status || 400).json({ error: e.message });
+      fail(res, e);
     }
   });
 
@@ -411,7 +488,7 @@ export function mountMemoryEngine(app: Express) {
     try {
       res.json(createOrg(uidOf(req), String(req.body?.name || '')));
     } catch (e: any) {
-      res.status(e.status || 400).json({ error: e.message });
+      fail(res, e);
     }
   });
 
@@ -419,7 +496,7 @@ export function mountMemoryEngine(app: Express) {
     try {
       res.json({ orgs: listOrgs(uidOf(req)) });
     } catch (e: any) {
-      res.status(e.status || 401).json({ error: e.message });
+      fail(res, e);
     }
   });
 
@@ -427,7 +504,7 @@ export function mountMemoryEngine(app: Express) {
     try {
       res.json(addOrgMember(uidOf(req), String(req.body?.orgId || ''), String(req.body?.uid || '')));
     } catch (e: any) {
-      res.status(e.status || 400).json({ error: e.message });
+      fail(res, e);
     }
   });
 
@@ -435,7 +512,7 @@ export function mountMemoryEngine(app: Express) {
     try {
       res.json(closeSession(uidOf(req), String(req.body?.sessionId || '')));
     } catch (e: any) {
-      res.status(e.status || 400).json({ error: e.message });
+      fail(res, e);
     }
   });
 
@@ -444,7 +521,7 @@ export function mountMemoryEngine(app: Express) {
       const out = await flushConsolidation(tagOf(req));
       res.json(out);
     } catch (e: any) {
-      res.status(e.status || 400).json({ error: e.message });
+      fail(res, e);
     }
   });
 
@@ -458,7 +535,7 @@ export function mountMemoryEngine(app: Express) {
       });
       res.json(out);
     } catch (e: any) {
-      res.status(e.status || 400).json({ error: e.message });
+      fail(res, e);
     }
   });
 
@@ -467,7 +544,7 @@ export function mountMemoryEngine(app: Express) {
       const profile = buildProfile(tagOf(req));
       res.json(profile);
     } catch (e: any) {
-      res.status(e.status || 401).json({ error: e.message });
+      fail(res, e);
     }
   });
 
@@ -477,7 +554,7 @@ export function mountMemoryEngine(app: Express) {
       const requested = String(req.query.containerTag || '').trim();
       res.json(requested ? graphPayload(tagOf(req)) : graphPayload(undefined, uid));
     } catch (e: any) {
-      res.status(e.status || 401).json({ error: e.message });
+      fail(res, e);
     }
   });
 
@@ -486,7 +563,7 @@ export function mountMemoryEngine(app: Express) {
       const id = String(req.body?.id || req.query.id || '');
       res.json(forgetById(id, uidOf(req)));
     } catch (e: any) {
-      res.status(e.status || 401).json({ error: e.message });
+      fail(res, e);
     }
   });
 
@@ -494,7 +571,7 @@ export function mountMemoryEngine(app: Express) {
     try {
       res.json(forgetMatching(String(req.body?.query || ''), tagOf(req), !!req.body?.dryRun));
     } catch (e: any) {
-      res.status(e.status || 401).json({ error: e.message });
+      fail(res, e);
     }
   });
 
@@ -502,14 +579,14 @@ export function mountMemoryEngine(app: Express) {
     try {
       res.json(stats(uidOf(req)));
     } catch (e: any) {
-      res.status(e.status || 401).json({ error: e.message });
+      fail(res, e);
     }
   });
   app.get('/v3/insights', (req, res) => {
     try {
       res.json(insights(uidOf(req)));
     } catch (e: any) {
-      res.status(e.status || 401).json({ error: e.message });
+      fail(res, e);
     }
   });
   app.get('/v3/jobs', (req, res) => {
@@ -517,7 +594,7 @@ export function mountMemoryEngine(app: Express) {
       const uid = uidOf(req);
       res.json({ jobs: getState().jobs.filter((j) => j.ownerUid === uid).slice(-20).reverse() });
     } catch (e: any) {
-      res.status(e.status || 401).json({ error: e.message });
+      fail(res, e);
     }
   });
   app.get('/v3/requests', (req, res) => {
@@ -543,7 +620,7 @@ export function mountMemoryEngine(app: Express) {
         avgMs: searchN ? Math.round(searchMs / searchN) : 0,
       });
     } catch (e: any) {
-      res.status(e.status || 401).json({ error: e.message });
+      fail(res, e);
     }
   });
 
@@ -551,7 +628,7 @@ export function mountMemoryEngine(app: Express) {
     try {
       res.json(exportMine(uidOf(req)));
     } catch (e: any) {
-      res.status(e.status || 401).json({ error: e.message });
+      fail(res, e);
     }
   });
 
@@ -560,7 +637,7 @@ export function mountMemoryEngine(app: Express) {
       if (req.body?.confirm !== 'reset') return res.status(400).json({ error: 'Confirm with {"confirm":"reset"}' });
       res.json(resetMine(uidOf(req)));
     } catch (e: any) {
-      res.status(e.status || 401).json({ error: e.message });
+      fail(res, e);
     }
   });
 
@@ -580,7 +657,7 @@ export function mountMemoryEngine(app: Express) {
           })),
       });
     } catch (e: any) {
-      res.status(e.status || 401).json({ error: e.message });
+      fail(res, e);
     }
   });
 
@@ -593,7 +670,8 @@ export function mountMemoryEngine(app: Express) {
       if (!rec || !rec.ownerUid || rec.ownerUid !== uid) return res.status(401).json({ ok: false, error: 'Invalid API key' });
       res.json({ ok: true, uid, homeTag: homeTag(uid), via: 'apikey', name: rec.name });
     } catch (e: any) {
-      res.status(e.status || 401).json({ ok: false, error: e.message });
+      const err = publicError(e);
+      res.status(err.status).json({ ok: false, ...err.body });
     }
   });
 
@@ -604,10 +682,11 @@ export function mountMemoryEngine(app: Express) {
       const index = state.apiKeys.findIndex((k) => k.id === req.params.id && k.ownerUid === uid);
       if (index < 0) return res.status(404).json({ error: 'Key not found' });
       state.apiKeys.splice(index, 1);
+      audit({ actorId: uid, action: 'retain', memoryId: String(req.params.id), tenantId: homeTag(uid), detail: 'api-key-revoked result=ok' });
       await persistNow();
       res.json({ ok: true });
     } catch (e: any) {
-      res.status(e.status || 401).json({ error: e.message });
+      fail(res, e);
     }
   });
 
@@ -625,10 +704,11 @@ export function mountMemoryEngine(app: Express) {
         ownerUid,
       };
       getState().apiKeys.push(rec);
+      audit({ actorId: ownerUid, action: 'retain', memoryId: rec.id, tenantId: homeTag(ownerUid), detail: 'api-key-created result=ok' });
       await persistNow();
       res.json({ ...rec, secret, scope: 'Full' });
     } catch (e: any) {
-      res.status(e.status || 401).json({ error: e.message });
+      fail(res, e);
     }
   });
 
@@ -636,7 +716,7 @@ export function mountMemoryEngine(app: Express) {
     try {
       res.json(governanceView(uidOf(req)));
     } catch (e: any) {
-      res.status(e.status || 401).json({ error: e.message });
+      fail(res, e);
     }
   });
 
@@ -650,7 +730,7 @@ export function mountMemoryEngine(app: Express) {
       });
       res.json({ policies });
     } catch (e: any) {
-      res.status(e.status || 400).json({ error: e.message });
+      fail(res, e);
     }
   });
 
@@ -663,15 +743,21 @@ export function mountMemoryEngine(app: Express) {
         sensitive: req.body?.sensitive,
       }));
     } catch (e: any) {
-      res.status(e.status || 400).json({ error: e.message });
+      fail(res, e);
     }
   });
 
   app.post('/v4/governance/expiry', (req, res) => {
     try {
-      res.json(runExpiry(uidOf(req)));
+      const actor = uidOf(req);
+      const requested = String(req.body?.tenantId || '');
+      const tenantId = requested || homeTag(actor);
+      if (requested && requested !== homeTag(actor) && !isTenantAdmin(actor, requested)) {
+        return res.status(403).json({ error: 'Tenant admin required' });
+      }
+      res.json(runExpiry(actor, Date.now(), tenantId));
     } catch (e: any) {
-      res.status(e.status || 400).json({ error: e.message });
+      fail(res, e);
     }
   });
 
@@ -681,7 +767,7 @@ export function mountMemoryEngine(app: Express) {
       if (out.ok === false) return res.status(403).json(out);
       res.json(out);
     } catch (e: any) {
-      res.status(e.status || 400).json({ error: e.message });
+      fail(res, e);
     }
   });
 
@@ -698,7 +784,7 @@ export function mountMemoryEngine(app: Express) {
       if (req.body?.tenantId) return res.json(forgetTenant(actor, String(req.body.tenantId), dryRun));
       res.status(400).json({ error: 'memoryId, ownerId, or tenantId required' });
     } catch (e: any) {
-      res.status(e.status || 400).json({ error: e.message });
+      fail(res, e);
     }
   });
 
@@ -708,7 +794,7 @@ export function mountMemoryEngine(app: Express) {
       const tenantId = String(req.query.tenantId || '');
       res.json(tenantId ? exportTenant(actor, tenantId) : exportMine(actor));
     } catch (e: any) {
-      res.status(e.status || 400).json({ error: e.message });
+      fail(res, e);
     }
   });
 
@@ -716,7 +802,7 @@ export function mountMemoryEngine(app: Express) {
     try {
       res.json({ audit: auditFor(uidOf(req), String(req.query.tenantId || '') || undefined) });
     } catch (e: any) {
-      res.status(e.status || 401).json({ error: e.message });
+      fail(res, e);
     }
   });
 
@@ -724,7 +810,7 @@ export function mountMemoryEngine(app: Express) {
     try {
       res.json(createTeam(uidOf(req), String(req.body?.name || ''), req.body?.tenantId ? String(req.body.tenantId) : undefined));
     } catch (e: any) {
-      res.status(e.status || 400).json({ error: e.message });
+      fail(res, e);
     }
   });
 
@@ -732,7 +818,7 @@ export function mountMemoryEngine(app: Express) {
     try {
       res.json(addTeamMember(uidOf(req), String(req.body?.teamId || ''), String(req.body?.uid || '')));
     } catch (e: any) {
-      res.status(e.status || 400).json({ error: e.message });
+      fail(res, e);
     }
   });
 
@@ -742,7 +828,7 @@ export function mountMemoryEngine(app: Express) {
       const triples = getState().triples.filter((t) => t.containerTag === tag);
       res.json({ path: shortestPath(triples, String(req.query.from || ''), String(req.query.to || ''), tag) });
     } catch (e: any) {
-      res.status(e.status || 401).json({ error: e.message });
+      fail(res, e);
     }
   });
 }

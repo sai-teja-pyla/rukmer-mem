@@ -1,4 +1,5 @@
 import { getState, saveState, uid as newId } from './core.js';
+import { audit } from './governance.js';
 import { agentTag, canAccessTag, homeTag, orgTag, scopeFromTag, sessionTag, slugPart } from './tenancy.js';
 
 export function createOrg(uid: string, name: string) {
@@ -10,6 +11,7 @@ export function createOrg(uid: string, name: string) {
   const rec = { id, name: label, createdBy: uid, createdAt: new Date().toISOString() };
   state.orgs.push(rec);
   state.orgMembers.push({ orgId: id, uid, role: 'owner' });
+  audit({ actorId: uid, action: 'retain', memoryId: id, tenantId: id, detail: 'org-created result=ok' });
   saveState();
   return rec;
 }
@@ -23,6 +25,7 @@ export function addOrgMember(actorUid: string, orgId: string, memberUid: string)
   if (!actor || actor.role !== 'owner') throw Object.assign(new Error('Only the org owner can add members'), { status: 403 });
   if (!state.orgMembers.some((m) => m.orgId === tag && m.uid === member)) {
     state.orgMembers.push({ orgId: tag, uid: member, role: 'member' });
+    audit({ actorId: actorUid, action: 'retain', memoryId: tag, tenantId: tag, detail: `org-member-added:${member} result=ok` });
     saveState();
   }
   return { orgId: tag, uid: member };

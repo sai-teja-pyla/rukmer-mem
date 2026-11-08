@@ -12,6 +12,8 @@ import {
   sendPasswordResetEmail 
 } from "firebase/auth";
 import { doc, setDoc, getDoc, serverTimestamp } from 'firebase/firestore';
+import LoiAccept from './LoiAccept';
+import { emailLoiCopy, loiAcceptanceRecord } from '../legal/acceptance';
 
 interface LandingPageProps {
   onLoginSuccess: (user: FirebaseUser) => void;
@@ -25,21 +27,26 @@ export default function LandingPage({ onLoginSuccess }: LandingPageProps) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [successMsg, setSuccessMsg] = useState('');
+  const [accepted, setAccepted] = useState(false);
 
   // Helper: Sync User Data to Firestore
-  const syncUserToFirestore = async (user: FirebaseUser, nameOverride?: string) => {
+  const syncUserToFirestore = async (user: FirebaseUser, nameOverride?: string, recordLoi = false) => {
     const userDocRef = doc(db, "users", user.uid);
     const userDoc = await getDoc(userDocRef);
 
-    // Only create a new doc if it doesn't exist
     if (!userDoc.exists()) {
       await setDoc(userDocRef, {
         displayName: nameOverride || user.displayName || 'User',
         email: user.email,
         theme: "light",
         createdAt: serverTimestamp(),
-        plan: "free"
+        plan: "free",
+        ...(recordLoi ? await loiAcceptanceRecord() : {}),
       });
+      if (recordLoi) {
+        sessionStorage.setItem('rukmer.loiAccepted', '1');
+        await emailLoiCopy(user);
+      }
     }
   };
 
@@ -50,6 +57,11 @@ export default function LandingPage({ onLoginSuccess }: LandingPageProps) {
     setLoading(true);
     try {
       if (isSignUp) {
+        if (!accepted) {
+          setError('Check the Letter of Intent before creating an account.');
+          setLoading(false);
+          return;
+        }
         // A. Create Account
         const userCredential = await createUserWithEmailAndPassword(auth, email, password);
         const user = userCredential.user;
@@ -61,7 +73,7 @@ export default function LandingPage({ onLoginSuccess }: LandingPageProps) {
 
         // C. Sync to Firestore Database
         if (refreshedUser) {
-          await syncUserToFirestore(refreshedUser, fullName);
+          await syncUserToFirestore(refreshedUser, fullName, true);
           
           // D. Send Branded Verification Email
           await sendEmailVerification(refreshedUser);
@@ -84,12 +96,16 @@ export default function LandingPage({ onLoginSuccess }: LandingPageProps) {
   const handleGoogleSignIn = async () => {
     setError('');
     setSuccessMsg('');
+    if (isSignUp && !accepted) {
+      setError('Check the Letter of Intent before creating an account.');
+      return;
+    }
     try {
         const result = await signInWithPopup(auth, googleProvider);
         const user = result.user;
 
         // Sync Firestore (Ensure profile exists for dashboard)
-        await syncUserToFirestore(user);
+        await syncUserToFirestore(user, undefined, isSignUp);
 
         onLoginSuccess(user);
     } catch (error: any) {
@@ -200,6 +216,8 @@ export default function LandingPage({ onLoginSuccess }: LandingPageProps) {
                 )}
               </div>
 
+              {isSignUp && <LoiAccept checked={accepted} onChange={setAccepted} />}
+
               <button 
                   onClick={handleAuth}
                   disabled={loading}
@@ -224,14 +242,16 @@ export default function LandingPage({ onLoginSuccess }: LandingPageProps) {
                  </button>
               </div>
 
+              {!isSignUp && (
               <div className="mt-6 text-center border-t border-slate-100 pt-6">
                 <p className="text-[11px] text-gray-500 leading-relaxed max-w-xs mx-auto">
-                  By {isSignUp ? "signing up" : "logging in"}, you agree to our{" "}
-                  <a href="/terms.html" target="_blank" className="text-[#6366f1] hover:underline font-medium">Terms of Service</a>
+                  By logging in, you agree to our{" "}
+                  <a href="/terms.html" target="_blank" className="text-black hover:underline font-medium">Terms of Service</a>
                   {" "}and{" "}
-                  <a href="/privacy.html" target="_blank" className="text-[#6366f1] hover:underline font-medium">Privacy Policy</a>.
+                  <a href="/privacy.html" target="_blank" className="text-black hover:underline font-medium">Privacy Policy</a>.
                 </p>
               </div>
+              )}
             </div>
           </div>
         </div>

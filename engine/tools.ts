@@ -1,4 +1,5 @@
 import { commitImportantMemory, searchMemory } from './pipeline.js';
+import { TOOL_ALLOWLIST } from './security.js';
 import { resolveOwnedTag } from './tenancy.js';
 
 export const MEMORY_TOOLS = [
@@ -38,7 +39,10 @@ export const MEMORY_TOOLS = [
 ];
 
 export async function runMemoryTool(name: string, args: any, uid?: string) {
-  if (!uid) throw new Error('Sign in required');
+  if (!uid) throw Object.assign(new Error('Sign in required'), { status: 401 });
+  if (!TOOL_ALLOWLIST.includes(name as (typeof TOOL_ALLOWLIST)[number])) {
+    throw Object.assign(new Error('Tool is not allowed'), { status: 403 });
+  }
   const tag = resolveOwnedTag(uid, args?.containerTag);
   if (!tag) throw new Error('containerTag required');
   if (name === 'searchMemories') {

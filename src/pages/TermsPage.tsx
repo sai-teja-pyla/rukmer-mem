@@ -1,6 +1,7 @@
-import React, { useEffect } from 'react';
+import { useEffect } from 'react';
 import { ArrowLeft } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
+import LoiDocument from '../components/LoiDocument';
 
 export default function TermsPage() {
   const navigate = useNavigate();
@@ -22,26 +23,8 @@ export default function TermsPage() {
           <ArrowLeft size={16} /> Back
         </button>
 
-        <h1 className="text-3xl font-bold mb-2">Terms of Service</h1>
-        <p className="text-gray-500 mb-8">Last updated: February 2026</p>
-
-        {/* Placeholder Content - Replace this with your real Terms if you have them */}
-        <div className="space-y-6 text-gray-700 leading-relaxed">
-          <section>
-            <h2 className="text-xl font-bold text-black mb-2">1. Acceptance of Terms</h2>
-            <p>By accessing and using Rukmer AI, you accept and agree to be bound by the terms and provision of this agreement.</p>
-          </section>
-
-          <section>
-            <h2 className="text-xl font-bold text-black mb-2">2. Use of Service</h2>
-            <p>You agree to use the service only for lawful purposes. You are prohibited from using the service to upload content that is illegal, harmful, or violates the rights of others.</p>
-          </section>
-
-          <section>
-            <h2 className="text-xl font-bold text-black mb-2">3. Intellectual Property</h2>
-            <p>You retain all rights to the data and images you upload. We claim no ownership over your intellectual property.</p>
-          </section>
-        </div>
+        <p className="text-gray-600 mb-8">By creating an account you agree to the letter below, these terms, and the privacy policy, on behalf of yourself and your organization. The same letter is at <a className="underline" href="/loi">/loi</a> and on <a className="underline" href="/terms.html">the terms page</a>.</p>
+        <LoiDocument />
 
       </div>
     </div>

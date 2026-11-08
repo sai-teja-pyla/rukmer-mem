@@ -1,6 +1,7 @@
 import crypto from 'crypto';
 import type { Express, Request, Response } from 'express';
 import { getState, persistNow, sha, uid, type OauthClientRec, type OauthCodeRec } from './core.js';
+import { ALLOWED_ORIGINS } from './security.js';
 
 const ALLOWED_REDIRECT = [
   'claude.ai',
@@ -45,8 +46,12 @@ function s256(v: string) {
   return crypto.createHash('sha256').update(v).digest('base64url');
 }
 
-function cors(res: Response) {
-  res.setHeader('Access-Control-Allow-Origin', '*');
+function cors(req: Request, res: Response) {
+  const origin = String(req.headers.origin || '');
+  if (origin && (ALLOWED_ORIGINS.includes(origin) || hostOk(origin))) {
+    res.setHeader('Access-Control-Allow-Origin', origin);
+    res.setHeader('Vary', 'Origin');
+  }
   res.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type, mcp-protocol-version, mcp-session-id');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
 }
@@ -92,23 +97,23 @@ export function mountOauth(app: Express) {
   ];
 
   for (const path of wellKnown) {
-    app.options(path, (_req, res) => {
-      cors(res);
+    app.options(path, (req, res) => {
+      cors(req, res);
       res.status(204).end();
     });
     app.get(path, (req, res) => {
-      cors(res);
+      cors(req, res);
       if (path.includes('protected-resource')) return res.json(resourceMeta(req));
       res.json(asMeta(req));
     });
   }
 
-  app.options('/oauth/register', (_req, res) => {
-    cors(res);
+  app.options('/oauth/register', (req, res) => {
+    cors(req, res);
     res.status(204).end();
   });
-  app.options('/oauth/token', (_req, res) => {
-    cors(res);
+  app.options('/oauth/token', (req, res) => {
+    cors(req, res);
     res.status(204).end();
   });
 
@@ -122,7 +127,7 @@ export function mountOauth(app: Express) {
   });
 
   app.post('/oauth/register', async (req, res) => {
-    cors(res);
+    cors(req, res);
     const body = bodyOf(req);
     const uris = ([] as string[])
       .concat(body.redirect_uris || body.redirectUris || [])
@@ -174,7 +179,7 @@ export function mountOauth(app: Express) {
   });
 
   app.post('/oauth/token', async (req, res) => {
-    cors(res);
+    cors(req, res);
     const body = bodyOf(req);
     const grant = String(body.grant_type || 'authorization_code');
     if (grant !== 'authorization_code') {
@@ -224,7 +229,7 @@ export function mountOauth(app: Express) {
 
 export function mcpUnauthorized(req: Request, res: Response) {
   const origin = publicOrigin(req);
-  cors(res);
+  cors(req, res);
   res.setHeader(
     'WWW-Authenticate',
     `Bearer realm="rukmer", resource_metadata="${origin}/.well-known/oauth-protected-resource"`

@@ -23,6 +23,7 @@ import { isChatter, isUsefulFact, looksLikeDurableFact, sanitiseGraph } from './
 import { applyDecay } from './memory.js';
 import { buildMemoryInjection } from './inject.js';
 import { canAccessTag, homeTag, ownsTag, scopeFromTag, uidFromTag } from './tenancy.js';
+import { checkUpload, sanitizeName, sanitizePlain } from './security.js';
 import { ensureIndex, rankTagged, tagCount, vectorDim, type MetaFilter, type Retrieval } from './search-index.js';
 import { assignGovernance, audit, canRead, eraseBulk, eraseMemory, findMemory, govOf, prepareWrite, teamContainer } from './governance.js';
 
@@ -69,7 +70,7 @@ export async function ingestDocument(input: {
   sourceRef?: string;
   extraction?: string;
 }) {
-  const raw = input.text.trim().slice(0, 200000);
+  const raw = sanitizePlain(input.text, 200000).trim();
   if (!raw) throw new Error('Empty document');
   let tag = input.containerTag;
   if (!tag) throw new Error('containerTag required');
@@ -236,8 +237,8 @@ export async function ingestPayload(item: {
   memoryKind?: string;
   sourceRef?: string;
 }) {
-  const title = item.title || item.name || 'Untitled';
-  let text = String(item.text || item.content || '');
+  const title = sanitizeName(item.title || item.name || 'Untitled');
+  let text = sanitizePlain(item.text || item.content || '', 200000);
   let mime = item.mime || 'text/plain';
   let fileId: string | undefined;
   const image = /^image\//.test(mime) || /\.(png|jpe?g|gif|webp)$/i.test(title);
@@ -246,7 +247,7 @@ export async function ingestPayload(item: {
     if (!item.videoBase64) throw new Error(`Video ${title} is missing file data`);
     const raw = item.videoBase64.includes(',') ? item.videoBase64.slice(item.videoBase64.indexOf(',') + 1) : item.videoBase64;
     const bytes = Buffer.from(raw, 'base64');
-    mime = mime.startsWith('video/') ? mime : 'video/mp4';
+    mime = checkUpload(mime.startsWith('video/') ? mime : 'video/mp4', bytes);
     fileId = uid('file');
     await saveBlob(fileId, bytes, mime);
     text = await describeImage(raw, mime);
@@ -254,15 +255,17 @@ export async function ingestPayload(item: {
     if (!item.imageBase64) throw new Error(`Image ${title} is missing file data`);
     const raw = item.imageBase64.includes(',') ? item.imageBase64.slice(item.imageBase64.indexOf(',') + 1) : item.imageBase64;
     const bytes = Buffer.from(raw, 'base64');
-    mime = mime.startsWith('image/') ? mime : 'image/png';
+    mime = checkUpload(mime.startsWith('image/') ? mime : 'image/png', bytes);
     fileId = uid('file');
     await saveBlob(fileId, bytes, mime);
     text = await describeImage(raw, mime);
   } else if (item.pdfBase64 || looksLikePdf(title, item.mime)) {
     if (!item.pdfBase64) throw new Error(`PDF ${title} is missing file data`);
     const raw = item.pdfBase64.includes(',') ? item.pdfBase64.slice(item.pdfBase64.indexOf(',') + 1) : item.pdfBase64;
+    const bytes = Buffer.from(raw, 'base64');
+    mime = checkUpload('application/pdf', bytes);
     fileId = uid('file');
-    await saveBlob(fileId, Buffer.from(raw, 'base64'), 'application/pdf');
+    await saveBlob(fileId, bytes, 'application/pdf');
     const pdf = await textFromPdfBase64(item.pdfBase64);
     text = pdf.text.slice(0, 200000);
     mime = 'application/pdf';
@@ -334,7 +337,8 @@ export async function warmFactEmbeddings() {
 export async function searchMemory(query: string, opts: SearchOpts = {}) {
   const started = Date.now();
   const retrieval = retrievalOf(opts.retrieval);
-  const { normalized, expanded } = expandQuery(query.slice(0, 2000));
+  const qRaw = sanitizePlain(query, 2000);
+  const { normalized, expanded } = expandQuery(qRaw);
   const q = opts.rewrite ? expanded : normalized;
   const topK = opts.topK ?? 10;
   const strict = opts.strictness ?? 0.4;

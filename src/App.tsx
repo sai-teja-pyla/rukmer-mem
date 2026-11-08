@@ -7,6 +7,7 @@ import LoginPage from './pages/LoginPage';
 import SignupPage from './pages/SignupPage';
 import PrivacyPage from './pages/PrivacyPage';
 import TermsPage from './pages/TermsPage';
+import LoiPage from './pages/LoiPage';
 import OAuthConsentPage from './pages/OAuthConsentPage';
 import { initAnalytics } from './hooks/analytics';
 import { UserProfile } from './types';
@@ -127,6 +128,8 @@ export default function App() {
         <Route path="/signup" element={!user ? <SignupPage /> : <Navigate to="/overview" replace />} />
         <Route path="/privacy" element={<PrivacyPage />} />
         <Route path="/terms" element={<TermsPage />} />
+        <Route path="/loi" element={<LoiPage />} />
+        <Route path="/legal/loi" element={<LoiPage />} />
 
         <Route element={user ? <ConsoleLayout user={user} /> : <ToLogin />}>
           <Route path="/overview" element={<OverviewPage />} />

@@ -120,14 +120,16 @@ export async function resolveIdentity(req: Request): Promise<MemoryUser> {
     if (verified.status === 'ok') return { uid: verified.uid, via: 'firebase' };
     if (verified.status === 'invalid') throw Object.assign(new Error('Invalid Firebase token'), { status: 401 });
   }
-  if (isLoopback(req)) {
+  const prod = process.env.NODE_ENV === 'production' || !!process.env.K_SERVICE;
+  const devHeaderOff = prod || process.env.MEMORY_REQUIRE_AUTH === '1';
+  if (!devHeaderOff && isLoopback(req) && !token) {
     const dev = sanitizeUid(String(req.headers['x-rukmer-user'] || ''));
     if (dev) return { uid: dev, via: 'dev' };
   }
   throw Object.assign(new Error('Sign in required for memory'), { status: 401 });
 }
 
-const PUBLIC = new Set(['/health', '/v4/protocol', '/v4/openai.json', '/v1/models']);
+const PUBLIC = new Set(['/health', '/v4/protocol', '/v4/security', '/v4/client', '/v4/openai.json', '/v1/models']);
 
 export function isPublicMemoryPath(method: string, path: string) {
   if (method === 'OPTIONS') return true;
@@ -145,7 +147,8 @@ export function memoryAuth(req: Request, res: Response, next: NextFunction) {
     req.path.startsWith('/v4') ||
     req.path.startsWith('/v1') ||
     req.path.startsWith('/mcp') ||
-    req.path === '/oauth/code';
+    req.path === '/oauth/code' ||
+    req.path === '/api/loi-accepted';
   if (!gated) return next();
   void resolveIdentity(req)
     .then((user) => {

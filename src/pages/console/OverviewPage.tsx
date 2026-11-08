@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Copy, Check, ChevronDown, Sparkles, Box, FileText, Play, Globe } from 'lucide-react';
 
@@ -23,6 +23,13 @@ Rukmer stores processed memory (chunks + durable facts). It does not replace Gem
 
 export default function OverviewPage() {
   const [copied, setCopied] = useState(false);
+  const [loiNote, setLoiNote] = useState(false);
+  useEffect(() => {
+    if (sessionStorage.getItem('rukmer.loiAccepted') === '1') {
+      sessionStorage.removeItem('rukmer.loiAccepted');
+      setLoiNote(true);
+    }
+  }, []);
   const [includeKey, setIncludeKey] = useState(true);
   const [manualOpen, setManualOpen] = useState(false);
 
@@ -58,6 +65,9 @@ Keep secrets in .env — never commit keys.`;
               <FileText size={18} strokeWidth={1.6} />
             </div>
             <h1 className="text-[26px] sm:text-[32px] font-semibold tracking-tight text-white mb-3">Get started</h1>
+            {loiNote && (
+              <p className="text-[13px] text-zinc-300 mb-3">Letter of Intent accepted for this account.</p>
+            )}
             <p className="text-[14px] text-zinc-400 leading-relaxed max-w-[340px]">
               Start in Playground, import a file, then connect Claude Code, Cursor, or Codex. Chat apps use Connectors.
             </p>

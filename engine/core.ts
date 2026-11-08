@@ -397,6 +397,19 @@ export async function saveBlob(id: string, bytes: Buffer, mime = 'application/oc
   }
 }
 
+export function readBlob(id: string) {
+  if (!/^[a-zA-Z0-9_-]{1,80}$/.test(id)) return null;
+  const root = path.resolve(DATA_DIR, 'files');
+  const file = path.resolve(root, id);
+  if (file !== path.join(root, id)) return null;
+  try {
+    if (!fs.existsSync(file)) return null;
+    return fs.readFileSync(file);
+  } catch {
+    return null;
+  }
+}
+
 export function deleteBlob(id: string) {
   if (!/^[a-zA-Z0-9_-]{1,80}$/.test(id)) return;
   const file = path.join(DATA_DIR, 'files', id);

@@ -10,17 +10,24 @@ import {
 } from 'firebase/auth';
 import { doc, setDoc, getDoc, serverTimestamp } from 'firebase/firestore';
 import TerminalAuth, { signUpLines } from '../components/TerminalAuth';
+import LoiAccept from '../components/LoiAccept';
+import { emailLoiCopy, loiAcceptanceRecord } from '../legal/acceptance';
 
 export default function SignupPage() {
   const navigate = useNavigate();
   const [formData, setFormData] = useState({ name: '', email: '', password: '' });
   const [error, setError] = useState('');
+  const [accepted, setAccepted] = useState(false);
   const [loading, setLoading] = useState(false);
 
   // 1. Handle Email/Password Sign Up
   const handleSignup = async (e) => {
     e.preventDefault();
     setError('');
+    if (!accepted) {
+      setError('Check the Letter of Intent before creating an account.');
+      return;
+    }
     setLoading(true);
 
     try {
@@ -40,10 +47,13 @@ export default function SignupPage() {
         displayName: formData.name,
         email: formData.email,
         theme: "light",
-        createdAt: serverTimestamp(), // Use serverTimestamp for better data consistency
-        plan: "free"
+        createdAt: serverTimestamp(),
+        plan: "free",
+        ...(await loiAcceptanceRecord()),
       });
 
+      sessionStorage.setItem('rukmer.loiAccepted', '1');
+      await emailLoiCopy(user);
       navigate('/dashboard'); 
     } catch (err) {
       console.error("Signup Error:", err);
@@ -62,6 +72,10 @@ export default function SignupPage() {
   // 2. Handle Google Sign Up
   const handleGoogleSignup = async () => {
     setError('');
+    if (!accepted) {
+      setError('Check the Letter of Intent before creating an account.');
+      return;
+    }
     try {
       const provider = new GoogleAuthProvider();
       const result = await signInWithPopup(auth, provider);
@@ -77,10 +91,13 @@ export default function SignupPage() {
           email: user.email,
           theme: "light",
           createdAt: serverTimestamp(),
-          plan: "free"
+          plan: "free",
+          ...(await loiAcceptanceRecord()),
         });
+        await emailLoiCopy(user);
       }
 
+      sessionStorage.setItem('rukmer.loiAccepted', '1');
       navigate('/dashboard');
     } catch (err) {
       console.error("Google Error:", err);
@@ -128,6 +145,7 @@ export default function SignupPage() {
             className="term-input w-full bg-transparent border-0 border-b border-black/15 focus:border-black outline-none py-2 text-black placeholder:text-black/30"
           />
         </label>
+        <LoiAccept checked={accepted} onChange={setAccepted} />
         <button
           type="submit"
           disabled={loading}
@@ -146,12 +164,6 @@ export default function SignupPage() {
         <p>
           &gt; already have an account?{' '}
           <Link to="/login" className="underline underline-offset-4">sign in</Link>
-        </p>
-        <p className="text-black/60">
-          &gt; by creating an account you agree to the{' '}
-          <a href="/terms.html" target="_blank" className="text-black underline underline-offset-4">terms</a>
-          {' '}and{' '}
-          <a href="/privacy.html" target="_blank" className="text-black underline underline-offset-4">privacy policy</a>
         </p>
       </form>
     </TerminalAuth>

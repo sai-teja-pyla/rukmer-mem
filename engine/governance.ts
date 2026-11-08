@@ -281,6 +281,7 @@ export function prepareWrite(tenantId: string, text: string) {
   return out;
 }
 
+/** Append-only from the API. The JSON file keeps the newest 2,000 rows so it stays bounded. No route edits or deletes a row. */
 export function audit(entry: Omit<AuditRec, 'id' | 'at'> & { at?: string }) {
   const state = getState();
   state.audit.unshift({
@@ -386,12 +387,12 @@ export function eraseBulk(actor: string, mode: 'owner' | 'tenant', target: strin
   return { ok: true, dryRun: false, count: ids.length, ids, removed: out.removed, tags: out.tags };
 }
 
-export function runExpiry(actor = 'system', now = Date.now()) {
-  const state = getState();
+export function runExpiry(actor = 'system', now = Date.now(), tenantId?: string) {
   const purge: string[] = [];
   let archived = 0;
   const stamp = new Date(now).toISOString();
   for (const row of rows()) {
+    if (tenantId && govOf(row).tenantId !== tenantId && row.containerTag !== tenantId) continue;
     if (!row.gov?.expiresAt || !isExpired(row.gov.expiresAt, now) || row.gov.deletedAt) continue;
     const kind = row.gov.memoryKind;
     const { action } = ttlFor(row.gov.tenantId, kind);
@@ -464,6 +465,7 @@ export function createTeam(actor: string, name: string, tenantId?: string) {
   const state = getState();
   state.teams.push(team);
   state.teamMembers.push({ teamId: team.id, uid: actor, role: 'owner' });
+  audit({ actorId: actor, action: 'retain', memoryId: team.id, tenantId: tenant, detail: `team-created result=ok` });
   saveState();
   return team;
 }
@@ -476,6 +478,7 @@ export function addTeamMember(actor: string, teamId: string, memberUid: string) 
   if (!/^[A-Za-z0-9_-]{1,128}$/.test(memberUid)) throw Object.assign(new Error('Invalid member'), { status: 400 });
   if (!state.teamMembers.some((m) => m.teamId === teamId && m.uid === memberUid)) {
     state.teamMembers.push({ teamId, uid: memberUid, role: 'member' });
+    audit({ actorId: actor, action: 'retain', memoryId: teamId, tenantId: team.tenantId, detail: `member-added:${memberUid} result=ok` });
     saveState();
   }
   return { teamId, uid: memberUid };

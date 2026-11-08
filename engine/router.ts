@@ -137,6 +137,7 @@ async function runOpenAICompat(opts: {
   model: string;
   messages: any[];
   tools?: boolean;
+  uid?: string;
 }) {
   let messages = opts.messages;
   for (let i = 0; i < 4; i++) {
@@ -159,7 +160,7 @@ async function runOpenAICompat(opts: {
       } catch {
         args = {};
       }
-      const result = await runMemoryTool(name, args);
+      const result = await runMemoryTool(name, args, opts.uid);
       messages.push({
         role: 'tool',
         tool_call_id: call.id,
@@ -184,6 +185,7 @@ export async function completeChat(req: Request, res: Response) {
 
   const rawMessages = openaiMessages(req);
   const query = lastUserQuery(rawMessages);
+  const uid = req.memoryUser?.uid;
   const useMemory = memoryOn(req) && req.body?.compareWithoutMemory !== true;
   const agentic = String(req.headers['x-rukmer-mode'] || req.body?.memoryMode || 'auto') === 'agentic';
 
@@ -194,6 +196,8 @@ export async function completeChat(req: Request, res: Response) {
       topK: Number(req.body?.memoriesRetrieved || 8),
       rerank: !!req.body?.rerank,
       rewrite: !!req.body?.rewriteQuery,
+      actorId: uid,
+      purpose: 'chat',
     });
     messages = injectOpenAIMessages(rawMessages, mem.injection, mem.system);
   }
@@ -205,7 +209,7 @@ export async function completeChat(req: Request, res: Response) {
   if (provider === 'openai' || provider === 'grok') {
     const url =
       provider === 'grok' ? 'https://api.x.ai/v1/chat/completions' : 'https://api.openai.com/v1/chat/completions';
-    const up = await runOpenAICompat({ url, key, model, messages, tools: agentic && useMemory });
+    const up = await runOpenAICompat({ url, key, model, messages, tools: agentic && useMemory, uid });
     status = up.status;
     json = up.json;
     answer = json?.choices?.[0]?.message?.content || json?.error?.message || '';

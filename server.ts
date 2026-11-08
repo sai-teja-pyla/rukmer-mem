@@ -22,6 +22,7 @@ import fs from 'fs';
 import admin from 'firebase-admin'; // 🚨 The Security Bouncer
 import { learnWorkspaceData, queryWorkspaceData, clearNamespace, fetchTeamsMessages } from './ingestionService.js';
 import { bootMemoryEngine, mountMemoryEngine } from './engine/routes.js';
+import { isProduction, securityMiddleware, slackSignatureOk } from './engine/security.js';
 import { Pinecone } from '@pinecone-database/pinecone';
 import { ConfidentialClientApplication, InteractionRequiredAuthError, LogLevel } from '@azure/msal-node';
 import { WebClient } from '@slack/web-api';
@@ -50,6 +51,7 @@ const CURRENT_BACKEND_URL = IS_PROD ? 'https://app.rukmer.com' : 'http://localho
 const FRONTEND_URL = process.env.FRONTEND_URL || (IS_PROD ? 'https://app.rukmer.com/dashboard' : 'http://localhost:5173/dashboard');
 
 const app: any = express();
+app.use(securityMiddleware);
 const PORT = (process.env.PORT || 8080) as number | string;
 
 // --- MSAL helpers for Microsoft token management ---
@@ -422,40 +424,22 @@ app.use(express.static(path.join(process.cwd(), 'dist'), {
     },
 }));
 
-app.use((req: any, res: any, next: any): void => {
-    const allowedOrigins = [
-        'http://localhost:5173', 
-        'https://rukmer-saas-service-361739908342.us-central1.run.app',
-        'https://rukmer.com',
-        'https://www.rukmer.com',
-        'https://app.rukmer.com'
-    ];
-    const origin = req.headers.origin;
-    if (allowedOrigins.includes(origin)) res.header('Access-Control-Allow-Origin', origin);
-    res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
-    res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization, x-goog-resumable');
-    res.header('Access-Control-Allow-Credentials', 'true');
-    if (req.method === 'OPTIONS') {
-        return res.status(200).send();
-    }
-    next();
-});
-
-
-app.use(express.json({ limit: '40mb' }));
+app.use(express.json({
+    limit: '40mb',
+    verify: (req: any, _res: any, buf: Buffer) => {
+        req.rawBody = buf;
+    },
+}));
 app.use(express.urlencoded({ extended: true, limit: '40mb' }));
 mountMemoryEngine(app);
 
 // --- 5. The Production Auth Middleware ---
 const authenticateUser = async (req: any, res: any, next: any): Promise<void> => {
     const authHeader = req.headers.authorization;
-    console.log("📋 Request to:", req.method, req.path);
-    console.log("📋 Auth Header Received:", authHeader ? "YES" : "NO");
-    console.log("📋 All Headers:", req.headers);
+    if (!IS_PROD) console.log("Request to:", req.method, req.path);
     
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
-        console.warn("🚨 Blocked: Missing Firebase token");
-        console.warn("Expected format: 'Bearer <token>', but got:", authHeader);
+        if (!IS_PROD) console.warn("Blocked: missing Firebase token");
         return res.status(401).json({ error: 'Unauthorized: No token provided' });
     }
 
@@ -1293,6 +1277,9 @@ app.get('/api/slack/channels', authenticateUser, async (req: any, res: any) => {
 });
 
 app.post('/api/webhooks/slack', async (req: any, res: any) => {
+  if (!slackSignatureOk(req.rawBody || '', req.headers['x-slack-request-timestamp'], req.headers['x-slack-signature'])) {
+    return res.status(401).json({ error: 'Invalid webhook signature' });
+  }
   const { type, challenge, event, team_id } = req.body;
 
   // 1. SLACK URL VERIFICATION (Required when you first set up the webhook)
@@ -1385,6 +1372,7 @@ app.post('/api/teams/messages', teamsBotHandler);    // alias (kept for backward
 // Bot Framework outbound token. Hit GET /api/teams/debug-auth to instantly see
 // if your credentials are the problem. Remove before going live if desired.
 app.get('/api/teams/debug-auth', async (req: any, res: any) => {
+  if (isProduction()) return res.status(404).json({ error: 'Not found' });
   // Decode a JWT payload without verifying signature (for diagnostics only)
   const decodeJwtPayload = (token: string) => {
     try {
@@ -1716,6 +1704,7 @@ if (process.env.NODE_ENV !== 'production') {
 }
 
 app.get('/api/debug/pinecone-stats', async (req: any, res: any) => {
+  if (isProduction()) return res.status(404).json({ error: 'Not found' });
   try {
     const stats = await index.describeIndexStats();
     res.json({
@@ -1729,6 +1718,7 @@ app.get('/api/debug/pinecone-stats', async (req: any, res: any) => {
 });
 
 app.get('/api/debug/pinecone-check', async (req: any, res: any) => {
+  if (isProduction()) return res.status(404).json({ error: 'Not found' });
   try {
     const stats = await index.describeIndexStats();
     

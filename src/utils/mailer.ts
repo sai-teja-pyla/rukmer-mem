@@ -1,5 +1,6 @@
 import { Resend } from 'resend';
 import dotenv from 'dotenv';
+import { LOI_BLOCKS, LOI_TITLE, LOI_VERSION } from '../legal/loi.js';
 
 dotenv.config();
 
@@ -38,6 +39,49 @@ export const sendWelcomeEmail = async (userEmail, userName) => {
     return { success: true, data };
   } catch (error) {
     console.error("Email failed to send:", error);
+    return { success: false, error };
+  }
+};
+
+const LOI_COPY_TO = 'saiteja@rukmer.com';
+
+function letterText() {
+  const body = LOI_BLOCKS.map((block) => {
+    const head = block.heading ? `${block.heading}\n` : '';
+    return head + block.paragraphs.join('\n\n');
+  }).join('\n\n');
+  return `${LOI_TITLE}\nVersion ${LOI_VERSION}\n\n${body}\n\nRukmer Inc.\n25 N New Jersey St\nIndianapolis, IN 46204\n\nCustomer\nAccepted electronically upon account creation.`;
+}
+
+/** Sends the founder a stored copy of the letter the customer just accepted. */
+export const sendLoiCopy = async (input: {
+  name: string;
+  email: string;
+  uid: string;
+  acceptedAt: string;
+  ip: string;
+  userAgent: string;
+}) => {
+  const who = [input.name, input.email, input.uid].filter(Boolean).join(' · ');
+  const text = [
+    `Accepted by: ${who}`,
+    `Accepted at: ${input.acceptedAt}`,
+    `Version: ${LOI_VERSION}`,
+    `IP: ${input.ip || 'unknown'}`,
+    `User agent: ${input.userAgent || 'unknown'}`,
+    '',
+    letterText(),
+  ].join('\n');
+  try {
+    const data = await resend.emails.send({
+      from: 'Rukmer AI <support@rukmer.com>',
+      to: LOI_COPY_TO,
+      subject: `LOI accepted — ${input.email || input.uid} — ${LOI_VERSION}`,
+      text,
+    });
+    return { success: true, data };
+  } catch (error) {
+    console.error('LOI copy email failed:', (error as Error)?.message || error);
     return { success: false, error };
   }
 };
