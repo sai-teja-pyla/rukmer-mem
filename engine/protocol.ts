@@ -11,7 +11,8 @@ export const MEMORY_PROTOCOL = {
     chunks: 'Passages with a document header, embedded for hybrid search (vector + keyword + graph).',
     longTerm: 'Stable profile facts (name, work, home, preferences) stay until a newer fact replaces them.',
     shortTerm: 'Recent decisions, plans, and deadlines stay about 21 days, then drop out of the live profile.',
-    scope: 'Memory is scoped to a user, a session, an agent, or a shared org. A session can be closed. An org is visible only to its members.',
+    scope: 'Every memory is private to its owner unless it is explicitly shared with a team or an org. A session can be closed. An org memory is visible only to its members.',
+    privacy: 'Secrets are redacted before write. Retention expires memories. Erasure removes the row, its embeddings, and derived links. Rukmer does not train models on customer memory.',
     index: 'Hybrid search fuses semantic vectors, keyword rank, and the fact graph. Semantic search ranks by meaning. Small spaces are scored directly so latency stays on the embedding call.',
     time: 'Facts keep when they happened, not only when they were written, so current and past questions rank differently.',
     filters: 'Search accepts metadata filters (all / any) and profiles are split into topic buckets.',
@@ -20,6 +21,7 @@ export const MEMORY_PROTOCOL = {
     'The LLM itself or its weights',
     'Your ChatGPT / Claude / Grok account history',
     'Every chat turn as a graph node (questions and filler are skipped)',
+    'Customer memory as training data for Rukmer or provider models',
   ],
   connect: {
     userFacing: 'Connect Claude, ChatGPT, Gemini, or Grok as MCP / custom connectors. No provider API keys.',

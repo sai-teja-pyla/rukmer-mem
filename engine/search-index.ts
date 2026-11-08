@@ -1,4 +1,5 @@
 import { getState, sanitizeMeta, tokenize, type TemporalKind } from './core.js';
+import { isRetired } from './governance.js';
 import { isUsefulFact } from './quality.js';
 import { queryTimeIntent, timeMultiplier } from './temporal.js';
 
@@ -167,18 +168,20 @@ function rebuild() {
       embedding: c.embedding?.length ? unit(c.embedding) : undefined,
       len: Math.max(tokens.length, 1),
     };
+    const retired = isRetired(c);
+    rec.forgotten = retired;
     records.set(c.id, rec);
     const ids = idsByTag.get(c.containerTag) || [];
     ids.push(c.id);
     idsByTag.set(c.containerTag, ids);
-    if (!c.forgotten) {
+    if (!retired) {
       addText(c.containerTag, c.id, c.text);
       const acc = lenSum.get(c.containerTag) || { n: 0, sum: 0 };
       acc.n += 1;
       acc.sum += rec.len;
       lenSum.set(c.containerTag, acc);
     }
-    if (rec.embedding && !c.forgotten) indexVector(c.containerTag, c.id, rec.embedding);
+    if (rec.embedding && !retired) indexVector(c.containerTag, c.id, rec.embedding);
   }
   const titleByDoc = new Map(state.documents.map((d) => [d.id, d.title]));
   for (const rec of records.values()) {
@@ -211,12 +214,14 @@ function rebuild() {
       embedding: t.embedding?.length ? unit(t.embedding) : undefined,
       len: Math.max(tokenize(text).length, 1),
     };
+    const retired = isRetired({ forgotten: false, gov: t.gov }) || t.isLatest === false && !!t.gov?.deletedAt;
+    rec.forgotten = retired;
     records.set(t.id, rec);
-    if (rec.embedding && t.isLatest !== false) indexVector(t.containerTag, t.id, rec.embedding);
+    if (rec.embedding && !retired && t.isLatest !== false) indexVector(t.containerTag, t.id, rec.embedding);
     const ids = idsByTag.get(t.containerTag) || [];
     ids.push(t.id);
     idsByTag.set(t.containerTag, ids);
-    addText(t.containerTag, t.id, text);
+    if (!retired) addText(t.containerTag, t.id, text);
   }
   for (const e of state.entities) {
     const key = e.name.trim().toLowerCase();
@@ -354,7 +359,7 @@ export function rankTagged(
   query: string,
   tags: string[],
   qVec: number[],
-  opts: { topK: number; strict: number; filter?: MetaFilter; includeForgotten?: boolean; retrieval?: Retrieval }
+  opts: { topK: number; strict: number; filter?: MetaFilter; includeForgotten?: boolean; retrieval?: Retrieval; visible?: (id: string) => boolean }
 ) {
   ensureIndex();
   const retrieval: Retrieval = opts.retrieval || 'hybrid';
@@ -387,6 +392,7 @@ export function rankTagged(
       const rec = records.get(row.id);
       if (!rec) return null;
       if (rec.forgotten && !opts.includeForgotten) return null;
+      if (opts.visible && !opts.visible(row.id)) return null;
       if (!matchMeta(rec.metadata, opts.filter)) return null;
       if (rec.kind === 'fact' && !rec.isLatest && intent !== 'past') return null;
       const vectorScore = vecMap.get(row.id) || 0;
@@ -416,7 +422,10 @@ export function rankTagged(
     for (const name of [row.subject, row.object]) {
       const key = String(name || '').toLowerCase();
       if (!key || key === 'user') continue;
-      for (const id of table.get(key) || []) relatedIds.add(id);
+      for (const id of table.get(key) || []) {
+        if (opts.visible && !opts.visible(id)) continue;
+        relatedIds.add(id);
+      }
     }
   }
   const related = [...relatedIds]

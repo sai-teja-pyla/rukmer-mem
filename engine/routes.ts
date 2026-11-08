@@ -1,10 +1,12 @@
 import type { Express, Request } from 'express';
 import crypto from 'crypto';
-import { getState, loadState, persistNow, saveState, sha, shortestPath, uid } from './core.js';
+import { encryptionAtRest, encryptionWarning, getState, loadState, persistNow, saveState, sha, shortestPath, uid } from './core.js';
 import {
   chatWithMemory,
   forgetById,
   forgetMatching,
+  forgetOwner,
+  forgetTenant,
   exportMine,
   resetMine,
   graphPayload,
@@ -35,6 +37,19 @@ import { addOrgMember, closeSession, createOrg, listOrgs, scopeTagsFor } from '.
 import { importConnector } from './connectors.js';
 import { applyDecay, buildProfile } from './memory.js';
 import { mountOauth } from './oauth.js';
+import {
+  addTeamMember,
+  auditFor,
+  createTeam,
+  exportTenant,
+  governanceView,
+  scopeTagsForActor,
+  migrateGovernance,
+  runExpiry,
+  setRedaction,
+  setRetention,
+  startRetentionLoop,
+} from './governance.js';
 
 function uidOf(req: Request) {
   const uid = req.memoryUser?.uid;
@@ -54,6 +69,9 @@ function tagOf(req: Request) {
 
 export async function bootMemoryEngine() {
   await loadState();
+  migrateGovernance();
+  runExpiry('system');
+  startRetentionLoop();
   pruneJunkMemory();
   applyDecay();
   const remaining = getState().triples.filter(isUsefulFact).length;
@@ -98,7 +116,16 @@ export function mountMemoryEngine(app: Express) {
   });
 
   app.get('/health', (_req, res) => {
-    res.json({ ok: true, engine: 'rukmer-open-core', isolation: 'per-user', providers: providerStatus(), llm: stats().llm });
+    res.json({
+      ok: true,
+      engine: 'rukmer-open-core',
+      isolation: 'per-user',
+      encryptionAtRest: encryptionAtRest(),
+      encryptionWarning: encryptionWarning(),
+      training: false,
+      providers: providerStatus(),
+      llm: stats().llm,
+    });
   });
 
   app.get('/v3/me', (req, res) => {
@@ -142,6 +169,11 @@ export function mountMemoryEngine(app: Express) {
         source: source || 'api',
         containerTag: tag,
         task,
+        actorId: uidOf(req),
+        visibility: req.body?.visibility,
+        teamId: req.body?.teamId,
+        memoryKind: req.body?.memoryKind,
+        sourceRef: req.body?.sourceRef,
       });
       res.json(out);
     } catch (e: any) {
@@ -167,6 +199,11 @@ export function mountMemoryEngine(app: Express) {
             source: item.source || 'upload',
             containerTag: tag,
             task: req.body?.task,
+            actorId: uidOf(req),
+            visibility: item.visibility || req.body?.visibility,
+            teamId: item.teamId || req.body?.teamId,
+            memoryKind: item.memoryKind || req.body?.memoryKind,
+            sourceRef: item.sourceRef || req.body?.sourceRef,
           })
         );
       }
@@ -217,7 +254,7 @@ export function mountMemoryEngine(app: Express) {
             orgId: req.body?.orgId,
             union: true,
           })
-        : [primary];
+        : scopeTagsForActor(uid, primary);
       const out = await searchMemory(q, {
         containerTag: primary,
         containerTags: extra,
@@ -229,6 +266,8 @@ export function mountMemoryEngine(app: Express) {
         includeForgotten: !!req.body?.include?.forgotten,
         includeRelated: req.body?.include?.related !== false,
         filters: req.body?.filters,
+        actorId: uid,
+        purpose: String(req.body?.purpose || 'search'),
       });
       const bucket = String(req.body?.sources || '');
       if (bucket && bucket !== 'All sources') {
@@ -277,6 +316,8 @@ export function mountMemoryEngine(app: Express) {
         history: req.body?.history,
         remember: req.body?.remember !== false,
         source: req.body?.source || 'playground',
+        actorId: uidOf(req),
+        purpose: 'chat',
       });
       res.json(out);
     } catch (e: any) {
@@ -292,6 +333,8 @@ export function mountMemoryEngine(app: Express) {
         topK: req.body?.topK || 8,
         rewrite: !!req.body?.rewriteQuery,
         rerank: !!req.body?.rerank,
+        actorId: uidOf(req),
+        purpose: 'inject',
       });
       res.json(out);
     } catch (e: any) {
@@ -355,6 +398,8 @@ export function mountMemoryEngine(app: Express) {
         source: req.body?.source || 'api',
         messages: req.body?.messages || [],
         title: req.body?.title,
+        actorId: uidOf(req),
+        visibility: req.body?.visibility,
       });
       res.json(out);
     } catch (e: any) {
@@ -584,6 +629,110 @@ export function mountMemoryEngine(app: Express) {
       res.json({ ...rec, secret, scope: 'Full' });
     } catch (e: any) {
       res.status(e.status || 401).json({ error: e.message });
+    }
+  });
+
+  app.get('/v4/governance', (req, res) => {
+    try {
+      res.json(governanceView(uidOf(req)));
+    } catch (e: any) {
+      res.status(e.status || 401).json({ error: e.message });
+    }
+  });
+
+  app.put('/v4/governance/retention', (req, res) => {
+    try {
+      const policies = setRetention(uidOf(req), {
+        tenantId: String(req.body?.tenantId || ''),
+        memoryKind: req.body?.memoryKind || 'context',
+        ttlDays: Number(req.body?.ttlDays),
+        action: req.body?.action === 'purge' ? 'purge' : 'archive',
+      });
+      res.json({ policies });
+    } catch (e: any) {
+      res.status(e.status || 400).json({ error: e.message });
+    }
+  });
+
+  app.put('/v4/governance/redaction', (req, res) => {
+    try {
+      res.json(setRedaction(uidOf(req), {
+        tenantId: String(req.body?.tenantId || ''),
+        credentials: req.body?.credentials,
+        payment: req.body?.payment,
+        sensitive: req.body?.sensitive,
+      }));
+    } catch (e: any) {
+      res.status(e.status || 400).json({ error: e.message });
+    }
+  });
+
+  app.post('/v4/governance/expiry', (req, res) => {
+    try {
+      res.json(runExpiry(uidOf(req)));
+    } catch (e: any) {
+      res.status(e.status || 400).json({ error: e.message });
+    }
+  });
+
+  app.delete('/v4/governance/memories/:id', (req, res) => {
+    try {
+      const out = forgetById(String(req.params.id || ''), uidOf(req));
+      if (out.ok === false) return res.status(403).json(out);
+      res.json(out);
+    } catch (e: any) {
+      res.status(e.status || 400).json({ error: e.message });
+    }
+  });
+
+  app.post('/v4/governance/forget', (req, res) => {
+    try {
+      const actor = uidOf(req);
+      const dryRun = !!req.body?.dryRun;
+      if (req.body?.memoryId) {
+        const out = forgetById(String(req.body.memoryId), actor);
+        if (out.ok === false) return res.status(403).json(out);
+        return res.json({ ...out, dryRun: false });
+      }
+      if (req.body?.ownerId) return res.json(forgetOwner(actor, String(req.body.ownerId), dryRun));
+      if (req.body?.tenantId) return res.json(forgetTenant(actor, String(req.body.tenantId), dryRun));
+      res.status(400).json({ error: 'memoryId, ownerId, or tenantId required' });
+    } catch (e: any) {
+      res.status(e.status || 400).json({ error: e.message });
+    }
+  });
+
+  app.get('/v4/governance/export', (req, res) => {
+    try {
+      const actor = uidOf(req);
+      const tenantId = String(req.query.tenantId || '');
+      res.json(tenantId ? exportTenant(actor, tenantId) : exportMine(actor));
+    } catch (e: any) {
+      res.status(e.status || 400).json({ error: e.message });
+    }
+  });
+
+  app.get('/v4/governance/audit', (req, res) => {
+    try {
+      res.json({ audit: auditFor(uidOf(req), String(req.query.tenantId || '') || undefined) });
+    } catch (e: any) {
+      res.status(e.status || 401).json({ error: e.message });
+    }
+  });
+
+  app.post('/v4/governance/teams', (req, res) => {
+    try {
+      res.json(createTeam(uidOf(req), String(req.body?.name || ''), req.body?.tenantId ? String(req.body.tenantId) : undefined));
+    } catch (e: any) {
+      res.status(e.status || 400).json({ error: e.message });
+    }
+  });
+
+  app.post('/v4/governance/teams/members', (req, res) => {
+    try {
+      res.json(addTeamMember(uidOf(req), String(req.body?.teamId || ''), String(req.body?.uid || '')));
+    } catch (e: any) {
+      res.status(e.status || 400).json({ error: e.message });
     }
   });
 

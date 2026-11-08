@@ -5,6 +5,25 @@ import crypto from 'crypto';
 export type ContainerTag = string;
 export type MemoryScope = 'user' | 'session' | 'agent' | 'org';
 export type TemporalKind = 'past' | 'present' | 'future' | 'undated';
+export type Visibility = 'private' | 'team' | 'org';
+export type MemoryKind = 'session' | 'working' | 'preference' | 'fact' | 'decision' | 'summary' | 'context';
+export type RedactMode = 'drop' | 'mask' | 'allow';
+
+/** Ownership and lifecycle stamped on every memory row. memory_id is the row id. */
+export interface MemoryGov {
+  ownerId: string;
+  tenantId: string;
+  visibility: Visibility;
+  createdBy: string;
+  sourceRef?: string;
+  memoryKind: MemoryKind;
+  extraction?: string;
+  expiresAt?: string | null;
+  archived?: boolean;
+  deletedAt?: string | null;
+  teamId?: string;
+  redacted?: string[];
+}
 
 export interface DocRec {
   id: string;
@@ -18,6 +37,7 @@ export interface DocRec {
   fileId?: string;
   metadata?: Record<string, string>;
   scope?: MemoryScope;
+  gov?: MemoryGov;
 }
 
 export interface ChunkRec {
@@ -34,6 +54,7 @@ export interface ChunkRec {
   source: string;
   metadata?: Record<string, string>;
   scope?: MemoryScope;
+  gov?: MemoryGov;
 }
 
 export interface EntityRec {
@@ -64,6 +85,7 @@ export interface TripleRec {
   temporal?: TemporalKind;
   metadata?: Record<string, string>;
   scope?: MemoryScope;
+  gov?: MemoryGov;
 }
 
 export interface LinkRec {
@@ -124,6 +146,57 @@ export interface OauthCodeRec {
   exp: number;
 }
 
+export interface TeamRec {
+  id: string;
+  name: string;
+  tenantId: string;
+  createdBy: string;
+  createdAt: string;
+}
+
+export interface TeamMemberRec {
+  teamId: string;
+  uid: string;
+  role: 'owner' | 'member';
+}
+
+export interface RetentionPolicyRec {
+  id: string;
+  tenantId: string;
+  memoryKind: MemoryKind | '*';
+  ttlDays: number;
+  action: 'archive' | 'purge';
+}
+
+export interface RedactionPolicyRec {
+  tenantId: string;
+  credentials: RedactMode;
+  payment: RedactMode;
+  sensitive: RedactMode;
+}
+
+export interface AuditRec {
+  id: string;
+  at: string;
+  actorId: string;
+  action: 'read' | 'write' | 'delete' | 'export' | 'retain' | 'preview';
+  memoryId: string;
+  tenantId: string;
+  purpose?: string;
+  detail?: string;
+}
+
+export interface ErasureRec {
+  id: string;
+  at: string;
+  actorId: string;
+  target: string;
+  mode: 'memory' | 'owner' | 'tenant';
+  dryRun: boolean;
+  removed: number;
+  completed: boolean;
+}
+
 export interface EngineState {
   documents: DocRec[];
   chunks: ChunkRec[];
@@ -137,6 +210,12 @@ export interface EngineState {
   orgs: OrgRec[];
   orgMembers: OrgMemberRec[];
   links: LinkRec[];
+  teams: TeamRec[];
+  teamMembers: TeamMemberRec[];
+  retentionPolicies: RetentionPolicyRec[];
+  redactionPolicies: RedactionPolicyRec[];
+  audit: AuditRec[];
+  erasures: ErasureRec[];
   rev: number;
 }
 
@@ -157,8 +236,58 @@ function empty(): EngineState {
     orgs: [],
     orgMembers: [],
     links: [],
+    teams: [],
+    teamMembers: [],
+    retentionPolicies: [],
+    redactionPolicies: [],
+    audit: [],
+    erasures: [],
     rev: 0,
   };
+}
+
+function dataKey() {
+  const raw = process.env.MEMORY_DATA_KEY || '';
+  if (!raw) return null;
+  if (/^[0-9a-fA-F]{64}$/.test(raw)) return Buffer.from(raw, 'hex');
+  return crypto.createHash('sha256').update(raw).digest();
+}
+
+export function encryptionAtRest() {
+  return !!dataKey();
+}
+
+/** Null when MEMORY_DATA_KEY is set. Encryption stays optional; the warning is the signal that the store is plaintext. */
+export function encryptionWarning() {
+  if (encryptionAtRest()) return null;
+  return 'MEMORY_DATA_KEY is not set. The memory store is plaintext JSON on disk and in Cloud Storage. Set MEMORY_DATA_KEY (64 hex characters, or a passphrase) to encrypt it with AES-256-GCM.';
+}
+
+/** Whole-store AES-256-GCM. In memory the state stays plaintext so search can run. */
+export function encodeState(value: unknown) {
+  const json = JSON.stringify(value);
+  const key = dataKey();
+  if (!key) return json;
+  const iv = crypto.randomBytes(12);
+  const cipher = crypto.createCipheriv('aes-256-gcm', key, iv);
+  const data = Buffer.concat([cipher.update(json, 'utf8'), cipher.final()]);
+  return JSON.stringify({
+    enc: 'v1',
+    iv: iv.toString('base64'),
+    tag: cipher.getAuthTag().toString('base64'),
+    data: data.toString('base64'),
+  });
+}
+
+export function decodeState(raw: string): Partial<EngineState> {
+  const parsed = JSON.parse(raw);
+  if (!parsed || parsed.enc !== 'v1') return parsed;
+  const key = dataKey();
+  if (!key) throw new Error('MEMORY_DATA_KEY required to read the encrypted store');
+  const decipher = crypto.createDecipheriv('aes-256-gcm', key, Buffer.from(parsed.iv, 'base64'));
+  decipher.setAuthTag(Buffer.from(parsed.tag, 'base64'));
+  const plain = Buffer.concat([decipher.update(Buffer.from(parsed.data, 'base64')), decipher.final()]);
+  return JSON.parse(plain.toString('utf8'));
 }
 
 let state: EngineState = empty();
@@ -176,7 +305,7 @@ async function pullGcs() {
   try {
     const { Storage } = await import('@google-cloud/storage');
     const [buf] = await new Storage().bucket(target.bucket).file(target.object).download();
-    state = { ...empty(), ...JSON.parse(buf.toString('utf8')) };
+    state = { ...empty(), ...decodeState(buf.toString('utf8')) };
   } catch {
     /* first run or no object yet */
   }
@@ -187,7 +316,7 @@ async function pushGcs() {
   if (!target) return;
   try {
     const { Storage } = await import('@google-cloud/storage');
-    await new Storage().bucket(target.bucket).file(target.object).save(JSON.stringify(state), {
+    await new Storage().bucket(target.bucket).file(target.object).save(encodeState(state), {
       contentType: 'application/json',
     });
   } catch (err) {
@@ -198,7 +327,7 @@ async function pushGcs() {
 export async function loadState() {
   try {
     if (fs.existsSync(DATA_FILE)) {
-      state = { ...empty(), ...JSON.parse(fs.readFileSync(DATA_FILE, 'utf8')) };
+      state = { ...empty(), ...decodeState(fs.readFileSync(DATA_FILE, 'utf8')) };
     }
   } catch {
     state = empty();
@@ -211,6 +340,12 @@ export async function loadState() {
   state.orgs = state.orgs || [];
   state.orgMembers = state.orgMembers || [];
   state.links = state.links || [];
+  state.teams = state.teams || [];
+  state.teamMembers = state.teamMembers || [];
+  state.retentionPolicies = state.retentionPolicies || [];
+  state.redactionPolicies = state.redactionPolicies || [];
+  state.audit = state.audit || [];
+  state.erasures = state.erasures || [];
   state.rev = state.rev || 0;
 }
 
@@ -218,7 +353,7 @@ function writeLocal() {
   try {
     fs.mkdirSync(DATA_DIR, { recursive: true });
     const tmp = DATA_FILE + '.tmp';
-    fs.writeFileSync(tmp, JSON.stringify(state));
+    fs.writeFileSync(tmp, encodeState(state));
     fs.renameSync(tmp, DATA_FILE);
   } catch {
     /* Cloud Run disk can be read-only besides /tmp */
@@ -262,6 +397,16 @@ export async function saveBlob(id: string, bytes: Buffer, mime = 'application/oc
   }
 }
 
+export function deleteBlob(id: string) {
+  if (!/^[a-zA-Z0-9_-]{1,80}$/.test(id)) return;
+  const file = path.join(DATA_DIR, 'files', id);
+  try {
+    if (fs.existsSync(file)) fs.unlinkSync(file);
+  } catch {
+    /* blob already gone */
+  }
+}
+
 export function uid(prefix = 'id') {
   return `${prefix}_${crypto.randomBytes(8).toString('hex')}`;
 }
@@ -302,6 +447,7 @@ export function normalizeTriple(
     temporal: t.temporal === 'past' || t.temporal === 'present' || t.temporal === 'future' || t.temporal === 'undated' ? t.temporal : undefined,
     metadata: t.metadata,
     scope: t.scope,
+    gov: t.gov,
   };
 }
 

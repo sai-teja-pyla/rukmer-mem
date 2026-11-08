@@ -1,4 +1,5 @@
-import { getState, sanitizeMeta, saveState, uid, type TripleRec } from './core.js';
+import { getState, sanitizeMeta, saveState, uid, type MemoryGov, type TripleRec } from './core.js';
+import { redactText } from './governance.js';
 import { linkEntities } from './entities.js';
 import { horizonFor, isUsefulFact, normalizePredicate } from './quality.js';
 import { inferTemporal } from './temporal.js';
@@ -13,13 +14,14 @@ export type IncomingFact = {
   metadata?: Record<string, string>;
   occurredAt?: string | null;
   temporal?: TripleRec['temporal'];
+  gov?: MemoryGov;
 };
 
 function keyOf(tag: string, subject: string, predicate: string) {
   return `${tag}::${subject.trim().toLowerCase()}::${predicate.trim().toLowerCase()}`;
 }
 
-export function upsertFacts(tag: string, facts: IncomingFact[], evidence = '') {
+export function upsertFacts(tag: string, facts: IncomingFact[], evidence = '', gov?: MemoryGov) {
   const state = getState();
   const now = new Date().toISOString();
   let updates = 0;
@@ -37,8 +39,9 @@ export function upsertFacts(tag: string, facts: IncomingFact[], evidence = '') {
     );
     const sameObject = latest && latest.object.trim().toLowerCase() === object.toLowerCase();
 
+    const cleanEvidence = gov?.tenantId ? redactText(gov.tenantId, evidence).text : evidence;
     if (latest && sameObject) {
-      latest.evidence = `${latest.evidence} | ${evidence}`.slice(0, 900);
+      latest.evidence = `${latest.evidence} | ${cleanEvidence}`.slice(0, 900);
       latest.kind = 'extend';
       latest.updatedAt = now;
       if (!latest.recordedAt) latest.recordedAt = latest.validFrom || now;
@@ -60,7 +63,7 @@ export function upsertFacts(tag: string, facts: IncomingFact[], evidence = '') {
       subject,
       predicate,
       object,
-      evidence: String(evidence || '').slice(0, 400),
+      evidence: String(cleanEvidence || '').slice(0, 400),
       isLatest: true,
       derived: raw.kind === 'derive',
       validFrom: raw.validFrom || now,
@@ -75,6 +78,8 @@ export function upsertFacts(tag: string, facts: IncomingFact[], evidence = '') {
     rec.temporal = raw.temporal || when.temporal;
     rec.metadata = sanitizeMeta(raw.metadata);
     rec.scope = scopeFromTag(tag);
+    const inherited = raw.gov || gov || latest?.gov;
+    if (inherited) rec.gov = { ...inherited, deletedAt: null, archived: false };
     state.triples.push(rec);
   }
 

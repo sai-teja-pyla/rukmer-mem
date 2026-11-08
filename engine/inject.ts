@@ -27,7 +27,7 @@ export async function buildMemoryInjection(query: string, containerTag: string, 
     topK: opts.topK ?? 6,
     includeRelated: true,
   });
-  const profile = buildProfile(tag);
+  const profile = buildProfile(tag, opts.actorId);
   const chunks = retrieved.matches.slice(0, 5).map((m, i) => `[${i + 1}] (${m.title}) ${m.text.slice(0, 420)}`).join('\n');
   const injection = `Memory for this user. Use only what is listed. Do not invent profile details. Do not repeat the whole chat.
 

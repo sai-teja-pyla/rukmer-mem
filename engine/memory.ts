@@ -1,4 +1,5 @@
 import { getState, saveState, type TripleRec } from './core.js';
+import { canRead } from './governance.js';
 import { horizonFor, isUsefulFact } from './quality.js';
 
 const SHORT_TTL_MS = 21 * 86400000;
@@ -42,9 +43,11 @@ function line(t: TripleRec) {
   return `${t.subject} ${t.predicate.replace(/_/g, ' ')} ${t.object}`;
 }
 
-export function buildProfile(tag: string) {
+export function buildProfile(tag: string, actorId?: string) {
   applyDecay(tag);
-  const latest = getState().triples.filter((t) => t.containerTag === tag && t.isLatest !== false && isUsefulFact(t));
+  const latest = getState().triples.filter(
+    (t) => t.containerTag === tag && t.isLatest !== false && isUsefulFact(t) && (!actorId || canRead(actorId, t))
+  );
   const longTerm = latest.filter((t) => (t.horizon || horizonFor(t.predicate)) === 'long');
   const recent = latest
     .filter((t) => (t.horizon || horizonFor(t.predicate)) === 'short')

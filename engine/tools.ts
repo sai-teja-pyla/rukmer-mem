@@ -42,7 +42,7 @@ export async function runMemoryTool(name: string, args: any, uid?: string) {
   const tag = resolveOwnedTag(uid, args?.containerTag);
   if (!tag) throw new Error('containerTag required');
   if (name === 'searchMemories') {
-    return searchMemory(String(args?.query || ''), { containerTag: tag, topK: 8, includeRelated: true });
+    return searchMemory(String(args?.query || ''), { containerTag: tag, topK: 8, includeRelated: true, actorId: uid, purpose: 'tool' });
   }
   if (name === 'addMemory') {
     return commitImportantMemory({
@@ -50,6 +50,7 @@ export async function runMemoryTool(name: string, args: any, uid?: string) {
       text: String(args?.text || ''),
       containerTag: tag,
       source: 'tool',
+      actorId: uid,
     });
   }
   throw new Error(`Unknown memory tool ${name}`);

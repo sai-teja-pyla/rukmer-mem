@@ -24,6 +24,7 @@ import { applyDecay } from './memory.js';
 import { buildMemoryInjection } from './inject.js';
 import { canAccessTag, homeTag, ownsTag, scopeFromTag, uidFromTag } from './tenancy.js';
 import { ensureIndex, rankTagged, tagCount, vectorDim, type MetaFilter, type Retrieval } from './search-index.js';
+import { assignGovernance, audit, canRead, eraseBulk, eraseMemory, findMemory, govOf, prepareWrite, teamContainer } from './governance.js';
 
 export type SearchOpts = {
   containerTag?: string | null;
@@ -38,6 +39,8 @@ export type SearchOpts = {
   filters?: MetaFilter;
   containerTags?: string[];
   retrieval?: Retrieval;
+  actorId?: string;
+  purpose?: string;
 };
 
 function scopedChunks(tag?: string | null, includeForgotten = false) {
@@ -59,16 +62,42 @@ export async function ingestDocument(input: {
   extract?: boolean;
   fileId?: string;
   metadata?: Record<string, string>;
+  actorId?: string;
+  visibility?: string;
+  teamId?: string;
+  memoryKind?: string;
+  sourceRef?: string;
+  extraction?: string;
 }) {
-  const text = input.text.trim().slice(0, 200000);
-  if (!text) throw new Error('Empty document');
-  const tag = input.containerTag;
+  const raw = input.text.trim().slice(0, 200000);
+  if (!raw) throw new Error('Empty document');
+  let tag = input.containerTag;
   if (!tag) throw new Error('containerTag required');
+  const actorId = input.actorId || uidFromTag(tag);
+  const gov = actorId
+    ? assignGovernance({
+        actorId,
+        containerTag: tag,
+        visibility: input.visibility,
+        teamId: input.teamId,
+        memoryKind: input.memoryKind,
+        sourceRef: input.sourceRef,
+        extraction: input.extraction,
+      })
+    : undefined;
+  if (gov?.visibility === 'team' && gov.teamId) tag = teamContainer(gov.teamId);
+  const tenantId = gov?.tenantId || tag;
+  const cleaned = prepareWrite(tenantId, raw);
+  const titleClean = prepareWrite(tenantId, input.title || 'Untitled');
+  const text = cleaned.text;
+  if (!text.trim()) throw Object.assign(new Error('Nothing left to store after redaction'), { status: 422 });
+  const redacted = [...new Set([...cleaned.redacted, ...titleClean.redacted])];
+  if (gov && redacted.length) gov.redacted = redacted;
   const state = getState();
   const doc: DocRec = {
     id: uid('doc'),
     containerTag: tag,
-    title: input.title || 'Untitled',
+    title: titleClean.text || 'Untitled',
     source: input.source || 'upload',
     mime: input.mime || 'text/plain',
     text,
@@ -77,6 +106,7 @@ export async function ingestDocument(input: {
     fileId: input.fileId,
     metadata: sanitizeMeta(input.metadata),
     scope: scopeFromTag(tag),
+    gov: gov ? { ...gov } : undefined,
   };
   const code = /code|javascript|typescript|python|json|x-sh/.test(doc.mime) || /\.(ts|tsx|js|py|go|rs|java)$/i.test(doc.title);
   const pieces = code ? chunkCode(text) : chunkText(text);
@@ -102,6 +132,7 @@ export async function ingestDocument(input: {
     forgotten: false,
     metadata: doc.metadata,
     scope: doc.scope,
+    gov: doc.gov ? { ...doc.gov } : undefined,
   }));
   state.documents.push(doc);
   state.chunks.push(...chunks);
@@ -114,7 +145,7 @@ export async function ingestDocument(input: {
       if (state.entities.some((x) => x.containerTag === tag && x.name.toLowerCase() === name.toLowerCase())) continue;
       state.entities.push({ id: uid('ent'), containerTag: tag, name, type: e.type || 'topic' });
     }
-    upsertFacts(tag, graph.triples || [], text.slice(0, 240));
+    upsertFacts(tag, graph.triples || [], text.slice(0, 240), doc.gov);
     deriveFacts(tag);
   }
 
@@ -126,6 +157,16 @@ export async function ingestDocument(input: {
     ownerUid: uidFromTag(tag),
     containerTag: tag,
   });
+  if (actorId) {
+    audit({
+      actorId,
+      action: 'write',
+      memoryId: doc.id,
+      tenantId: doc.gov?.tenantId || tenantId,
+      purpose: 'ingest',
+      detail: redacted.length ? `redacted:${redacted.join(',')}` : doc.gov?.visibility || 'legacy',
+    });
+  }
   saveState();
   void embedMissingFacts(12).catch(() => undefined);
   return { document: doc, chunks: chunks.length, entities: getState().entities.filter((e) => e.containerTag === tag).length };
@@ -189,6 +230,11 @@ export async function ingestPayload(item: {
   task?: 'memory' | 'rag';
   metadata?: Record<string, string>;
   videoBase64?: string;
+  actorId?: string;
+  visibility?: string;
+  teamId?: string;
+  memoryKind?: string;
+  sourceRef?: string;
 }) {
   const title = item.title || item.name || 'Untitled';
   let text = String(item.text || item.content || '');
@@ -230,6 +276,11 @@ export async function ingestPayload(item: {
     task: item.task,
     fileId,
     metadata: sanitizeMeta(item.metadata),
+    actorId: item.actorId,
+    visibility: item.visibility,
+    teamId: item.teamId,
+    memoryKind: item.memoryKind,
+    sourceRef: item.sourceRef,
   });
 }
 
@@ -311,7 +362,20 @@ export async function searchMemory(query: string, opts: SearchOpts = {}) {
   let qVec = await embedP;
   if (!qVec.length && wantVector && vectorDim(tags) === 256) qVec = localQueryEmbed(q);
   const embedMs = wantVector ? Date.now() - embedStarted : 0;
-  let ranked = rankTagged(q, tags, qVec, { topK, strict, filter: opts.filters, includeForgotten: opts.includeForgotten, retrieval });
+  const visible = opts.actorId
+    ? (id: string) => {
+        const row = findMemory(id);
+        return !!row && canRead(opts.actorId || '', row);
+      }
+    : undefined;
+  let ranked = rankTagged(q, tags, qVec, {
+    topK,
+    strict,
+    filter: opts.filters,
+    includeForgotten: opts.includeForgotten,
+    retrieval,
+    visible,
+  });
   if (opts.rerank && ranked.ranked.length) {
     const llm = await llmRerank(
       q,
@@ -338,6 +402,17 @@ export async function searchMemory(query: string, opts: SearchOpts = {}) {
     temporal: r.temporal,
     occurredAt: r.occurredAt,
   }));
+  if (opts.actorId) {
+    for (const match of matches.slice(0, 25)) {
+      audit({
+        actorId: opts.actorId,
+        action: 'read',
+        memoryId: match.id,
+        tenantId: govOf({ containerTag: match.containerTag }).tenantId,
+        purpose: opts.purpose || 'search',
+      });
+    }
+  }
   return {
     query: q,
     intent: classifyIntent(q),
@@ -363,6 +438,8 @@ export async function commitImportantMemory(input: {
   source?: string;
   title?: string;
   text: string;
+  actorId?: string;
+  visibility?: string;
 }) {
   const tag = input.containerTag;
   const raw = String(input.text || '').trim();
@@ -390,7 +467,7 @@ export async function commitImportantMemory(input: {
     if (state.entities.some((x) => x.containerTag === tag && x.name.toLowerCase() === name.toLowerCase())) continue;
     state.entities.push({ id: uid('ent'), containerTag: tag, name, type: e.type || 'topic' });
   }
-  const saved = upsertFacts(tag, triples, text.slice(0, 240));
+  const saved = upsertFacts(tag, triples, text.slice(0, 240), input.actorId ? assignGovernance({ actorId: input.actorId, containerTag: tag, visibility: input.visibility, memoryKind: 'fact' }) : undefined);
   deriveFacts(tag);
   const doc = await ingestDocument({
     title: input.title || text.split('\n')[0].slice(0, 80),
@@ -400,6 +477,9 @@ export async function commitImportantMemory(input: {
     mime: 'text/plain',
     task: 'memory',
     extract: false,
+    actorId: input.actorId,
+    visibility: input.visibility,
+    memoryKind: 'fact',
   });
   noteConversation(tag, raw);
   return { skipped: false, facts: triples.length, triples, saved, document: doc.document, chunks: doc.chunks };
@@ -442,6 +522,8 @@ export async function rememberTranscript(input: {
   source?: string;
   title?: string;
   messages: { role?: string; content?: string; text?: string }[];
+  actorId?: string;
+  visibility?: string;
 }) {
   const tag = input.containerTag;
   if (!tag) throw new Error('containerTag required');
@@ -467,6 +549,8 @@ export async function rememberTranscript(input: {
     source: input.source || 'conversation',
     title: input.title,
     text: dialogue,
+    actorId: input.actorId,
+    visibility: input.visibility,
   });
 }
 
@@ -509,9 +593,10 @@ export async function chatWithMemory(
         { role: 'user', content: query },
         { role: 'assistant', content: answer },
       ],
+      actorId: opts.actorId,
     }).catch(() => undefined);
   }
-  return { answer, retrieved, injection: mem.injection, graph: graphPayload(tag) };
+  return { answer, retrieved, injection: mem.injection, graph: graphPayload(tag, opts.actorId) };
 }
 
 function summarizeTag(tag: string) {
@@ -540,7 +625,8 @@ export function listTags(uid?: string) {
 export function readDocument(id: string, uid?: string) {
   const doc = getState().documents.find((d) => d.id === id && !d.forgotten);
   if (!doc) return null;
-  if (uid && !canAccessTag(uid, doc.containerTag)) return null;
+  if (uid && !canRead(uid, doc)) return null;
+  if (uid) audit({ actorId: uid, action: 'read', memoryId: doc.id, tenantId: govOf(doc).tenantId, purpose: 'document' });
   return {
     id: doc.id,
     title: doc.title,
@@ -557,9 +643,9 @@ export function readDocument(id: string, uid?: string) {
 export function listDocuments(containerTag?: string | null, uid?: string) {
   return getState()
     .documents.filter((d) => {
-      if (d.forgotten) return false;
       if (containerTag && d.containerTag !== containerTag) return false;
-      if (uid && !canAccessTag(uid, d.containerTag)) return false;
+      if (uid && !canRead(uid, d)) return false;
+      if (!uid && d.forgotten) return false;
       return true;
     })
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
@@ -606,10 +692,10 @@ export function graphPayload(containerTag?: string | null, uid?: string) {
   }
   if (!tags.size) return { nodes: [], edges: [], pathExample: null, tags: [] as string[] };
   const inScope = (tag: string) => tags.has(tag);
-  const triples = state.triples.filter((t) => inScope(t.containerTag));
+  const triples = state.triples.filter((t) => inScope(t.containerTag) && (!uid || canRead(uid, t)));
   const keep = new Set(triples.flatMap((t) => [t.subject.toLowerCase(), t.object.toLowerCase()]));
   const entities = state.entities.filter((e) => inScope(e.containerTag) && (keep.size === 0 || keep.has(e.name.toLowerCase())));
-  const docs = state.documents.filter((d) => inScope(d.containerTag) && !d.forgotten);
+  const docs = state.documents.filter((d) => inScope(d.containerTag) && (!uid || canRead(uid, d)) && (uid || !d.forgotten));
 
   const byName = new Map<string, string>();
   for (const e of entities) {
@@ -742,26 +828,28 @@ export function graphPayload(containerTag?: string | null, uid?: string) {
 }
 
 export function forgetById(id: string, uid?: string) {
-  const state = getState();
-  const chunk = state.chunks.find((c) => c.id === id);
-  if (chunk) {
-    if (uid && !canAccessTag(uid, chunk.containerTag)) return { ok: false, error: 'forbidden' };
-    chunk.forgotten = true;
+  if (!uid) {
+    const row = findMemory(id);
+    if (!row) return { ok: true, removed: 0 };
+    const out = eraseMemory(uidFromTag(row.containerTag) || 'system', id);
+    for (const tag of out.tags || []) convoBuf.delete(tag);
+    return { ok: out.ok, error: out.error, removed: out.removed };
   }
-  const doc = state.documents.find((d) => d.id === id);
-  if (doc) {
-    if (uid && !canAccessTag(uid, doc.containerTag)) return { ok: false, error: 'forbidden' };
-    doc.forgotten = true;
-    state.chunks.filter((c) => c.docId === id).forEach((c) => (c.forgotten = true));
-  }
-  const fact = state.triples.find((t) => t.id === id);
-  if (fact) {
-    if (uid && !canAccessTag(uid, fact.containerTag)) return { ok: false, error: 'forbidden' };
-    fact.isLatest = false;
-    fact.validTo = new Date().toISOString();
-  }
-  saveState();
-  return { ok: true };
+  const out = eraseMemory(uid, id);
+  for (const tag of out.tags || []) convoBuf.delete(tag);
+  return { ok: out.ok, error: out.error, removed: out.removed };
+}
+
+export function forgetOwner(actor: string, ownerId: string, dryRun = false) {
+  const out = eraseBulk(actor, 'owner', ownerId, dryRun);
+  for (const tag of out.tags || []) convoBuf.delete(tag);
+  return out;
+}
+
+export function forgetTenant(actor: string, tenantId: string, dryRun = false) {
+  const out = eraseBulk(actor, 'tenant', tenantId, dryRun);
+  for (const tag of out.tags || []) convoBuf.delete(tag);
+  return out;
 }
 
 export function forgetMatching(query: string, containerTag?: string | null, dryRun = false) {
@@ -775,11 +863,17 @@ export function forgetMatching(query: string, containerTag?: string | null, dryR
       `${t.subject} ${t.predicate} ${t.object} ${t.evidence}`.toLowerCase().includes(q)
   );
   if (!dryRun) {
-    chunks.forEach((c) => (c.forgotten = true));
+    chunks.forEach((c) => {
+      c.forgotten = true;
+      c.embedding = [];
+      if (c.gov) c.gov.deletedAt = new Date().toISOString();
+    });
     const now = new Date().toISOString();
     for (const fact of facts) {
       fact.isLatest = false;
       fact.validTo = now;
+      fact.embedding = [];
+      if (fact.gov) fact.gov.deletedAt = now;
     }
     saveState();
   }
@@ -789,14 +883,14 @@ export function forgetMatching(query: string, containerTag?: string | null, dryR
 
 export function stats(uid?: string) {
   const s = getState();
-  const mine = (tag: string) => !uid || canAccessTag(uid, tag);
+  const mine = (row: { containerTag: string; forgotten?: boolean; gov?: DocRec['gov'] }) => !uid || canRead(uid, row);
   return {
-    documents: s.documents.filter((d) => !d.forgotten && mine(d.containerTag)).length,
-    chunks: s.chunks.filter((c) => !c.forgotten && mine(c.containerTag)).length,
-    entities: s.entities.filter((e) => mine(e.containerTag)).length,
-    triples: s.triples.filter((t) => mine(t.containerTag)).length,
-    latestFacts: s.triples.filter((t) => t.isLatest !== false && mine(t.containerTag)).length,
-    embeddings: s.chunks.filter((c) => c.embedding.length && mine(c.containerTag)).length,
+    documents: s.documents.filter((d) => mine(d)).length,
+    chunks: s.chunks.filter((c) => mine(c)).length,
+    entities: s.entities.filter((e) => !uid || canAccessTag(uid, e.containerTag)).length,
+    triples: s.triples.filter((t) => mine(t)).length,
+    latestFacts: s.triples.filter((t) => t.isLatest !== false && mine(t)).length,
+    embeddings: s.chunks.filter((c) => c.embedding.length && mine(c)).length,
     requests: uid ? s.requests.filter((r) => r.ownerUid === uid).length : s.requests.length,
     llm: hasLlm(),
   };
@@ -811,11 +905,12 @@ export function logRequest(rec: { method: string; path: string; status: number; 
 
 export function exportMine(uid: string) {
   const s = getState();
-  const mine = (tag: string) => canAccessTag(uid, tag);
+  const mine = (row: { containerTag: string; forgotten?: boolean; gov?: DocRec['gov'] }) => canRead(uid, row);
+  audit({ actorId: uid, action: 'export', memoryId: '', tenantId: homeTag(uid), purpose: 'export' });
   return {
     exportedAt: new Date().toISOString(),
     documents: s.documents
-      .filter((d) => !d.forgotten && mine(d.containerTag))
+      .filter((d) => mine(d))
       .map((d) => ({
         id: d.id,
         title: d.title,
@@ -826,7 +921,7 @@ export function exportMine(uid: string) {
         text: String(d.text || '').slice(0, 8000),
       })),
     facts: s.triples
-      .filter((t) => t.isLatest !== false && mine(t.containerTag))
+      .filter((t) => t.isLatest !== false && mine(t))
       .map((t) => ({
         id: t.id,
         subject: t.subject,
@@ -840,25 +935,10 @@ export function exportMine(uid: string) {
 
 export function resetMine(uid: string) {
   const s = getState();
-  const mine = (tag: string) => ownsTag(uid, tag);
-  let documents = 0;
-  let facts = 0;
-  for (const d of s.documents) {
-    if (!mine(d.containerTag) || d.forgotten) continue;
-    d.forgotten = true;
-    documents += 1;
-  }
-  for (const c of s.chunks) {
-    if (mine(c.containerTag)) c.forgotten = true;
-  }
-  const now = new Date().toISOString();
-  for (const t of s.triples) {
-    if (!mine(t.containerTag) || t.isLatest === false) continue;
-    t.isLatest = false;
-    t.validTo = now;
-    facts += 1;
-  }
-  saveState();
+  const mine = (row: { containerTag: string; gov?: DocRec['gov'] }) => ownsTag(uid, row.containerTag) || govOf(row).ownerId === uid;
+  const documents = s.documents.filter(mine).length;
+  const facts = s.triples.filter(mine).length;
+  forgetOwner(uid, uid, false);
   return { ok: true, documents, facts };
 }
 
