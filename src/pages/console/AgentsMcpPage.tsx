@@ -89,9 +89,9 @@ export default function AgentsMcpPage() {
     setTimeout(() => setCopied(null), 1200);
   };
 
-  const pluginCmd = 'npx rukmer plugin';
   const mcpUrl = liveMcpUrl();
-  const cli = 'npm i -g rukmer && rukmer login';
+  const pluginCmd = mcpUrl;
+  const cli = 'Cursor Settings → MCP → ' + mcpUrl;
   const agent = AGENTS.find((item) => item.id === editor) || AGENTS[0];
   const steps = agent.steps.map((step) => ({
     ...step,
@@ -150,8 +150,8 @@ export default function AgentsMcpPage() {
         </div>
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 px-4 py-3.5 border-b border-white/[0.06]">
           <div>
-            <p className="text-[13.5px] text-zinc-100">All editor plugins at once</p>
-            <p className="text-[12.5px] text-zinc-500">Claude Code, Cursor, and Codex.</p>
+            <p className="text-[13.5px] text-zinc-100">MCP URL</p>
+            <p className="text-[12.5px] text-zinc-500">Paste this in Cursor, Claude Code, or Codex. There is no npm package named rukmer.</p>
           </div>
           <button
             type="button"
@@ -225,8 +225,8 @@ export default function AgentsMcpPage() {
         </div>
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 px-4 py-3.5">
           <div>
-            <p className="text-[13.5px] text-zinc-100">Manage this workspace from a shell</p>
-            <p className="text-[12.5px] text-zinc-500">Install the CLI, then sign in once in the browser.</p>
+            <p className="text-[13.5px] text-zinc-100">Cursor</p>
+            <p className="text-[12.5px] text-zinc-500">Add the URL under Settings, then MCP. Cursor opens the browser to sign in.</p>
           </div>
           <button
             type="button"
