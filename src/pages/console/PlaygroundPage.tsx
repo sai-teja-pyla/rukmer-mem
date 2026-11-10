@@ -22,7 +22,8 @@ import { homeTag as makeHomeTag } from '../../services/tenancy';
 type MemoryMode = 'agentic' | 'auto';
 type Retrieval = 'hybrid' | 'semantic' | 'keyword';
 type RequestTab = 'prompt' | 'curl' | 'ts' | 'py';
-type ChatMsg = { role: 'user' | 'assistant'; text: string };
+type Citation = { id: string; text: string; title?: string; source?: string; score?: number };
+type ChatMsg = { role: 'user' | 'assistant'; text: string; citations?: Citation[] };
 type Thread = { id: string; title: string; updatedAt: string; messages: ChatMsg[] };
 
 function threadStore(uid: string) {
@@ -48,10 +49,10 @@ function newThread(): Thread {
 }
 
 const MODELS = [
-  { id: 'gemini-3.8-flash', label: 'Gemini 3.8 Flash', provider: 'gemini' },
-  { id: 'gpt-4o-mini', label: 'ChatGPT 4o mini', provider: 'openai' },
-  { id: 'claude-sonnet-4-5', label: 'Claude Sonnet', provider: 'anthropic' },
-  { id: 'grok-3-mini', label: 'Grok 3 mini', provider: 'grok' },
+  { id: 'gemini-3.8-flash', label: 'Gemini 3.8 Flash', provider: 'gemini', vendor: 'Gemini' },
+  { id: 'gpt-4o-mini', label: 'ChatGPT 4o mini', provider: 'openai', vendor: 'OpenAI' },
+  { id: 'claude-sonnet-4-5', label: 'Claude Sonnet', provider: 'anthropic', vendor: 'Anthropic' },
+  { id: 'grok-3-mini', label: 'Grok 3 mini', provider: 'grok', vendor: 'xAI' },
 ] as const;
 type Mode = 'chat' | 'search';
 const SOURCES = ['All sources', 'Documents', 'Conversations', 'Apps'];
@@ -123,6 +124,61 @@ function Stepper({
       >
         +
       </button>
+    </div>
+  );
+}
+
+function friendlyModelError(message: string) {
+  const text = String(message || '');
+  if (/openai/i.test(text) && /api key/i.test(text)) return 'Add an OpenAI API key to use this model. Open the plug icon or Settings → Advanced.';
+  if (/anthropic/i.test(text) && /api key/i.test(text)) return 'Add an Anthropic API key to use this model. Open the plug icon or Settings → Advanced.';
+  if (/\bxai\b|grok/i.test(text) && /api key/i.test(text)) return 'Add an xAI API key to use this model. Open the plug icon or Settings → Advanced.';
+  if (/gemini/i.test(text) && /api key/i.test(text)) return 'Add a Gemini API key to use this model. Open the plug icon or Settings → Advanced.';
+  if (/api key/i.test(text)) return 'Add a provider API key to use this model. Open the plug icon or Settings → Advanced.';
+  return text || 'Memory engine is unreachable.';
+}
+
+function MessageBody({ text }: { text: string }) {
+  const [open, setOpen] = useState(false);
+  const long = text.length > 480;
+  const shown = long && !open ? `${text.slice(0, 480)}…` : text;
+  return (
+    <>
+      <div className="[overflow-wrap:anywhere] break-words">{shown}</div>
+      {long ? (
+        <button type="button" onClick={() => setOpen((v) => !v)} className="mt-1 text-[12px] text-[#93c5fd] hover:underline">
+          {open ? 'Show less' : 'Show more'}
+        </button>
+      ) : null}
+    </>
+  );
+}
+
+function MemoriesUsed({ citations }: { citations?: Citation[] }) {
+  const [open, setOpen] = useState(false);
+  const rows = citations || [];
+  return (
+    <div className="mt-2 border-t border-white/[0.06] pt-1.5">
+      <button type="button" onClick={() => setOpen((v) => !v)} className="text-[12px] text-zinc-400 hover:text-zinc-200">
+        Memories used ({rows.length})
+      </button>
+      {open ? (
+        rows.length ? (
+          <div className="mt-2 space-y-2">
+            {rows.map((row) => (
+              <div key={row.id} className="text-[12px] text-zinc-400">
+                <p className="[overflow-wrap:anywhere] break-words text-zinc-300">{row.text}</p>
+                <p className="mt-0.5 text-[11px] text-zinc-500">
+                  {row.source || 'memory'}
+                  {typeof row.score === 'number' ? ` · ${row.score}` : ''}
+                </p>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <p className="mt-1 text-[12px] text-zinc-500">No memories were injected.</p>
+        )
+      ) : null}
     </div>
   );
 }
@@ -333,11 +389,18 @@ export default function PlaygroundPage() {
     try {
       if (mode === 'search') {
         const out = await engine.search(body);
-        setHits(out.matches || []);
+        const citations = (out.matches || []).map((hit: Citation) => ({
+          id: String(hit.id),
+          text: String(hit.text || ''),
+          title: hit.title,
+          source: hit.source,
+          score: hit.score,
+        }));
+        setHits([]);
         persistThreads(
           withUser.map((t) =>
             t.id === threadId
-              ? { ...t, updatedAt: new Date().toISOString(), messages: [...t.messages, { role: 'assistant', text: `Found ${out.matches?.length || 0} memories in ${out.tookMs}ms · ${out.mode || 'hybrid'}` }] }
+              ? { ...t, updatedAt: new Date().toISOString(), messages: [...t.messages, { role: 'assistant' as const, text: `Found ${citations.length} memories in ${out.tookMs}ms · ${out.mode || 'hybrid'}`, citations }] }
               : t
           )
         );
@@ -352,6 +415,8 @@ export default function PlaygroundPage() {
             messages: history,
             containerTag: tag || mine,
             memoriesRetrieved: retrieved,
+            matchStrictness: strictness,
+            retrieval,
             rerank,
             rewriteQuery: rewrite,
             memoryMode,
@@ -365,11 +430,16 @@ export default function PlaygroundPage() {
           }
         );
         const answer = out.answer || out.choices?.[0]?.message?.content || out.error || 'No answer.';
-        setHits(out.rukmer ? [{ id: 'inj', title: `${out.rukmer.provider} · ${out.rukmer.matches} memories`, text: compare ? 'Compared without memory.' : 'Memory injected into the model system prompt.', score: out.rukmer.matches }] : []);
+        const citations = (out.rukmer?.citations || []) as Citation[];
+        setHits([]);
         persistThreads(
           withUser.map((t) =>
             t.id === threadId
-              ? { ...t, updatedAt: new Date().toISOString(), messages: [...t.messages, { role: 'assistant', text: typeof answer === 'string' ? answer : JSON.stringify(answer) }] }
+              ? {
+                  ...t,
+                  updatedAt: new Date().toISOString(),
+                  messages: [...t.messages, { role: 'assistant', text: typeof answer === 'string' ? answer : JSON.stringify(answer), citations }],
+                }
               : t
           )
         );
@@ -378,7 +448,7 @@ export default function PlaygroundPage() {
       persistThreads(
         withUser.map((t) =>
           t.id === threadId
-            ? { ...t, messages: [...t.messages, { role: 'assistant', text: err.message || 'Memory engine is unreachable.' }] }
+            ? { ...t, messages: [...t.messages, { role: 'assistant', text: friendlyModelError(err.message) }] }
             : t
         )
       );
@@ -386,6 +456,10 @@ export default function PlaygroundPage() {
       setBusy(false);
     }
   };
+
+  const providerReady = (provider: string) => !!(serverProviders[provider] || keys[provider as keyof ProviderKeys]);
+  const modelReady = providerReady(model.provider);
+  const canSend = !!input.trim() && !busy;
 
   return (
     <div className="h-full min-h-0 flex flex-col px-3 sm:px-5 pt-3 sm:pt-4 pb-3">
@@ -465,13 +539,14 @@ export default function PlaygroundPage() {
                 {messages.map((m, i) => (
                   <div key={i} className={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
                     <div
-                      className={`max-w-[92%] sm:max-w-[80%] rounded-xl px-3.5 py-2 text-[13.5px] leading-relaxed whitespace-pre-wrap ${
+                      className={`max-w-[92%] sm:max-w-[80%] min-w-0 rounded-xl px-3.5 py-2 text-[13.5px] leading-relaxed whitespace-pre-wrap [overflow-wrap:anywhere] break-words ${
                         m.role === 'user'
                           ? 'bg-[#1e3a5f] text-zinc-100'
                           : 'bg-white/[0.04] border border-white/[0.06] text-zinc-300'
                       }`}
                     >
-                      {m.text}
+                      <MessageBody text={m.text} />
+                      {m.role === 'assistant' ? <MemoriesUsed citations={m.citations} /> : null}
                     </div>
                   </div>
                 ))}
@@ -507,7 +582,7 @@ export default function PlaygroundPage() {
                   }
                 }}
                 rows={2}
-                placeholder={mode === 'chat' ? '' : 'Search memories…'}
+                placeholder={mode === 'chat' ? '' : 'Enter a query'}
                 className="w-full bg-transparent px-3 text-[13.5px] text-zinc-200 outline-none resize-none min-h-[44px]"
               />
               <div className="flex flex-wrap items-center gap-2 px-2.5 pb-2">
@@ -541,24 +616,38 @@ export default function PlaygroundPage() {
                       style={{ top: modelBox.top, bottom: modelBox.bottom, left: modelBox.left, maxHeight: modelBox.maxHeight }}
                       className="fixed z-50 w-56 overflow-y-auto rounded-lg border border-white/[0.08] bg-[#161618] p-1 shadow-xl"
                     >
-                      {MODELS.map((m) => (
-                        <button
-                          key={m.id}
-                          type="button"
-                          role="option"
-                          aria-selected={m.id === model.id}
-                          onClick={() => {
-                            setModel(m);
-                            setModelOpen(false);
-                          }}
-                          className={`w-full text-left px-2.5 py-1.5 text-[12.5px] rounded-md hover:bg-white/[0.06] text-zinc-200 ${
-                            m.id === model.id ? 'bg-white/[0.06]' : ''
-                          }`}
-                        >
-                          {m.label}
-                          <span className="block text-[10px] text-zinc-500">{m.provider}{serverProviders[m.provider] || keys[m.provider] ? ' · ready' : ' · use Connectors or a key'}</span>
-                        </button>
-                      ))}
+                      {MODELS.map((m) => {
+                        const ready = providerReady(m.provider);
+                        return (
+                          <button
+                            key={m.id}
+                            type="button"
+                            role="option"
+                            aria-selected={m.id === model.id}
+                            aria-disabled={!ready}
+                            onClick={() => {
+                              if (!ready) return;
+                              setModel(m);
+                              setModelOpen(false);
+                            }}
+                            className={`w-full text-left px-2.5 py-1.5 text-[12.5px] rounded-md text-zinc-200 ${
+                              ready ? 'hover:bg-white/[0.06]' : 'opacity-70 cursor-not-allowed'
+                            } ${m.id === model.id ? 'bg-white/[0.06]' : ''}`}
+                          >
+                            {m.label}
+                            {ready ? (
+                              <span className="block text-[10px] text-zinc-500">Ready</span>
+                            ) : (
+                              <span className="block text-[10px] text-amber-200/90">
+                                Needs API key ·{' '}
+                                <Link to="/settings/advanced" className="underline" onClick={() => setModelOpen(false)}>
+                                  Settings → Advanced
+                                </Link>
+                              </span>
+                            )}
+                          </button>
+                        );
+                      })}
                     </div>
                   )}
                 </div>
@@ -580,7 +669,9 @@ export default function PlaygroundPage() {
                 </button>
                 <button
                   onClick={() => send()}
-                  disabled={busy}
+                  disabled={!canSend}
+                  title={input.trim() ? 'Send' : 'Enter a query'}
+                  aria-label={input.trim() ? 'Send' : 'Enter a query'}
                   className="h-7 w-7 rounded-md bg-[#2563eb] hover:bg-[#1d4ed8] text-white flex items-center justify-center disabled:opacity-50"
                 >
                   <ArrowUp size={14} />
@@ -604,6 +695,13 @@ export default function PlaygroundPage() {
                 </select>
               </label>
             </div>
+
+            {!modelReady && mode === 'chat' && (
+              <p className="mt-2 text-[12.5px] text-amber-200/90">
+                Add a {model.vendor} API key to use {model.label}. Use the plug icon or{' '}
+                <Link to="/settings/advanced" className="underline">Settings → Advanced</Link>.
+              </p>
+            )}
 
             {messages.length === 0 && mode === 'chat' && (
               <div className="mt-3 flex flex-wrap gap-2">

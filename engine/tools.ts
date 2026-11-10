@@ -7,13 +7,12 @@ export const MEMORY_TOOLS = [
     type: 'function',
     function: {
       name: 'searchMemories',
-      description:
-        'Search this user\'s long-term memory before answering anything about their preferences, plans, people, projects, or past decisions.',
+      description: 'Searches stored memories for the signed-in user. Returns matching text, source, and score.',
       parameters: {
         type: 'object',
         properties: {
-          query: { type: 'string' },
-          containerTag: { type: 'string' },
+          query: { type: 'string', description: 'Search text.' },
+          containerTag: { type: 'string', description: 'Optional memory space. Defaults to the signed-in user.' },
         },
         required: ['query'],
       },
@@ -23,14 +22,13 @@ export const MEMORY_TOOLS = [
     type: 'function',
     function: {
       name: 'addMemory',
-      description:
-        'REQUIRED during chat. Save one important fact from the latest user message: decisions, plans, preferences, people, deadlines, constraints. Pass only the fact, never the whole transcript. Call this in the same turn the fact is said.',
+      description: 'Stores one memory for the signed-in user. Saves the text even when no structured facts are extracted.',
       parameters: {
         type: 'object',
         properties: {
-          text: { type: 'string' },
-          title: { type: 'string' },
-          containerTag: { type: 'string' },
+          text: { type: 'string', description: 'Memory content.' },
+          title: { type: 'string', description: 'Optional short label.' },
+          containerTag: { type: 'string', description: 'Optional memory space. Defaults to the signed-in user.' },
         },
         required: ['text'],
       },

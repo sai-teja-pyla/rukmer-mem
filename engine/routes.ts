@@ -409,7 +409,8 @@ export function mountMemoryEngine(app: Express) {
       const q = sanitizePlain(req.body?.query || req.body?.prompt || '', 2000);
       const tag = tagOf(req);
       const out = await buildMemoryInjection(q, tag, {
-        topK: req.body?.topK || 8,
+        topK: req.body?.topK || req.body?.memoriesRetrieved || 8,
+        strictness: req.body?.matchStrictness ?? req.body?.strictness ?? 0.4,
         rewrite: !!req.body?.rewriteQuery,
         rerank: !!req.body?.rerank,
         actorId: uidOf(req),

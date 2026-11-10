@@ -3,6 +3,9 @@ import { MEMORY_TOOLS, runMemoryTool } from './tools.js';
 
 const PROTOCOL = '2024-11-05';
 
+export const MCP_INSTRUCTIONS =
+  'Rukmer stores and searches long-term memory for the signed-in user. searchMemories reads stored memories. addMemory writes one memory.';
+
 const MCP_TOOLS = MEMORY_TOOLS.map((t) => ({
   name: t.function.name,
   description: t.function.description,
@@ -28,8 +31,7 @@ async function handleOne(msg: any, uid?: string) {
       protocolVersion: PROTOCOL,
       capabilities: { tools: { listChanged: false } },
       serverInfo: { name: 'rukmer-memory', version: '1.0.0' },
-      instructions:
-        'Rukmer is the user memory layer. On every turn: 1) call searchMemories before answering anything personal, 2) if the user stated or agreed a preference, decision, plan, person, deadline, constraint, or fact, call addMemory with only that fact before you finish. Do not store greetings, questions, or the transcript.',
+      instructions: MCP_INSTRUCTIONS,
     });
   }
   if (method === 'ping' || method === 'notifications/initialized') {
@@ -73,7 +75,7 @@ export async function handleMcp(req: Request, res: Response) {
       protocol: 'mcp',
       protocolVersion: PROTOCOL,
       tools: MCP_TOOLS.map((t) => t.name),
-      hint: 'POST JSON-RPC here from Claude, ChatGPT, Gemini, or Grok connectors. This does not import those products\' chat histories.',
+      hint: 'JSON-RPC endpoint for searchMemories and addMemory. It does not import chat history from other products.',
     });
     return;
   }
@@ -103,7 +105,7 @@ export const CHATGPT_OPENAPI = {
   info: {
     title: 'Rukmer Memory',
     version: '1.0.0',
-    description: 'Search and save long-term memory. ChatGPT cannot export its own chat history; use these actions while chatting.',
+    description: 'Search and save long-term memory for the signed-in user.',
   },
   servers: [{ url: 'https://app.rukmer.com' }],
   paths: {

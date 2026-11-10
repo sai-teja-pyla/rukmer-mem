@@ -39,6 +39,19 @@ function providerSecret(req: Request) {
   return t;
 }
 
+export function providerName(provider: Provider) {
+  if (provider === 'openai') return 'OpenAI';
+  if (provider === 'anthropic') return 'Anthropic';
+  if (provider === 'grok') return 'xAI';
+  return 'Gemini';
+}
+
+export function missingKeyMessage(provider: Provider) {
+  const name = providerName(provider);
+  const article = provider === 'gemini' ? 'a' : 'an';
+  return `Add ${article} ${name} API key in Playground (plug icon) or Settings → Advanced before using this model.`;
+}
+
 export function providerFromModel(model: string): Provider {
   const m = (model || '').toLowerCase();
   if (m.includes('claude')) return 'anthropic';
@@ -178,7 +191,7 @@ export async function completeChat(req: Request, res: Response) {
   const key = keyFor(provider, req);
   if (!key) {
     return res.status(401).json({
-      error: `Missing API key for ${provider}. Paste it in Playground (plug icon) or set it on the server.`,
+      error: missingKeyMessage(provider),
       provider,
     });
   }
@@ -194,8 +207,10 @@ export async function completeChat(req: Request, res: Response) {
   if (useMemory) {
     mem = await buildMemoryInjection(query, tag, {
       topK: Number(req.body?.memoriesRetrieved || 8),
+      strictness: Number(req.body?.matchStrictness ?? req.body?.strictness ?? 0.4),
       rerank: !!req.body?.rerank,
       rewrite: !!req.body?.rewriteQuery,
+      retrieval: req.body?.retrieval === 'semantic' || req.body?.retrieval === 'keyword' ? req.body.retrieval : undefined,
       actorId: uid,
       purpose: 'chat',
     });
@@ -270,6 +285,13 @@ export async function completeChat(req: Request, res: Response) {
       provider,
       containerTag: tag,
       matches: mem?.retrieved.matches.length || 0,
+      citations: (mem?.retrieved.matches || []).map((match) => ({
+        id: match.id,
+        text: String(match.text || '').slice(0, 500),
+        title: match.title,
+        source: match.source || 'memory',
+        score: match.score,
+      })),
     },
   });
 }
