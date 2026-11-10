@@ -1,0 +1,81 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+    function isOwner(uid) {
+      return signedIn() && request.auth.uid == uid;
+    }
+    function billingFields() {
+      return ['plan', 'billing', 'isPro', 'planType'];
+    }
+    function billingUnchanged() {
+      return !request.resource.data.diff(resource.data).affectedKeys().hasAny(billingFields());
+    }
+    function createWithoutPaidPlan() {
+      return (!('plan' in request.resource.data) || request.resource.data.plan == 'free')
+        && !('billing' in request.resource.data)
+        && !('isPro' in request.resource.data)
+        && !('planType' in request.resource.data);
+    }
+
+    match /users/{uid} {
+      allow read: if isOwner(uid);
+      allow create: if isOwner(uid) && createWithoutPaidPlan();
+      allow update: if isOwner(uid) && billingUnchanged();
+      allow delete: if isOwner(uid);
+    }
+
+    match /userConnections/{uid} {
+      allow read: if isOwner(uid);
+      allow create: if isOwner(uid) && createWithoutPaidPlan();
+      allow update: if isOwner(uid) && billingUnchanged();
+      allow delete: if isOwner(uid);
+    }
+
+    match /reports/{id} {
+      allow read: if signedIn() && (resource.data.uid == request.auth.uid || resource.data.userId == request.auth.uid);
+      allow create: if signedIn()
+        && (request.resource.data.uid == request.auth.uid || request.resource.data.userId == request.auth.uid)
+        && createWithoutPaidPlan();
+      allow update: if signedIn()
+        && (resource.data.uid == request.auth.uid || resource.data.userId == request.auth.uid)
+        && billingUnchanged();
+      allow delete: if signedIn() && (resource.data.uid == request.auth.uid || resource.data.userId == request.auth.uid);
+    }
+
+    match /customers/{uid} {
+      allow read: if isOwner(uid);
+      match /checkout_sessions/{id} {
+        allow read, create: if isOwner(uid);
+        allow update, delete: if false;
+      }
+      match /subscriptions/{id} {
+        allow read: if isOwner(uid);
+        allow write: if false;
+      }
+      match /{document=**} {
+        allow read: if isOwner(uid);
+        allow write: if false;
+      }
+    }
+
+    match /feedback/{id} {
+      allow create: if signedIn() && request.resource.data.uid == request.auth.uid;
+      allow read, update, delete: if false;
+    }
+
+    match /userTokens/{uid} {
+      allow read, write: if false;
+    }
+
+    match /oauthLinkStates/{id} {
+      allow read, write: if false;
+    }
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

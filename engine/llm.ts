@@ -1,7 +1,7 @@
 import { sanitiseGraph } from './quality.js';
 
 export function geminiKey() {
-  return process.env.GEMINI_API_KEY || process.env.VITE_GEMINI_API_KEY || '';
+  return process.env.GEMINI_API_KEY || '';
 }
 
 async function gemini(path: string, body: unknown, timeoutMs = 12000) {
@@ -24,6 +24,17 @@ async function gemini(path: string, body: unknown, timeoutMs = 12000) {
 
 export function hasLlm() {
   return !!geminiKey();
+}
+
+/** Authenticated server callers only. The key stays in GEMINI_API_KEY. */
+export async function geminiPrompt(prompt: string) {
+  if (!geminiKey()) throw Object.assign(new Error('Gemini is not configured'), { status: 503 });
+  const data = await gemini('models/gemini-2.5-flash:generateContent', {
+    contents: [{ role: 'user', parts: [{ text: prompt }] }],
+  }) as { candidates?: { content?: { parts?: { text?: string }[] } }[] };
+  const text = data?.candidates?.[0]?.content?.parts?.map((part) => part.text || '').join('') || '';
+  if (!text) throw Object.assign(new Error('Gemini returned an empty reply'), { status: 502 });
+  return text;
 }
 
 const queryCache = new Map<string, number[]>();

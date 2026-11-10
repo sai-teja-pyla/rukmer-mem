@@ -11,6 +11,7 @@
     "pressure": "tsx engine/pressure-test.ts",
     "governance": "tsx engine/governance-test.ts",
     "security": "tsx engine/security-test.ts",
+    "security-fixes": "tsx engine/security-fixes-test.ts",
     "server": "nodemon --exec tsx server.ts",
     "dev": "vite",
     "build": "vite build",

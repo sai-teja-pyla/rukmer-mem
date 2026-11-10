@@ -54,7 +54,7 @@ import {
   setRetention,
   startRetentionLoop,
 } from './governance.js';
-import { isProduction, publicError, rateLimit, rejectIdentityOverride, sanitizePlain, securityStatus } from './security.js';
+import { debugRoutesEnabled, isProduction, publicError, rateLimit, rejectIdentityOverride, sanitizePlain, securityStatus } from './security.js';
 import { sendLoiCopy } from '../src/utils/mailer.js';
 import { LOI_VERSION } from '../src/legal/loi.js';
 
@@ -151,7 +151,7 @@ export function mountMemoryEngine(app: Express) {
       encryptionWarning: encryptionWarning(),
       rateLimiting: true,
       corsMode: 'allowlist',
-      debugMode: !isProduction(),
+      debugMode: debugRoutesEnabled(),
       training: false,
       providers: providerStatus(),
       llm: stats().llm,
@@ -571,8 +571,8 @@ export function mountMemoryEngine(app: Express) {
 
   app.get('/v4/profile', (req, res) => {
     try {
-      const profile = buildProfile(tagOf(req));
-      res.json(profile);
+      const uid = uidOf(req);
+      res.json(buildProfile(tagOf(req), uid));
     } catch (e: any) {
       fail(res, e);
     }
@@ -582,7 +582,7 @@ export function mountMemoryEngine(app: Express) {
     try {
       const uid = uidOf(req);
       const requested = String(req.query.containerTag || '').trim();
-      res.json(requested ? graphPayload(tagOf(req)) : graphPayload(undefined, uid));
+      res.json(graphPayload(requested ? tagOf(req) : undefined, uid));
     } catch (e: any) {
       fail(res, e);
     }

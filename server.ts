@@ -22,7 +22,15 @@ import fs from 'fs';
 import admin from 'firebase-admin'; // 🚨 The Security Bouncer
 import { learnWorkspaceData, queryWorkspaceData, clearNamespace, fetchTeamsMessages } from './ingestionService.js';
 import { bootMemoryEngine, mountMemoryEngine } from './engine/routes.js';
-import { isProduction, securityMiddleware, slackSignatureOk } from './engine/security.js';
+import { debugRoutesEnabled, isProduction, securityMiddleware, slackSignatureOk } from './engine/security.js';
+import { claimedUserMismatch } from './engine/actorGuard.js';
+import { consumeOauthState, firestoreOauthStore, issueOauthState, oauthStateSecret } from './engine/oauthLink.js';
+import { linesVisibleInChannel, slackAccountForMention } from './engine/channelReply.js';
+import { geminiPrompt } from './engine/llm.js';
+import { searchMemory } from './engine/pipeline.js';
+import { findMemory } from './engine/governance.js';
+import { homeTag } from './engine/tenancy.js';
+import { isProPlan } from './src/services/plan.js';
 import { Pinecone } from '@pinecone-database/pinecone';
 import { ConfidentialClientApplication, InteractionRequiredAuthError, LogLevel } from '@azure/msal-node';
 import { WebClient } from '@slack/web-api';
@@ -141,6 +149,8 @@ if (!admin.apps.length) {
     }
     admin.initializeApp(adminConfig);
 }
+
+const oauthLinkStore = firestoreOauthStore(admin.firestore());
 
 // --- Last-sync helpers (stored in Firestore so they survive server restarts) ---
 async function getLastSyncAt(userId: string): Promise<Date | null> {
@@ -455,6 +465,34 @@ const authenticateUser = async (req: any, res: any, next: any): Promise<void> =>
     }
 };
 
+function hideUnlessDebug(req: any, res: any, next: any) {
+    if (!debugRoutesEnabled()) return res.status(404).json({ error: 'Not found' });
+    next();
+}
+
+function sessionUid(req: any, res: any, claimed?: unknown): string | null {
+    const uid = String(req.user?.uid || '');
+    if (!uid) {
+        res.status(401).json({ error: 'Unauthorized' });
+        return null;
+    }
+    if (claimedUserMismatch(uid, claimed)) {
+        res.status(403).json({ error: 'Forbidden' });
+        return null;
+    }
+    return uid;
+}
+
+async function signedOauthState(uid: string, purpose: string, type: string) {
+    const secret = oauthStateSecret();
+    if (!secret) throw Object.assign(new Error('OAuth state secret is not configured'), { status: 503 });
+    return issueOauthState({ uid, purpose, type, secret, store: oauthLinkStore });
+}
+
+async function linkedOauthUser(state: unknown, purpose: string) {
+    return consumeOauthState(String(state || ''), { purpose, secret: oauthStateSecret(), store: oauthLinkStore });
+}
+
 // --- SERVER-SIDE VERTEX AI HELPER ---
 const vertexAI = new VertexAI({
     project: process.env.GOOGLE_CLOUD_PROJECT || 'rukmer-saas',
@@ -731,10 +769,24 @@ When verified data retrieved from the user's connected workspace apps (Gmail, Sl
 - If a request is harmful or unethical, politely decline.`;
 // ────────────────────────────────────────────────────────────────────────────
 
+app.post('/api/ai/gemini', authenticateUser, async (req: any, res: any) => {
+  const uid = sessionUid(req, res, req.body?.userId);
+  if (!uid) return;
+  const prompt = String(req.body?.prompt || '').trim().slice(0, 8000);
+  if (!prompt) return res.status(400).json({ error: 'prompt required' });
+  try {
+    const text = await geminiPrompt(prompt);
+    res.json({ text });
+  } catch (err: any) {
+    res.status(err.status || 502).json({ error: err.message || 'Gemini request failed' });
+  }
+});
+
 app.post('/api/ai/chat', authenticateUser, async (req: any, res: any) => {
-  const { userId, prompt, message, sessionId, files } = req.body;
+  const { prompt, message, sessionId, files } = req.body;
   const userMessage = prompt || message;
-  const orgId = userId || req.user.uid;
+  const orgId = sessionUid(req, res, req.body?.userId);
+  if (!orgId) return;
   const currentSessionId = sessionId || Math.random().toString(36).substring(2, 11);
   const attachedFiles: Array<{ name: string; mimeType: string; type: string; data: string }> = Array.isArray(files) ? files : [];
 
@@ -930,10 +982,9 @@ app.post('/api/ingest', authenticateUser, async (req: any, res: any): Promise<vo
   }
 });
 
-// DEV ONLY — trigger ingest by passing userId directly (no auth token needed)
-// Remove this endpoint before deploying to production
-if (process.env.NODE_ENV !== 'production') {
-  app.post('/api/dev/ingest', async (req: any, res: any): Promise<void> => {
+// Opt-in only. Off unless ENABLE_DEBUG_ROUTES=true.
+app.post('/api/dev/ingest', hideUnlessDebug, async (req: any, res: any): Promise<void> => {
+    if (!debugRoutesEnabled()) { res.status(404).json({ error: 'Not found' }); return; }
     const { userId } = req.body;
     if (!userId) { res.status(400).json({ error: 'userId is required in the request body' }); return; }
     console.log(`🛠️  DEV ingest triggered for: ${userId}`);
@@ -944,13 +995,12 @@ if (process.env.NODE_ENV !== 'production') {
       console.error(`❌ Dev ingest failed:`, err.message);
       res.status(500).json({ error: err.message });
     }
-  });
-}
+});
 
 app.get('/api/history', authenticateUser, async (req: any, res: any): Promise<void> => {
   try {
-    const userId = req.user.uid;
-    if (!userId) { res.status(401).json({ error: 'Unauthorized' }); return; }
+    const userId = sessionUid(req, res, req.query?.userId);
+    if (!userId) return;
 
     // Return ONE lightweight row per session (the most recent message).
     // We deliberately exclude ai_reply to keep the payload tiny — full message
@@ -1006,7 +1056,9 @@ app.get('/api/history/session/:sessionId', authenticateUser, async (req: any, re
 
 app.post('/api/storage/resumable-url', authenticateUser, async (req: any, res: any): Promise<void> => {
     try {
-        const { fileName, contentType, userId, userName } = req.body;
+        const userId = sessionUid(req, res, req.body?.userId);
+        if (!userId) return;
+        const { fileName, contentType, userName } = req.body;
         const bucket = storage.bucket('rukmer-saas-data');
         const safeName = (userName || 'user').split('@')[0].replace(/[^a-z0-9]/gi, '_').toLowerCase();
         const folderName = `${safeName}_${userId.substring(0, 5)}`;
@@ -1029,7 +1081,8 @@ app.post('/api/storage/resumable-url', authenticateUser, async (req: any, res: a
 
 app.get('/api/storage/files', authenticateUser, async (req: any, res: any): Promise<void> => {
     try {
-        const { userId } = req.query; 
+        const userId = sessionUid(req, res, req.query?.userId);
+        if (!userId) return;
         const bucket = storage.bucket('rukmer-saas-data');
         const [allFiles] = await bucket.getFiles();
         const shortId = userId.substring(0, 5);
@@ -1068,8 +1121,8 @@ app.put('/api/chat/rename', authenticateUser, async (req: any, res: any): Promis
 });
 
 app.put('/api/chat/hide', authenticateUser, async (req: any, res: any): Promise<void> => {
-    const { userId }: any = req.body;
-    if (!userId) return res.status(400).json({ error: "User ID is required" });
+    const userId = sessionUid(req, res, req.body?.userId);
+    if (!userId) return;
     try {
         await pool.query("UPDATE chats SET is_active = FALSE WHERE user_id = $1 AND is_active = TRUE", [userId]);
         res.json({ success: true });
@@ -1079,7 +1132,8 @@ app.put('/api/chat/hide', authenticateUser, async (req: any, res: any): Promise<
 });
 
 app.get('/api/chat/history/:userId', authenticateUser, async (req: any, res: any): Promise<void> => {
-    const { userId }: any = req.params;
+    const userId = sessionUid(req, res, req.params?.userId);
+    if (!userId) return;
     try {
         const result = await pool.query("SELECT * FROM chats WHERE user_id = $1 AND is_active = TRUE ORDER BY created_at ASC", [userId]);
         res.json({ success: true, hidden: result.rowCount });
@@ -1088,8 +1142,17 @@ app.get('/api/chat/history/:userId', authenticateUser, async (req: any, res: any
     }
 });
 
-app.get('/api/user-status/:userId', authenticateUser, async (_req: any, res: any): Promise<void> => {
-    res.json({ isPro: true, planType: 'pro', beta: true });
+app.get('/api/user-status/:userId', authenticateUser, async (req: any, res: any): Promise<void> => {
+    const uid = sessionUid(req, res, req.params?.userId);
+    if (!uid) return;
+    let pro = false;
+    try {
+        const snap = await admin.firestore().collection('users').doc(uid).get();
+        pro = isProPlan(snap.exists ? snap.data() : null);
+    } catch {
+        pro = false;
+    }
+    res.json({ isPro: pro, planType: pro ? 'pro' : 'free', beta: true });
 });
 
 // Example Node.js/Express Route
@@ -1123,12 +1186,17 @@ app.post('/api/signup-success', authenticateUser, async (req: any, res: any): Pr
   res.status(200).send({ message: "Welcome email sent" });
 });
 
-app.get('/api/auth/slack', (req: any, res: any): void => {
-    const userId = req.query.userId;
-    if (!userId) return res.status(400).send("User ID is required");
+app.get('/api/auth/slack', authenticateUser, async (req: any, res: any): Promise<void> => {
+    const userId = sessionUid(req, res, req.query.userId);
+    if (!userId) return;
 
-    // 1. Create the state
-    const state = Buffer.from(JSON.stringify({ userId })).toString('base64');
+    let state = '';
+    try {
+        state = await signedOauthState(userId, 'slack', 'slack');
+    } catch (err: any) {
+        res.status(err.status || 503).json({ error: err.message || 'OAuth state secret is not configured' });
+        return;
+    }
     
     // 2. Define your scopes (Bot scopes use 'scope', User scopes use 'user_scope')
     const scope = 'channels:read,channels:history,groups:read,groups:history,chat:write';
@@ -1136,10 +1204,10 @@ app.get('/api/auth/slack', (req: any, res: any): void => {
     // 3. Construct the URL using the variables
     const redirectUri = encodeURIComponent(`${CURRENT_BACKEND_URL}/api/auth/slack/callback`);
     
-    const slackAuthUrl = `https://slack.com/oauth/v2/authorize?client_id=${SLACK_CLIENT_ID}&scope=${scope}&user_scope=identity.basic&redirect_uri=${redirectUri}&state=${state}`;
+    const slackAuthUrl = `https://slack.com/oauth/v2/authorize?client_id=${SLACK_CLIENT_ID}&scope=${scope}&user_scope=identity.basic&redirect_uri=${redirectUri}&state=${encodeURIComponent(state)}`;
     
     console.log("🔗 Redirecting to Slack with Scopes:", scope);
-    res.redirect(slackAuthUrl);
+    res.json({ url: slackAuthUrl });
 });
 
 // 2. Handle the Callback from Slack
@@ -1149,10 +1217,9 @@ app.get('/api/auth/slack/callback', async (req: any, res: any): Promise<void> =>
     if (error) return res.redirect(`${FRONTEND_URL}?error=slack_auth_failed`);
 
     try {
-        // Decode the state to figure out which user this is
-        const decodedState = JSON.parse(Buffer.from(state as string, 'base64').toString('ascii'));
-        const userId = decodedState.userId;
-        if (!userId) throw new Error("No userId found in state");
+        const linked = await linkedOauthUser(state, 'slack');
+        if (!linked) throw new Error('Invalid OAuth state');
+        const userId = linked.uid;
 
         const redirectUri = `${CURRENT_BACKEND_URL}/api/auth/slack/callback`;
 
@@ -1298,40 +1365,48 @@ app.post('/api/webhooks/slack', async (req: any, res: any) => {
       // Clean the text (remove the <@U12345> bot mention part)
       const cleanPrompt = event.text.replace(/<@[A-Z0-9]+>/g, '').trim();
 
-      // 4. FIND THE RIGHT TOKEN IN FIRESTORE
-      // We search Firestore for the user who connected this specific Slack Workspace
       const usersRef = admin.firestore().collection('userTokens');
-      const snapshot = await usersRef.where('slack.teamId', '==', team_id).limit(1).get();
+      const snapshot = await usersRef.where('slack.teamId', '==', team_id).get();
       
       if (snapshot.empty) {
         console.error("No user found for this Slack workspace.");
         return;
       }
 
-      const userData = snapshot.docs[0].data();
-      const slackBotToken = userData.slack.accessToken; // The xoxb- token
-      const orgId = snapshot.docs[0].id; // The user's Rukmer ID
+      const accounts = snapshot.docs.map((docSnap) => {
+        const data = docSnap.data() as { slack?: { accessToken?: string; authedUser?: { id?: string } } };
+        return {
+          uid: docSnap.id,
+          slackUserId: String(data.slack?.authedUser?.id || ''),
+          token: String(data.slack?.accessToken || ''),
+        };
+      });
+      const slackBotToken = accounts.find((account) => account.token)?.token || '';
+      if (!slackBotToken) return;
+      const orgId = slackAccountForMention(accounts, String(event.user || ''));
       const slackClient = new WebClient(slackBotToken);
 
-      // (Optional UX) Send a "Rukmer is thinking..." message
       const loadingMsg = await slackClient.chat.postMessage({
         channel: event.channel,
-        thread_ts: event.ts, // Reply in a thread so it doesn't clutter the channel!
+        thread_ts: event.ts,
         text: "⏳ *Synthesizing workspace data...*"
       });
 
-      // 5. RUN YOUR EXISTING RAG & AI LOGIC
       let workspaceContext = "";
-      try {
-        // You already wrote this function!
-        workspaceContext = await queryWorkspaceData(cleanPrompt, orgId);
-      } catch (e) { console.warn("Vector search failed"); }
+      if (orgId) {
+        try {
+          const found = await searchMemory(cleanPrompt, { containerTag: homeTag(orgId), actorId: orgId, topK: 6, purpose: 'slack' });
+          const rows = (found.matches || []).map((match) => {
+            const row = findMemory(match.id);
+            return { text: String(match.text || ''), visibility: row?.gov?.visibility || 'private' };
+          });
+          workspaceContext = linesVisibleInChannel(rows);
+        } catch (e) { console.warn("Memory search failed"); }
+      }
 
-      const systemInstruction = `
-        You are Rukmer AI. Answer the user's question based ONLY on the following workspace context. 
-        Format your answer beautifully for Slack.
-        CONTEXT: ${workspaceContext || "No relevant data found."}
-      `;
+      const systemInstruction = orgId
+        ? `You are Rukmer AI. Answer only from the channel-visible context below. Do not add private facts that are not in the context. Format the answer for Slack.\nCONTEXT: ${workspaceContext || "No shared memory for this channel."}`
+        : `You are Rukmer AI. This Slack user has not connected their own Rukmer account. Tell them to connect Rukmer. Do not mention any workspace memory.`;
 
       const model = vertexAI.getGenerativeModel({ model: 'gemini-2.5-pro' });
       const aiResponse = await model.generateContent({
@@ -1371,8 +1446,8 @@ app.post('/api/teams/messages', teamsBotHandler);    // alias (kept for backward
 // Diagnostic: test whether MS_BOT_ID + MS_BOT_PASSWORD can fetch a valid
 // Bot Framework outbound token. Hit GET /api/teams/debug-auth to instantly see
 // if your credentials are the problem. Remove before going live if desired.
-app.get('/api/teams/debug-auth', async (req: any, res: any) => {
-  if (isProduction()) return res.status(404).json({ error: 'Not found' });
+app.get('/api/teams/debug-auth', hideUnlessDebug, async (req: any, res: any) => {
+  if (!debugRoutesEnabled()) return res.status(404).json({ error: 'Not found' });
   // Decode a JWT payload without verifying signature (for diagnostics only)
   const decodeJwtPayload = (token: string) => {
     try {
@@ -1447,49 +1522,43 @@ app.get('/api/teams/debug-auth', async (req: any, res: any) => {
 });
 // ────────────────────────────────────────────────────────────────────────────
 
-// 1. Start the Auth Flow for Google (Gmail & Google Drive)
-app.get('/api/auth/google', async (req: any, res: any) => {
-  const { userId, type } = req.query; // type will be 'gmail' or 'gdrive'
-  if (!userId) return res.status(400).send("User ID required");
-
-  // 1. Define scopes based on what the user clicked
-  let scopes: string[] = [];
-  if (type === 'gmail') {
-    scopes = ['https://www.googleapis.com/auth/gmail.readonly'];
-  } else if (type === 'gdrive') {
-    scopes = ['https://www.googleapis.com/auth/drive.readonly'];
+async function beginGoogle(req: any, res: any, type: string) {
+  const userId = sessionUid(req, res, req.query.userId);
+  if (!userId) return;
+  const linkType = type === 'gmail' ? 'gmail' : 'gdrive';
+  const scopes = linkType === 'gmail'
+    ? ['https://www.googleapis.com/auth/gmail.readonly']
+    : ['https://www.googleapis.com/auth/drive.readonly'];
+  let state = '';
+  try {
+    state = await signedOauthState(userId, 'google', linkType);
+  } catch (err: any) {
+    res.status(err.status || 503).json({ error: err.message || 'OAuth state secret is not configured' });
+    return;
   }
-
-  // 2. Encode both userId and the type into the state 
-  // so the callback knows which "light" to turn green
-  const state = Buffer.from(JSON.stringify({ userId, type })).toString('base64');
-
   const url = oauth2Client.generateAuthUrl({
     access_type: 'offline',
     prompt: 'consent',
     scope: scopes,
     state: state
   });
+  res.json({ url });
+}
 
-  res.redirect(url);
-});
-
-// Aliases for gmail and gdrive - both redirect to /api/auth/google
-app.get('/api/auth/gmail', async (req: any, res: any) => {
-  const userId = req.query.userId;
-  res.redirect(`/api/auth/google?userId=${userId}&type=gmail`);
-});
-
-app.get('/api/auth/gdrive', async (req: any, res: any) => {
-  const userId = req.query.userId;
-  res.redirect(`/api/auth/google?userId=${userId}&type=gdrive`);
-});
+app.get('/api/auth/google', authenticateUser, (req: any, res: any) => beginGoogle(req, res, String(req.query.type || 'gdrive')));
+app.get('/api/auth/gmail', authenticateUser, (req: any, res: any) => beginGoogle(req, res, 'gmail'));
+app.get('/api/auth/gdrive', authenticateUser, (req: any, res: any) => beginGoogle(req, res, 'gdrive'));
 
 
 // 2. The Callback
 app.get('/api/auth/google/callback', async (req: any, res: any) => {
   const { code, state } = req.query;
-  const { userId, type } = JSON.parse(Buffer.from(state as string, 'base64').toString('ascii'));
+  const linked = await linkedOauthUser(state, 'google');
+  if (!linked) {
+    return res.redirect(`${IS_PROD ? 'https://app.rukmer.com' : 'http://localhost:5173'}/connectors?error=google_state`);
+  }
+  const userId = linked.uid;
+  const type = linked.type === 'gmail' ? 'gmail' : 'gdrive';
 
   try {
     const { tokens } = await oauth2Client.getToken(code as string);
@@ -1514,9 +1583,10 @@ app.get('/api/auth/google/callback', async (req: any, res: any) => {
 });
 
 // 1. Start Microsoft Auth Flow
-app.get('/api/auth/microsoft', (req: any, res: any) => {
-  const { userId, type } = req.query; // type: 'outlook', 'onedrive', or 'teams'
-  if (!userId) return res.status(400).send("User ID required");
+async function beginMicrosoft(req: any, res: any, forcedType?: string) {
+  const userId = sessionUid(req, res, req.query.userId);
+  if (!userId) return;
+  const type = forcedType || req.query.type;
 
   // Check for required env vars
   if (!process.env.MS_CLIENT_ID || !process.env.MS_CLIENT_SECRET) {
@@ -1524,7 +1594,13 @@ app.get('/api/auth/microsoft', (req: any, res: any) => {
     return res.status(500).send("Microsoft OAuth not configured");
   }
 
-  const state = Buffer.from(JSON.stringify({ userId, type })).toString('base64');
+  const linkType = type === 'outlook' || type === 'onedrive' || type === 'teams' ? String(type) : 'outlook';
+  let state = '';
+  try {
+    state = await signedOauthState(userId, 'microsoft', linkType);
+  } catch (err: any) {
+    return res.status(err.status || 503).json({ error: err.message || 'OAuth state secret is not configured' });
+  }
   
   // Define scopes - MUST include 'openid' according to Azure AD v2.0 requirements
   let scope = 'openid profile email offline_access Chat.Read Team.ReadBasic.All Channel.ReadBasic.All Group.Read.All'; 
@@ -1543,9 +1619,11 @@ app.get('/api/auth/microsoft', (req: any, res: any) => {
     state: state
   });
 
-  console.log("🔐 Starting Microsoft OAuth for:", type, "User:", userId);
-  res.redirect(`${root}?${params.toString()}`);
-});
+  console.log("🔐 Starting Microsoft OAuth for:", linkType, "User:", userId);
+  res.json({ url: `${root}?${params.toString()}` });
+}
+
+app.get('/api/auth/microsoft', authenticateUser, (req: any, res: any) => beginMicrosoft(req, res));
 
 // 2. Microsoft Callback
 app.get('/api/auth/microsoft/callback', async (req: any, res: any) => {
@@ -1561,7 +1639,10 @@ app.get('/api/auth/microsoft/callback', async (req: any, res: any) => {
   }
   
   try {
-    const { userId, type } = JSON.parse(Buffer.from(state as string, 'base64').toString('ascii'));
+    const linked = await linkedOauthUser(state, 'microsoft');
+    if (!linked) return res.redirect(`${FRONTEND_URL}?error=microsoft_state`);
+    const userId = linked.uid;
+    const type = linked.type;
 
     console.log("🔄 Exchanging auth code for tokens...", {
       client_id: process.env.MS_CLIENT_ID?.substring(0, 5) + "...",
@@ -1635,25 +1716,14 @@ app.get('/api/teams/channels', authenticateUser, async (req: any, res: any) => {
 });
 
 // Aliases for Outlook & OneDrive - route to Microsoft auth
-app.get('/api/auth/outlook', (req: any, res: any) => {
-  const { userId } = req.query;
-  res.redirect(`/api/auth/microsoft?userId=${userId}&type=outlook`);
-});
+app.get('/api/auth/outlook', authenticateUser, (req: any, res: any) => beginMicrosoft(req, res, 'outlook'));
+app.get('/api/auth/onedrive', authenticateUser, (req: any, res: any) => beginMicrosoft(req, res, 'onedrive'));
+app.get('/api/auth/teams', authenticateUser, (req: any, res: any) => beginMicrosoft(req, res, 'teams'));
 
-app.get('/api/auth/onedrive', (req: any, res: any) => {
-  const { userId } = req.query;
-  res.redirect(`/api/auth/microsoft?userId=${userId}&type=onedrive`);
-});
-
-app.get('/api/auth/teams', (req: any, res: any) => {
-  const { userId } = req.query;
-  res.redirect(`/api/auth/microsoft?userId=${userId}&type=teams`);
-});
-
-// DEV ONLY — test Teams chat message access for a given userId
-if (process.env.NODE_ENV !== 'production') {
-  app.get('/api/debug/teams-chat', async (req: any, res: any) => {
-    const userId = (req.query.userId as string) || 'hnaJEx4Bf7ghikvHZZYqq4XjizA2';
+app.get('/api/debug/teams-chat', hideUnlessDebug, authenticateUser, async (req: any, res: any) => {
+    if (!debugRoutesEnabled()) return res.status(404).json({ error: 'Not found' });
+    const userId = sessionUid(req, res, req.query.userId);
+    if (!userId) return;
     try {
       const accessToken = await getMicrosoftAccessToken(userId);
       const headers = { Authorization: `Bearer ${accessToken}` };
@@ -1700,11 +1770,10 @@ if (process.env.NODE_ENV !== 'production') {
       }
       res.status(500).json({ error: err.response?.data?.error ?? err.message });
     }
-  });
-}
+});
 
-app.get('/api/debug/pinecone-stats', async (req: any, res: any) => {
-  if (isProduction()) return res.status(404).json({ error: 'Not found' });
+app.get('/api/debug/pinecone-stats', hideUnlessDebug, async (req: any, res: any) => {
+  if (!debugRoutesEnabled()) return res.status(404).json({ error: 'Not found' });
   try {
     const stats = await index.describeIndexStats();
     res.json({
@@ -1717,8 +1786,8 @@ app.get('/api/debug/pinecone-stats', async (req: any, res: any) => {
   }
 });
 
-app.get('/api/debug/pinecone-check', async (req: any, res: any) => {
-  if (isProduction()) return res.status(404).json({ error: 'Not found' });
+app.get('/api/debug/pinecone-check', hideUnlessDebug, async (req: any, res: any) => {
+  if (!debugRoutesEnabled()) return res.status(404).json({ error: 'Not found' });
   try {
     const stats = await index.describeIndexStats();
     
