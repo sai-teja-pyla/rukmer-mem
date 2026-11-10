@@ -37,13 +37,18 @@ export function isProduction() {
   return process.env.NODE_ENV === 'production' || !!process.env.K_SERVICE;
 }
 
+/** Debug HTTP routes stay off unless this is exactly true. NODE_ENV alone does not enable them. */
+export function debugRoutesEnabled() {
+  return process.env.ENABLE_DEBUG_ROUTES === 'true';
+}
+
 export function securityStatus() {
   return {
     encryptionAtRest: encryptionAtRest(),
     encryptionWarning: encryptionWarning(),
     rateLimiting: true,
     corsMode: 'allowlist' as const,
-    debugMode: !isProduction(),
+    debugMode: debugRoutesEnabled(),
     httpsOnly: isProduction(),
     training: false,
     identity: 'session' as const,

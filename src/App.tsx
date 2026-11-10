@@ -13,6 +13,7 @@ import { initAnalytics } from './hooks/analytics';
 import { UserProfile } from './types';
 import { useUserSettings, UserSettingsProvider } from './hooks/useUserSettings';
 import { safeNext } from './services/safeNext';
+import { isProPlan } from './services/plan';
 
 const LandingPage = lazy(() => import('./components/LandingPage'));
 const Dashboard = lazy(() => import('./components/Dashboard'));
@@ -47,9 +48,9 @@ export default function App() {
   // 2. DEFINE STATE WITH TYPES
   const [user, setUser] = useState<UserProfile | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
-  const [isPro, setIsPro] = useState(false);
   
   const { settings } = useUserSettings();
+  const isPro = !!user && isProPlan(settings);
 
   useEffect(() => {
     initAnalytics('G-1XG5ZEVHB4');
@@ -79,10 +80,8 @@ export default function App() {
           name: currentUser.displayName || (currentUser.email?.split('@')[0]) || 'Guest User',
           photo: currentUser.photoURL || undefined
         });
-        setIsPro(true);
       } else {
         setUser(null);
-        setIsPro(false);
       }
       setAuthLoading(false);
     });

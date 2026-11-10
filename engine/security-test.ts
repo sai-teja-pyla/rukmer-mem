@@ -17,6 +17,7 @@ delete process.env.MEMORY_DATA_KEY;
 delete process.env.MEMORY_RATE_LIMIT;
 delete process.env.SLACK_SIGNING_SECRET;
 delete process.env.SLACK_ALLOW_UNSIGNED;
+delete process.env.ENABLE_DEBUG_ROUTES;
 
 const { mountMemoryEngine } = await import('./routes.js');
 const { securityMiddleware, checkUpload, slackSignatureOk, resetRateLimits } = await import('./security.js');
@@ -62,7 +63,7 @@ check('security status is public', health.status === 200 && health.body.rateLimi
 check('health sets frame denial', health.headers.get('x-frame-options') === 'DENY');
 check('health sets nosniff', health.headers.get('x-content-type-options') === 'nosniff');
 const open = await hit('/v4/security');
-check('control report is public', open.status === 200 && open.body.identity === 'session' && open.body.debugMode === true);
+check('control report is public', open.status === 200 && open.body.identity === 'session' && open.body.debugMode === false);
 
 const evil = await hit('/health', { headers: { Origin: 'https://evil.example' } });
 check('unknown origin is not echoed', !evil.headers.get('access-control-allow-origin'));

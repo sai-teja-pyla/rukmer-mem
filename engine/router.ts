@@ -49,7 +49,7 @@ export function providerFromModel(model: string): Provider {
 
 export function providerStatus() {
   return {
-    gemini: !!(process.env.GEMINI_API_KEY || process.env.VITE_GEMINI_API_KEY),
+    gemini: !!process.env.GEMINI_API_KEY,
     openai: !!process.env.OPENAI_API_KEY,
     anthropic: !!process.env.ANTHROPIC_API_KEY,
     grok: !!(process.env.XAI_API_KEY || process.env.GROK_API_KEY),
@@ -65,7 +65,7 @@ function keyFor(provider: Provider, req: Request) {
     return header(req, 'x-anthropic-key') || header(req, 'x-api-key') || process.env.ANTHROPIC_API_KEY || '';
   }
   if (provider === 'gemini') {
-    return header(req, 'x-gemini-key') || header(req, 'x-goog-api-key') || process.env.GEMINI_API_KEY || process.env.VITE_GEMINI_API_KEY || '';
+    return header(req, 'x-gemini-key') || header(req, 'x-goog-api-key') || process.env.GEMINI_API_KEY || '';
   }
   return header(req, 'x-grok-key') || header(req, 'x-xai-key') || token || process.env.XAI_API_KEY || process.env.GROK_API_KEY || '';
 }

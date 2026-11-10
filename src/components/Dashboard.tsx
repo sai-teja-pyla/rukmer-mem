@@ -26,26 +26,6 @@ interface DashboardProps {
   isPro: boolean;
 }
 
-async function callGemini(prompt: string): Promise<string> {
-  try {
-    const apiKey = ((import.meta as any).env as any).VITE_GEMINI_API_KEY;
-    if (!apiKey) throw new Error('Missing VITE_GEMINI_API_KEY');
-    const { GoogleGenerativeAI } = await import("@google/generative-ai");
-    const genAI = new GoogleGenerativeAI(apiKey);
-    const model = genAI.getGenerativeModel({
-      model: "gemini-2.5-pro",
-      systemInstruction: "You are Rukmer, a friendly workplace companion. Be helpful, conversational, and use a touch of wit."
-    });
-    const result = await model.generateContent({
-      contents: [{ role: 'user', parts: [{ text: prompt }] }],
-      generationConfig: { temperature: 0.7 }
-    });
-    return (await result.response).text();
-  } catch {
-    return "Ouch, my brain stalled for a second! Try asking me that again?";
-  }
-}
-
 type ViewState = 'home' | 'chat';
 type SidebarState = 'none' | 'history' | 'apps';
 
@@ -201,12 +181,15 @@ export default function Dashboard({ user, isPro }: DashboardProps) {
         await setDoc(connRef, { [appId]: false }, { merge: true });
       }
     } else {
-      const backendUrl = window.location.origin;
-      if (['outlook', 'onedrive', 'teams'].includes(appId)) {
-        window.location.href = `${backendUrl}/api/auth/microsoft?userId=${user.uid}&type=${appId}`;
-      } else {
-        window.location.href = `${backendUrl}/api/auth/${appId}?userId=${user.uid}`;
-      }
+      const idToken = await auth.currentUser?.getIdToken();
+      if (!idToken) return;
+      const start = ['outlook', 'onedrive', 'teams'].includes(appId)
+        ? `/api/auth/microsoft?type=${encodeURIComponent(appId)}`
+        : `/api/auth/${encodeURIComponent(appId)}`;
+      const res = await fetch(start, { headers: { Authorization: `Bearer ${idToken}` } });
+      if (!res.ok) return;
+      const data = await res.json().catch(() => null);
+      if (data?.url) window.location.href = data.url;
     }
   };
 
