@@ -25,6 +25,7 @@ import { buildMemoryInjection } from './inject.js';
 import { canAccessTag, homeTag, ownsTag, scopeFromTag, uidFromTag } from './tenancy.js';
 import { checkUpload, sanitizeName, sanitizePlain } from './security.js';
 import { ensureIndex, rankTagged, tagCount, vectorDim, type MetaFilter, type Retrieval } from './search-index.js';
+import { selectMemories } from './relevance.js';
 import { assignGovernance, audit, canRead, eraseBulk, eraseMemory, findMemory, govOf, prepareWrite, teamContainer } from './governance.js';
 
 export type SearchOpts = {
@@ -393,7 +394,7 @@ export async function searchMemory(query: string, opts: SearchOpts = {}) {
         .sort((a, b) => b.score - a.score),
     };
   }
-  const matches = ranked.ranked.map((r) => ({
+  const rankedMatches = ranked.ranked.map((r) => ({
     id: r.id,
     docId: r.docId,
     title: r.title || 'Untitled',
@@ -406,6 +407,7 @@ export async function searchMemory(query: string, opts: SearchOpts = {}) {
     temporal: r.temporal,
     occurredAt: r.occurredAt,
   }));
+  const matches = selectMemories(qRaw || q, rankedMatches, { strictness: strict, topK });
   if (opts.actorId) {
     for (const match of matches.slice(0, 25)) {
       audit({
@@ -460,7 +462,22 @@ export async function commitImportantMemory(input: {
       .catch(() => undefined);
   }
   const triples = (graph.triples || []).filter(isUsefulFact);
-  if (!triples.length) return { skipped: true, reason: 'no-facts', facts: 0, document: null };
+  if (!triples.length) {
+    const doc = await ingestDocument({
+      title: input.title || raw.slice(0, 80),
+      text: raw,
+      containerTag: tag,
+      source: input.source || 'memory',
+      mime: 'text/plain',
+      task: 'memory',
+      extract: false,
+      actorId: input.actorId,
+      visibility: input.visibility,
+      memoryKind: 'context',
+    });
+    noteConversation(tag, raw);
+    return { saved: true, skipped: false, type: 'raw', facts: 0, document: doc.document, chunks: doc.chunks };
+  }
   const text = triples
     .map((t) => `${t.subject} ${String(t.predicate).replace(/_/g, ' ')} ${t.object}.`)
     .join('\n');

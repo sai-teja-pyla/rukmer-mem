@@ -94,8 +94,8 @@ export function GeneralSettingsPage() {
         <Row label="Organization ID" hint="Used in CLI and API calls.">
           <CopyField value={orgId} />
         </Row>
-        <Row label="Require two-factor for all members" hint="Included for every account in private beta.">
-          <span className="text-[13px] text-zinc-400">Included</span>
+        <Row label="Require two-factor for all members" hint="Authenticator codes are not available in private beta.">
+          <span className="text-[13px] text-zinc-400">Not in private beta</span>
         </Row>
         <Row label="Organization context" hint="Filters what gets stored during ingestion, guided by a description of your organization.">
           <Toggle

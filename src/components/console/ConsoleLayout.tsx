@@ -31,6 +31,7 @@ import { auth } from '../../firebase';
 import type { LucideIcon } from 'lucide-react';
 import type { UserProfile } from '../../types';
 import { useUserSettings } from '../../hooks/useUserSettings';
+import { WHATS_NEW } from '../../content/whatsNew';
 
 interface ConsoleLayoutProps {
   user: UserProfile;
@@ -195,19 +196,22 @@ export default function ConsoleLayout({ user }: ConsoleLayoutProps) {
             </NavLink>
           );
         })}
+        {query.trim() && filtered.length === 0 ? (
+          <p className="px-2.5 py-2 text-[13px] text-zinc-500">No results</p>
+        ) : null}
       </nav>
 
       <div className="px-3 pb-3 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
-        <div className="rounded-xl border border-white/[0.06] bg-[#121214] p-3 mb-3 hidden sm:block">
-          <div className="flex items-center justify-between mb-1">
-            <p className="text-[11px] font-medium text-zinc-400">What's new</p>
-            <p className="text-[10px] text-zinc-600">Sep 14</p>
+        {WHATS_NEW[0] ? (
+          <div className="rounded-xl border border-white/[0.06] bg-[#121214] p-3 mb-3 hidden sm:block">
+            <div className="flex items-center justify-between mb-1">
+              <p className="text-[11px] font-medium text-zinc-400">What's new</p>
+              <p className="text-[10px] text-zinc-600">{new Date(`${WHATS_NEW[0].date}T00:00:00`).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}</p>
+            </div>
+            <p className="text-[12.5px] font-medium text-zinc-100 leading-snug">{WHATS_NEW[0].title}</p>
+            <p className="text-[11.5px] text-zinc-500 mt-1 leading-snug">{WHATS_NEW[0].body}</p>
           </div>
-          <p className="text-[12.5px] font-medium text-zinc-100 leading-snug">A new console sidebar</p>
-          <p className="text-[11.5px] text-zinc-500 mt-1 leading-snug">
-            Grouped navigation, a settings panel of its own, and documents browsed.
-          </p>
-        </div>
+        ) : null}
 
         <div className="relative">
           <button

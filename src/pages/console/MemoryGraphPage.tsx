@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useOutletContext } from 'react-router-dom';
 import { Brain, Calendar, ChevronDown, Eye, X } from 'lucide-react';
 import { engine } from '../../services/engineClient';
+import { countMemories } from '../../services/memoryCount';
 import { homeTag as makeHomeTag } from '../../services/tenancy';
 import type { UserProfile } from '../../types';
 
@@ -239,6 +240,7 @@ export default function MemoryGraphPage() {
   const ctx = useOutletContext<{ user: UserProfile; homeTag: string }>();
   const homeTag = ctx?.homeTag || (ctx?.user?.uid ? makeHomeTag(ctx.user.uid) : '');
   const [graph, setGraph] = useState<GraphData>({ nodes: [], edges: [], tags: [] });
+  const [tagRows, setTagRows] = useState<{ tag: string; memories: number }[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [space, setSpace] = useState('all');
   const [menuOpen, setMenuOpen] = useState(false);
@@ -254,10 +256,10 @@ export default function MemoryGraphPage() {
       setLoading(false);
       return;
     }
-    engine
-      .graph()
-      .then((data) => {
+    Promise.all([engine.graph(), engine.tags()])
+      .then(([data, tags]) => {
         setGraph({ nodes: data.nodes || [], edges: data.edges || [], tags: data.tags || [] });
+        setTagRows(tags.tags || []);
         setError('');
       })
       .catch((e) => setError(e.message || 'Could not load graph'))
@@ -267,7 +269,12 @@ export default function MemoryGraphPage() {
   useEffect(() => {
     load();
     const t = setInterval(load, 8000);
-    return () => clearInterval(t);
+    const onFocus = () => load();
+    window.addEventListener('focus', onFocus);
+    return () => {
+      clearInterval(t);
+      window.removeEventListener('focus', onFocus);
+    };
   }, [load]);
 
   useEffect(() => {
@@ -310,7 +317,7 @@ export default function MemoryGraphPage() {
   }, [orbit, selectedId]);
 
   const selected = visible.find((n) => n.id === selectedId) || graph.nodes.find((n) => n.id === selectedId) || null;
-  const memoryCount = memories.length;
+  const memoryCount = countMemories(tagRows, space);
   const spaceLabel = space === 'all' ? 'All Spaces' : space;
   const hasPlot = orbit.length > 0 || !!hub;
 
