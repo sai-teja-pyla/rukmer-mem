@@ -117,6 +117,7 @@ export interface ApiKeyRec {
   createdAt: string;
   lastUsed: string | null;
   ownerUid?: string;
+  connector?: string;
 }
 
 export interface RequestRec {
@@ -292,6 +293,8 @@ export function decodeState(raw: string): Partial<EngineState> {
 
 let state: EngineState = empty();
 let gcsTimer: ReturnType<typeof setTimeout> | null = null;
+let gcsGeneration = 0;
+let gcsMergeAt = 0;
 
 function gcsTarget() {
   const bucket = process.env.MEMORY_GCS_BUCKET || (process.env.K_SERVICE ? 'rukmer-saas-data' : '');
@@ -299,40 +302,84 @@ function gcsTarget() {
   return bucket ? { bucket, object } : null;
 }
 
-async function pullGcs() {
+function gcsFile() {
   const target = gcsTarget();
-  if (!target) return;
+  if (!target) return null;
+  return import('@google-cloud/storage').then(({ Storage }) => new Storage().bucket(target.bucket).file(target.object));
+}
+
+async function pullGcs() {
+  const file = await gcsFile();
+  if (!file) return;
   try {
-    const { Storage } = await import('@google-cloud/storage');
-    const [buf] = await new Storage().bucket(target.bucket).file(target.object).download();
+    const [buf] = await file.download();
+    const [meta] = await file.getMetadata();
+    gcsGeneration = Number(meta.generation || 0);
     state = { ...empty(), ...decodeState(buf.toString('utf8')) };
   } catch {
     /* first run or no object yet */
   }
 }
 
-async function pushGcs() {
-  const target = gcsTarget();
-  if (!target) return;
+/** Pull API keys written by another instance without replacing newer local memory. */
+export async function mergeRemoteApiKeys() {
+  if (Date.now() - gcsMergeAt < 3000) return;
+  gcsMergeAt = Date.now();
+  const file = await gcsFile();
+  if (!file) return;
   try {
-    const { Storage } = await import('@google-cloud/storage');
-    await new Storage().bucket(target.bucket).file(target.object).save(encodeState(state), {
-      contentType: 'application/json',
-    });
-  } catch (err) {
-    console.warn('memory gcs save skipped', (err as Error).message);
+    const [buf] = await file.download();
+    const [meta] = await file.getMetadata();
+    gcsGeneration = Number(meta.generation || gcsGeneration || 0);
+    const remote = decodeState(buf.toString('utf8'));
+    const seen = new Set(state.apiKeys.map((k) => k.hash));
+    for (const key of remote.apiKeys || []) {
+      if (key?.hash && !seen.has(key.hash)) state.apiKeys.push(key);
+    }
+  } catch {
+    /* object missing */
   }
 }
 
-export async function loadState() {
+async function pushGcs(attempt = 0): Promise<boolean> {
+  const file = await gcsFile();
+  if (!file) return true;
   try {
-    if (fs.existsSync(DATA_FILE)) {
-      state = { ...empty(), ...decodeState(fs.readFileSync(DATA_FILE, 'utf8')) };
+    await file.save(encodeState(state), {
+      contentType: 'application/json',
+      resumable: false,
+      preconditionOpts: { ifGenerationMatch: gcsGeneration },
+    });
+    const [meta] = await file.getMetadata();
+    gcsGeneration = Number(meta.generation || 0);
+    return true;
+  } catch (err) {
+    const code = Number((err as { code?: number }).code || 0);
+    if (code === 412 && attempt < 3) {
+      try {
+        const [buf] = await file.download();
+        const [meta] = await file.getMetadata();
+        const remote = decodeState(buf.toString('utf8'));
+        gcsGeneration = Number(meta.generation || 0);
+        if (Number(remote.rev || 0) < Number(state.rev || 0)) return pushGcs(attempt + 1);
+        const seen = new Set((remote.apiKeys || []).map((k) => k.hash));
+        for (const key of state.apiKeys) {
+          if (key?.hash && !seen.has(key.hash)) (remote.apiKeys = remote.apiKeys || []).push(key);
+        }
+        state = { ...empty(), ...remote };
+        shapeState();
+        return false;
+      } catch (inner) {
+        console.warn('memory gcs conflict', (inner as Error).message);
+        return false;
+      }
     }
-  } catch {
-    state = empty();
+    console.warn('memory gcs save skipped', (err as Error).message);
+    return false;
   }
-  await pullGcs();
+}
+
+function shapeState() {
   state.triples = (state.triples || []).map(normalizeTriple);
   state.oauthClients = state.oauthClients || [];
   state.oauthCodes = state.oauthCodes || [];
@@ -346,7 +393,24 @@ export async function loadState() {
   state.redactionPolicies = state.redactionPolicies || [];
   state.audit = state.audit || [];
   state.erasures = state.erasures || [];
+  state.documents = state.documents || [];
+  state.chunks = state.chunks || [];
+  state.entities = state.entities || [];
+  state.requests = state.requests || [];
+  state.jobs = state.jobs || [];
   state.rev = state.rev || 0;
+}
+
+export async function loadState() {
+  try {
+    if (fs.existsSync(DATA_FILE)) {
+      state = { ...empty(), ...decodeState(fs.readFileSync(DATA_FILE, 'utf8')) };
+    }
+  } catch {
+    state = empty();
+  }
+  await pullGcs();
+  shapeState();
 }
 
 function writeLocal() {
@@ -375,7 +439,8 @@ export async function persistNow() {
     clearTimeout(gcsTimer);
     gcsTimer = null;
   }
-  await pushGcs();
+  const saved = await pushGcs();
+  if (!saved && process.env.K_SERVICE) throw new Error('Memory store could not be saved');
 }
 
 export function getState() {

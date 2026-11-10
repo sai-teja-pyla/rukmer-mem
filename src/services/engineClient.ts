@@ -80,6 +80,8 @@ export const engine = {
   complete: (body: any, headers?: Record<string, string>) =>
     req('/v1/chat/completions', { method: 'POST', headers, body: JSON.stringify(body) }),
   importConnector: (body: any) => req('/v4/connectors/import', { method: 'POST', body: JSON.stringify(body) }),
+  connectorApps: () => req('/v4/connectors/apps'),
+  disconnectConnector: (app: string) => req('/v4/connectors/disconnect', { method: 'POST', body: JSON.stringify({ app }) }),
   createOrg: (name: string) => req('/v4/orgs', { method: 'POST', body: JSON.stringify({ name }) }),
   closeSession: (sessionId: string) => req('/v4/sessions/close', { method: 'POST', body: JSON.stringify({ sessionId }) }),
 };

@@ -36,7 +36,8 @@ import { homeTag, resolveScopeTag } from './tenancy.js';
 import { addOrgMember, closeSession, createOrg, listOrgs, scopeTagsFor } from './scopes.js';
 import { importConnector } from './connectors.js';
 import { applyDecay, buildProfile } from './memory.js';
-import { mountOauth } from './oauth.js';
+import { connectedAppsFor, mountOauth } from './oauth.js';
+import { findKey, forgetKey, keysAreDurable, keysFor, rememberKey, syncStoredKeys } from './keys.js';
 import {
   addTeamMember,
   audit,
@@ -104,6 +105,7 @@ export async function bootMemoryEngine() {
     }
   }
   if (isProduction() && !encryptionAtRest()) console.warn(encryptionWarning());
+  void syncStoredKeys().catch((err) => console.warn('api key sync skipped', (err as Error).message));
   void warmFactEmbeddings().catch(() => undefined);
   return stats();
 }
@@ -525,6 +527,34 @@ export function mountMemoryEngine(app: Express) {
     }
   });
 
+  app.get('/v4/connectors/apps', (req, res) => {
+    try {
+      res.json({ apps: connectedAppsFor(uidOf(req)) });
+    } catch (e: any) {
+      fail(res, e);
+    }
+  });
+
+  app.post('/v4/connectors/disconnect', async (req, res) => {
+    try {
+      const uid = uidOf(req);
+      const app = String(req.body?.app || '');
+      if (!['claude', 'chatgpt', 'grok', 'gemini'].includes(app)) {
+        return res.status(400).json({ error: 'Unknown app' });
+      }
+      const state = getState();
+      const before = state.apiKeys.length;
+      state.apiKeys = state.apiKeys.filter((k) => !(k.ownerUid === uid && k.connector === app));
+      if (state.apiKeys.length !== before) {
+        audit({ actorId: uid, action: 'retain', memoryId: app, tenantId: homeTag(uid), detail: 'connector-disconnected result=ok' });
+        await persistNow();
+      }
+      res.json({ ok: true, apps: connectedAppsFor(uid) });
+    } catch (e: any) {
+      fail(res, e);
+    }
+  });
+
   app.post('/v4/connectors/import', async (req, res) => {
     try {
       const out = await importConnector({
@@ -641,20 +671,19 @@ export function mountMemoryEngine(app: Express) {
     }
   });
 
-  app.get('/v3/keys', (req, res) => {
+  app.get('/v3/keys', async (req, res) => {
     try {
       const uid = uidOf(req);
+      const keys = await keysFor(uid);
       res.json({
-        keys: getState()
-          .apiKeys.filter((k) => k.ownerUid === uid)
-          .map((k) => ({
-            id: k.id,
-            name: k.name,
-            prefix: k.prefix,
-            createdAt: k.createdAt,
-            lastUsed: k.lastUsed,
-            expires: 'Never',
-          })),
+        keys: keys.map((k) => ({
+          id: k.id,
+          name: k.name,
+          prefix: k.prefix,
+          createdAt: k.createdAt,
+          lastUsed: k.lastUsed,
+          expires: 'Never',
+        })),
       });
     } catch (e: any) {
       fail(res, e);
@@ -666,7 +695,7 @@ export function mountMemoryEngine(app: Express) {
       const uid = uidOf(req);
       const secret = String(req.body?.secret || '').trim();
       if (!secret.startsWith('rk_live_')) return res.status(401).json({ ok: false, error: 'Invalid API key' });
-      const rec = getState().apiKeys.find((k) => k.hash === sha(secret));
+      const rec = await findKey(secret);
       if (!rec || !rec.ownerUid || rec.ownerUid !== uid) return res.status(401).json({ ok: false, error: 'Invalid API key' });
       res.json({ ok: true, uid, homeTag: homeTag(uid), via: 'apikey', name: rec.name });
     } catch (e: any) {
@@ -678,10 +707,10 @@ export function mountMemoryEngine(app: Express) {
   app.delete('/v3/keys/:id', async (req, res) => {
     try {
       const uid = uidOf(req);
-      const state = getState();
-      const index = state.apiKeys.findIndex((k) => k.id === req.params.id && k.ownerUid === uid);
-      if (index < 0) return res.status(404).json({ error: 'Key not found' });
-      state.apiKeys.splice(index, 1);
+      const owned = await keysFor(uid);
+      const rec = owned.find((k) => k.id === req.params.id);
+      if (!rec) return res.status(404).json({ error: 'Key not found' });
+      await forgetKey(rec.hash);
       audit({ actorId: uid, action: 'retain', memoryId: String(req.params.id), tenantId: homeTag(uid), detail: 'api-key-revoked result=ok' });
       await persistNow();
       res.json({ ok: true });
@@ -703,9 +732,14 @@ export function mountMemoryEngine(app: Express) {
         lastUsed: null,
         ownerUid,
       };
-      getState().apiKeys.push(rec);
+      await rememberKey(rec);
       audit({ actorId: ownerUid, action: 'retain', memoryId: rec.id, tenantId: homeTag(ownerUid), detail: 'api-key-created result=ok' });
-      await persistNow();
+      try {
+        await persistNow();
+      } catch (err) {
+        if (!keysAreDurable()) throw err;
+        console.warn('api key saved; shared json copy lagged', (err as Error).message);
+      }
       res.json({ ...rec, secret, scope: 'Full' });
     } catch (e: any) {
       fail(res, e);

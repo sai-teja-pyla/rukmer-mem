@@ -1,5 +1,3 @@
-const STORAGE_KEY = 'rukmer.aiConnectors';
-
 export type AiAppId = 'claude' | 'chatgpt' | 'gemini' | 'grok';
 
 export function mcpUrl() {
@@ -19,20 +17,10 @@ export function openApiUrl() {
   return `${window.location.origin}/v4/openai.json`;
 }
 
-export function loadConnectedApps(): AiAppId[] {
+export function clearStoredConnectorFlags() {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    const parsed = raw ? JSON.parse(raw) : [];
-    return Array.isArray(parsed) ? parsed : [];
+    localStorage.removeItem('rukmer.aiConnectors');
   } catch {
-    return [];
+    /* ignore */
   }
-}
-
-export function setAppConnected(id: AiAppId, on: boolean) {
-  const next = new Set(loadConnectedApps());
-  if (on) next.add(id);
-  else next.delete(id);
-  localStorage.setItem(STORAGE_KEY, JSON.stringify([...next]));
-  return [...next];
 }

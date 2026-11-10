@@ -1,6 +1,5 @@
 import type { NextFunction, Request, Response } from 'express';
-import { getState } from './core.js';
-import { sha } from './core.js';
+import { findKey, touchKey } from './keys.js';
 import { sanitizeUid } from './tenancy.js';
 import { mcpUnauthorized } from './oauth.js';
 
@@ -97,21 +96,21 @@ async function verifyFirebase(token: string): Promise<TokenCheck> {
   return toolkit.status === 'unavailable' && admin.status === 'unavailable' ? admin : toolkit;
 }
 
-function uidFromApiKey(token: string) {
+async function uidFromApiKey(token: string) {
   const raw = token.trim();
   if (!raw.startsWith('rk_live_')) return '';
-  const rec = getState().apiKeys.find((k) => k.hash === sha(raw) || k.hash === sha(raw.trim()));
+  const rec = await findKey(raw);
   if (!rec) return '';
-  rec.lastUsed = new Date().toISOString();
   const uid = sanitizeUid(rec.ownerUid || '');
   if (!uid) return '';
+  void touchKey(rec.hash);
   return uid;
 }
 
 export async function resolveIdentity(req: Request): Promise<MemoryUser> {
   const token = extractAccessToken(req);
   if (token.startsWith('rk_live_')) {
-    const uid = uidFromApiKey(token);
+    const uid = await uidFromApiKey(token);
     if (!uid) throw Object.assign(new Error('Invalid API key'), { status: 401 });
     return { uid, via: 'apikey' };
   }

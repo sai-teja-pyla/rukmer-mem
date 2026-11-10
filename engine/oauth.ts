@@ -1,6 +1,7 @@
 import crypto from 'crypto';
 import type { Express, Request, Response } from 'express';
 import { getState, persistNow, sha, uid, type OauthClientRec, type OauthCodeRec } from './core.js';
+import { rememberKey } from './keys.js';
 import { ALLOWED_ORIGINS } from './security.js';
 
 const ALLOWED_REDIRECT = [
@@ -84,6 +85,29 @@ function asMeta(req: Request) {
 function bodyOf(req: Request) {
   const b = req.body && typeof req.body === 'object' ? req.body : {};
   return b as Record<string, any>;
+}
+
+const CONNECTOR_APPS = ['claude', 'chatgpt', 'grok', 'gemini'] as const;
+export type ConnectorApp = (typeof CONNECTOR_APPS)[number];
+
+export function connectorFromRedirect(redirectUri: string): ConnectorApp | '' {
+  let host = '';
+  try {
+    host = new URL(redirectUri).hostname.toLowerCase();
+  } catch {
+    return '';
+  }
+  const is = (root: string) => host === root || host.endsWith('.' + root);
+  if (is('claude.ai') || is('claude.com') || is('anthropic.com')) return 'claude';
+  if (is('chatgpt.com') || is('openai.com')) return 'chatgpt';
+  if (is('grok.com') || is('x.ai')) return 'grok';
+  if (is('gemini.google.com') || is('aistudio.google.com') || is('makersuite.google.com')) return 'gemini';
+  return '';
+}
+
+export function connectedAppsFor(uid: string): ConnectorApp[] {
+  const keys = getState().apiKeys.filter((k) => k.ownerUid === uid && k.connector);
+  return CONNECTOR_APPS.filter((id) => keys.some((k) => k.connector === id));
 }
 
 export function mountOauth(app: Express) {
@@ -208,14 +232,16 @@ export function mountOauth(app: Express) {
       }
     }
     const secret = 'rk_live_' + crypto.randomBytes(18).toString('hex');
-    stateNow.apiKeys.push({
+    const connector = connectorFromRedirect(rec.redirectUri);
+    await rememberKey({
       id: uid('key'),
-      name: 'OAuth connector',
+      name: connector ? `OAuth ${connector}` : 'OAuth connector',
       prefix: secret.slice(0, 12) + '…',
       hash: sha(secret.trim()),
       createdAt: new Date().toISOString(),
       lastUsed: new Date().toISOString(),
       ownerUid: rec.uid,
+      connector: connector || undefined,
     });
     await persistNow();
     res.json({

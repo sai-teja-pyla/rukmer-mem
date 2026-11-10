@@ -2,10 +2,9 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { Search, ChevronRight, Copy, Check, ExternalLink } from 'lucide-react';
 import { PageHeader, DocLink, Panel, GhostButton, PrimaryButton } from '../../components/console/ui';
 import {
-  loadConnectedApps,
+  clearStoredConnectorFlags,
   mcpUrlWithKey,
   openApiUrl,
-  setAppConnected,
   type AiAppId,
 } from '../../services/aiConnectors';
 import { engine } from '../../services/engineClient';
@@ -106,7 +105,7 @@ export default function ConnectorsPage() {
   const [tab, setTab] = useState<'ai' | 'all' | Kind>('ai');
   const [q, setQ] = useState('');
   const [copied, setCopied] = useState<string | null>(null);
-  const [connected, setConnected] = useState<AiAppId[]>(() => loadConnectedApps());
+  const [connected, setConnected] = useState<AiAppId[]>([]);
   const [key, setKey] = useState('');
   const [readyKey, setReadyKey] = useState('');
   const [busyApp, setBusyApp] = useState<AiAppId | null>(null);
@@ -118,12 +117,32 @@ export default function ConnectorsPage() {
   const keyed = mcpUrlWithKey(liveKey);
   const spec = openApiUrl();
 
+  const refreshConnected = async () => {
+    clearStoredConnectorFlags();
+    try {
+      const data = await engine.connectorApps();
+      const allowed = new Set<AiAppId>(['claude', 'chatgpt', 'grok', 'gemini']);
+      const apps = (Array.isArray(data?.apps) ? data.apps : []).filter((id: string): id is AiAppId => allowed.has(id as AiAppId));
+      setConnected(apps);
+    } catch {
+      setConnected([]);
+    }
+  };
+
   useEffect(() => {
     const saved = sessionStorage.getItem('rukmer.mcpKey') || '';
     if (saved.startsWith('rk_live_')) {
       setReadyKey(saved);
       setKey(saved);
     }
+    void refreshConnected();
+    const onFocus = () => void refreshConnected();
+    window.addEventListener('focus', onFocus);
+    document.addEventListener('visibilitychange', onFocus);
+    return () => {
+      window.removeEventListener('focus', onFocus);
+      document.removeEventListener('visibilitychange', onFocus);
+    };
   }, []);
 
   const copy = async (id: string, text: string) => {
@@ -161,14 +180,13 @@ export default function ConnectorsPage() {
       } else if (app.id === 'chatgpt') {
         await copy('chatgpt-mcp', withKey);
         window.open(app.open, '_blank', 'noreferrer');
-        setConnectNote('Copied the MCP URL and opened ChatGPT. Add a connector, then Allow Rukmer.');
+        setConnectNote('Copied the MCP URL and opened ChatGPT. This stays Off until you Allow Rukmer.');
       } else {
         await copy(`${app.id}-mcp`, withKey);
         window.open(app.open, '_blank', 'noreferrer');
-        setConnectNote(`Copied the MCP URL and opened ${app.name}. Add the connector, then Allow Rukmer.`);
+        setConnectNote(`Copied the MCP URL and opened ${app.name}. This stays Off until you Allow Rukmer.`);
       }
-      const next = setAppConnected(app.id, true);
-      setConnected(next);
+      await refreshConnected();
     } catch (err: any) {
       setConnectNote(err.message || 'Could not start the connection');
     } finally {
@@ -320,7 +338,15 @@ export default function ConnectorsPage() {
                   {on && (
                     <GhostButton
                       onClick={() => {
-                        setConnected(setAppConnected(app.id, false));
+                        void engine.disconnectConnector(app.id).then((data) => {
+                          const allowed = new Set<AiAppId>(['claude', 'chatgpt', 'grok', 'gemini']);
+                          const apps = (Array.isArray(data?.apps) ? data.apps : []).filter((id: string): id is AiAppId =>
+                            allowed.has(id as AiAppId)
+                          );
+                          setConnected(apps);
+                        }).catch((err: any) => {
+                          setConnectNote(err.message || 'Could not disconnect');
+                        });
                       }}
                     >
                       Disconnect
