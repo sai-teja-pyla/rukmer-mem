@@ -43,7 +43,7 @@ export const sendWelcomeEmail = async (userEmail, userName) => {
   }
 };
 
-const LOI_COPY_TO = 'saiteja@rukmer.com';
+const LOI_COPY_TO = ['saiteja@rukmer.com', 'suren@rukmer.com'];
 
 function letterText() {
   const body = LOI_BLOCKS.map((block) => {
@@ -53,7 +53,7 @@ function letterText() {
   return `${LOI_TITLE}\nVersion ${LOI_VERSION}\n\n${body}\n\nRukmer Inc.\n25 N New Jersey St\nIndianapolis, IN 46204\n\nCustomer\nAccepted electronically upon account creation.`;
 }
 
-/** Sends the founder a stored copy of the letter the customer just accepted. */
+/** Sends the founders a stored copy of the letter the customer just accepted. */
 export const sendLoiCopy = async (input: {
   name: string;
   email: string;
