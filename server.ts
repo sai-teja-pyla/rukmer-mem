@@ -28,6 +28,7 @@ import { consumeOauthState, firestoreOauthStore, issueOauthState, oauthStateSecr
 import { linesVisibleInChannel, slackAccountForMention } from './engine/channelReply.js';
 import { geminiPrompt } from './engine/llm.js';
 import { searchMemory } from './engine/pipeline.js';
+import { gmailMemoryCount, saveGmailMessages, type GmailDraft } from './engine/gmailSync.js';
 import { findMemory } from './engine/governance.js';
 import { homeTag } from './engine/tenancy.js';
 import { isProPlan } from './src/services/plan.js';
@@ -1522,6 +1523,56 @@ app.get('/api/teams/debug-auth', hideUnlessDebug, async (req: any, res: any) => 
 });
 // ────────────────────────────────────────────────────────────────────────────
 
+function gmailPlainText(payload: any): string {
+  if (!payload) return '';
+  const decode = (data: string) => Buffer.from(data.replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf-8');
+  if (payload.mimeType === 'text/plain' && payload.body?.data) return decode(payload.body.data);
+  for (const part of payload.parts || []) {
+    const text = gmailPlainText(part);
+    if (text) return text;
+  }
+  return '';
+}
+
+async function importRecentGmail(userId: string) {
+  const tokenDoc = await admin.firestore().collection('userTokens').doc(userId).get();
+  const stored = tokenDoc.data()?.google;
+  if (!stored?.access_token && !stored?.refresh_token) {
+    throw Object.assign(new Error('Gmail is not connected'), { status: 400 });
+  }
+  const auth = new google.auth.OAuth2(
+    process.env.GOOGLE_CLIENT_ID,
+    process.env.GOOGLE_CLIENT_SECRET,
+    `${CURRENT_BACKEND_URL}/api/auth/google/callback`
+  );
+  auth.setCredentials(stored);
+  auth.on('tokens', (fresh) => {
+    void admin.firestore().collection('userTokens').doc(userId).set({ google: { ...stored, ...fresh } }, { merge: true });
+  });
+  const gmail = google.gmail({ version: 'v1', auth });
+  const listed = await gmail.users.messages.list({
+    userId: 'me',
+    maxResults: 15,
+    q: 'in:inbox newer_than:30d -category:promotions -category:social',
+  });
+  const drafts: GmailDraft[] = [];
+  for (const row of listed.data.messages || []) {
+    if (!row.id) continue;
+    const detail = await gmail.users.messages.get({ userId: 'me', id: row.id, format: 'full' });
+    const headers = detail.data.payload?.headers || [];
+    const header = (name: string) => headers.find((item) => item.name?.toLowerCase() === name.toLowerCase())?.value || '';
+    drafts.push({
+      id: row.id,
+      threadId: detail.data.threadId || row.id,
+      subject: header('Subject') || '(No subject)',
+      from: header('From') || '(Unknown sender)',
+      date: header('Date'),
+      body: gmailPlainText(detail.data.payload) || detail.data.snippet || '',
+    });
+  }
+  return saveGmailMessages(userId, drafts);
+}
+
 async function beginGoogle(req: any, res: any, type: string) {
   const userId = sessionUid(req, res, req.query.userId);
   if (!userId) return;
@@ -1536,14 +1587,52 @@ async function beginGoogle(req: any, res: any, type: string) {
     res.status(err.status || 503).json({ error: err.message || 'OAuth state secret is not configured' });
     return;
   }
-  const url = oauth2Client.generateAuthUrl({
-    access_type: 'offline',
-    prompt: 'consent',
-    scope: scopes,
-    state: state
-  });
-  res.json({ url });
+  if (!process.env.GOOGLE_CLIENT_ID || !process.env.GOOGLE_CLIENT_SECRET) {
+    res.status(503).json({ error: 'Google sign-in is not configured on this server' });
+    return;
+  }
+  try {
+    const url = oauth2Client.generateAuthUrl({
+      access_type: 'offline',
+      prompt: 'consent',
+      scope: scopes,
+      state: state,
+    });
+    res.json({ url });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || 'Could not start Gmail' });
+  }
 }
+
+app.get('/api/connectors/gmail', authenticateUser, async (req: any, res: any) => {
+  const userId = sessionUid(req, res);
+  if (!userId) return;
+  try {
+    const tokenDoc = await admin.firestore().collection('userTokens').doc(userId).get();
+    const googleTokens = tokenDoc.data()?.google;
+    res.json({ connected: !!(googleTokens?.refresh_token || googleTokens?.access_token), items: gmailMemoryCount(userId) });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || 'Could not read Gmail' });
+  }
+});
+
+app.post('/api/connectors/gmail/sync', authenticateUser, async (req: any, res: any) => {
+  const userId = sessionUid(req, res);
+  if (!userId) return;
+  try {
+    res.json(await importRecentGmail(userId));
+  } catch (err: any) {
+    res.status(err.status || 500).json({ error: err.message || 'Could not sync Gmail' });
+  }
+});
+
+app.post('/api/connectors/gmail/disconnect', authenticateUser, async (req: any, res: any) => {
+  const userId = sessionUid(req, res);
+  if (!userId) return;
+  await admin.firestore().collection('userTokens').doc(userId).set({ google: admin.firestore.FieldValue.delete() }, { merge: true });
+  await admin.firestore().collection('userConnections').doc(userId).set({ gmail: false }, { merge: true });
+  res.json({ connected: false, items: gmailMemoryCount(userId) });
+});
 
 app.get('/api/auth/google', authenticateUser, (req: any, res: any) => beginGoogle(req, res, String(req.query.type || 'gdrive')));
 app.get('/api/auth/gmail', authenticateUser, (req: any, res: any) => beginGoogle(req, res, 'gmail'));
@@ -1573,10 +1662,18 @@ app.get('/api/auth/google/callback', async (req: any, res: any) => {
       [type]: true, // Assuming GDrive/GCS are grouped for your UI
     }, { merge: true });
 
-    // Fire-and-forget RAG ingestion so Pinecone is populated immediately after connecting
+    const front = `${IS_PROD ? 'https://app.rukmer.com' : 'http://localhost:5173'}/connectors`;
+    if (type === 'gmail') {
+      try {
+        await importRecentGmail(userId);
+        return res.redirect(`${front}?connection=success&gmail=ok`);
+      } catch (err: any) {
+        console.warn('⚠️ Gmail sync failed:', err.message);
+        return res.redirect(`${front}?connection=success&gmail=error`);
+      }
+    }
     getAppContent(userId).catch((e: any) => console.warn('⚠️ Post-Google ingest failed:', e.message));
-
-    res.redirect(`${IS_PROD ? 'https://app.rukmer.com' : 'http://localhost:5173'}/connectors?connection=success`);
+    res.redirect(`${front}?connection=success`);
   } catch (error) {
     res.redirect(`${IS_PROD ? 'https://app.rukmer.com' : 'http://localhost:5173'}/connectors?error=google_failed`);
   }

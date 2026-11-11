@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { onAuthStateChanged } from 'firebase/auth';
 import { Search, ChevronRight, Copy, Check, ExternalLink } from 'lucide-react';
 import { PageHeader, DocLink, Panel, GhostButton, PrimaryButton } from '../../components/console/ui';
 import {
@@ -8,6 +9,40 @@ import {
   type AiAppId,
 } from '../../services/aiConnectors';
 import { engine } from '../../services/engineClient';
+import { auth } from '../../firebase';
+
+function rukmerApi(path: string) {
+  const host = window.location.hostname;
+  const origin = host === 'localhost' || host === '127.0.0.1' ? 'https://app.rukmer.com' : '';
+  return `${origin}${path}`;
+}
+
+async function signedToken() {
+  if (auth.currentUser) return auth.currentUser.getIdToken();
+  const user = await new Promise<typeof auth.currentUser>((resolve) => {
+    const unsub = onAuthStateChanged(auth, (next) => {
+      unsub();
+      resolve(next);
+    });
+    window.setTimeout(() => {
+      unsub();
+      resolve(auth.currentUser);
+    }, 1500);
+  });
+  if (!user) throw new Error('Sign in to Rukmer first');
+  return user.getIdToken();
+}
+
+async function rukmerFetch(path: string, init?: RequestInit) {
+  const token = await signedToken();
+  const headers = new Headers(init?.headers);
+  headers.set('Authorization', `Bearer ${token}`);
+  if (init?.body && !headers.has('Content-Type')) headers.set('Content-Type', 'application/json');
+  const res = await fetch(rukmerApi(path), { ...init, headers });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
+  return data;
+}
 
 type Kind = 'ai' | 'oauth' | 'service';
 
@@ -116,7 +151,9 @@ function BrowserExtensionCard() {
   const [installed, setInstalled] = useState(false);
   const [pairing, setPairing] = useState(false);
   const load = () => {
-    engine.browserConnector().then((data) => setInfo(data)).catch(() => setInfo(null));
+    rukmerFetch('/v4/connectors/browser')
+      .then((data) => setInfo(data))
+      .catch(() => setInfo(null));
   };
   useEffect(() => {
     load();
@@ -137,16 +174,26 @@ function BrowserExtensionCard() {
       window.removeEventListener('message', onMessage);
     };
   }, []);
+  const addChrome = () => {
+    const link = document.createElement('a');
+    link.href = '/rukmer-browser.zip';
+    link.download = 'rukmer-browser.zip';
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    setNote('Download started. Open chrome://extensions, turn on Developer mode, unzip the file, and choose Load unpacked. Reload this page, then click Connect Chrome.');
+  };
   const connectBrowser = async () => {
     setNote('');
     setPairing(true);
     try {
-      const pair = await engine.pairBrowser();
+      const pair = await rukmerFetch('/v4/connectors/browser/pair', { method: 'POST', body: '{}' });
+      if (!pair.code) throw new Error('Could not start the browser connection');
       window.postMessage({ source: 'rukmer-page', type: 'pair', code: pair.code }, window.location.origin);
       window.setTimeout(() => setPairing(false), 8000);
     } catch (err: any) {
       setPairing(false);
-      setNote(err.message || 'Could not start the connection');
+      setNote(err.message || 'Could not start the browser connection');
     }
   };
   const autoStarted = useRef(false);
@@ -159,7 +206,7 @@ function BrowserExtensionCard() {
   const disconnect = async () => {
     setNote('');
     try {
-      await engine.disconnectConnector('browser');
+      await rukmerFetch('/v4/connectors/disconnect', { method: 'POST', body: JSON.stringify({ app: 'browser' }) });
       setNote('Disconnected. Pages already saved stay in memory until you delete them.');
       load();
     } catch (err: any) {
@@ -171,22 +218,32 @@ function BrowserExtensionCard() {
     <Panel className="mb-4 p-4">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <p className="text-[14px] text-white font-medium">Browser extension</p>
+          <p className="text-[14px] text-white font-medium">Chrome</p>
           <p className="text-[12.5px] text-zinc-400 mt-1 max-w-xl">
             {installed
-              ? 'The extension is in this browser. One click connects it to the account you are already using.'
-              : 'Install the Rukmer extension in this browser, then come back to this page and click Connect this browser.'}
+              ? 'Chrome has the Rukmer extension. Connect it to the account you are already using.'
+              : 'Add the Rukmer extension to Chrome, then connect it from this page.'}
           </p>
         </div>
         <div className="flex gap-2">
-          <button
-            type="button"
-            onClick={() => void connectBrowser()}
-            disabled={!installed || pairing}
-            className="h-8 px-3 rounded-lg bg-[#2563eb] text-[12px] text-white disabled:opacity-40"
-          >
-            {pairing ? 'Connecting…' : 'Connect this browser'}
-          </button>
+          {installed ? (
+            <button
+              type="button"
+              onClick={() => void connectBrowser()}
+              disabled={pairing}
+              className="h-8 px-3 rounded-lg bg-[#2563eb] text-[12px] text-white disabled:opacity-40"
+            >
+              {pairing ? 'Connecting…' : 'Connect Chrome'}
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={addChrome}
+              className="h-8 px-3 rounded-lg bg-[#2563eb] text-[12px] text-white"
+            >
+              Add to Chrome
+            </button>
+          )}
           <button
             type="button"
             onClick={disconnect}
@@ -233,6 +290,100 @@ function BrowserMark({ name }: { name: string }) {
     <span className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-[#2563eb] text-[10px] text-white" aria-hidden>
       {letter}
     </span>
+  );
+}
+
+function GmailConnectCard() {
+  const [connected, setConnected] = useState(false);
+  const [items, setItems] = useState(0);
+  const [note, setNote] = useState('');
+  const [busy, setBusy] = useState(false);
+  const load = () => {
+    rukmerFetch('/api/connectors/gmail')
+      .then((data) => {
+        setConnected(!!data.connected);
+        setItems(Number(data.items || 0));
+      })
+      .catch(() => undefined);
+  };
+  useEffect(() => {
+    load();
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('connection') === 'success' && params.get('gmail') === 'ok') {
+      setNote('Gmail is connected. Recent inbox mail is in memory.');
+    } else if (params.get('gmail') === 'error') {
+      setNote('Gmail is connected. Recent mail did not finish importing. Sync again.');
+    } else if (params.get('error') === 'google_failed' || params.get('error') === 'google_state') {
+      setNote('Google did not finish connecting. Click Connect Gmail again.');
+    }
+  }, []);
+  const connect = async () => {
+    setBusy(true);
+    setNote('');
+    try {
+      const data = await rukmerFetch('/api/auth/gmail');
+      if (!data.url) throw new Error('Could not start Gmail');
+      window.location.href = data.url;
+    } catch (err: any) {
+      setBusy(false);
+      setNote(err.message || 'Could not start Gmail');
+    }
+  };
+  const sync = async () => {
+    setBusy(true);
+    setNote('');
+    try {
+      const data = await rukmerFetch('/api/connectors/gmail/sync', { method: 'POST' });
+      setConnected(true);
+      setItems(Number(data.items || 0));
+      setNote(`Saved ${data.imported || 0} new message${data.imported === 1 ? '' : 's'}.`);
+    } catch (err: any) {
+      setNote(err.message || 'Could not sync Gmail');
+    } finally {
+      setBusy(false);
+    }
+  };
+  const disconnect = async () => {
+    setBusy(true);
+    setNote('');
+    try {
+      await rukmerFetch('/api/connectors/gmail/disconnect', { method: 'POST' });
+      setConnected(false);
+      setNote('Disconnected. Mail already saved stays in memory.');
+      load();
+    } catch (err: any) {
+      setNote(err.message || 'Could not disconnect Gmail');
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <Panel className="mb-4 p-4">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <p className="text-[14px] text-white font-medium">Gmail</p>
+          <p className="text-[12.5px] text-zinc-400 mt-1 max-w-xl">
+            One click opens Google. You approve read-only access, and recent inbox mail is saved into this account. Sign-in codes and password resets are skipped.
+          </p>
+          <p className="text-[12px] text-zinc-500 mt-2">{connected ? `${items} message${items === 1 ? '' : 's'} in memory` : 'Not connected'}</p>
+        </div>
+        <div className="flex gap-2">
+          {connected ? (
+            <button type="button" onClick={() => void sync()} disabled={busy} className="h-8 px-3 rounded-lg bg-[#2563eb] text-[12px] text-white disabled:opacity-40">
+              {busy ? 'Working…' : 'Sync mail'}
+            </button>
+          ) : (
+            <button type="button" onClick={() => void connect()} disabled={busy} className="h-8 px-3 rounded-lg bg-[#2563eb] text-[12px] text-white disabled:opacity-40">
+              {busy ? 'Opening Google…' : 'Connect Gmail'}
+            </button>
+          )}
+          <button type="button" onClick={() => void disconnect()} disabled={!connected || busy} className="h-8 px-3 rounded-lg border border-white/[0.08] text-[12px] text-zinc-300 disabled:opacity-40">
+            Disconnect
+          </button>
+        </div>
+      </div>
+      {note && <p className={`text-[12px] mt-2 ${note.includes('could not') || note.includes('did not') || note.includes('Could not') ? 'text-red-300' : 'text-emerald-400'}`}>{note}</p>}
+    </Panel>
   );
 }
 
@@ -386,6 +537,7 @@ export default function ConnectorsPage() {
       </Panel>
 
       <BrowserExtensionCard />
+      <GmailConnectCard />
 
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 sm:gap-3 mb-3">
         <div className="inline-flex rounded-lg border border-white/[0.08] bg-[#0c0c0e] p-0.5 overflow-x-auto max-w-full">
@@ -509,10 +661,14 @@ export default function ConnectorsPage() {
                 </div>
                 <div className="flex-1 min-w-0">
                   <p className="text-[13.5px] text-zinc-100">{c.name}</p>
-                  <p className="text-[12px] text-zinc-500">Imports files you own, not AI chat history</p>
+                  <p className="text-[12px] text-zinc-500">
+                    {c.id === 'gmail' ? 'Connect Gmail at the top of this page' : 'Imports files you own, not AI chat history'}
+                  </p>
                 </div>
                 <ChevronRight size={16} className="text-zinc-600" />
-                {c.id === 'notion' || c.id === 'github' || c.id === 's3' || c.id === 'crawler' ? (
+                {c.id === 'gmail' ? (
+                  <span className="text-[12px] text-zinc-400">Use Connect Gmail above</span>
+                ) : c.id === 'notion' || c.id === 'github' || c.id === 's3' || c.id === 'crawler' ? (
                   <GhostButton
                     onClick={() => {
                       setImportProvider(c.id === 'crawler' ? 'web' : c.id);

@@ -11,6 +11,8 @@ import { stripUrl, ownedTag } from './url.js';
 import { xDedupeKey, xPostId } from './x.js';
 
 process.env.MEMORY_DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'rukmer-ext-'));
+delete process.env.K_SERVICE;
+delete process.env.MEMORY_GCS_BUCKET;
 
 const failures: string[] = [];
 function check(name: string, ok: boolean) {
@@ -71,6 +73,7 @@ check('x dedupe stable', xDedupeKey(post) === 'browser:x:123456789012345' && xDe
 check('x thread key differs', xDedupeKey(post, true) === 'browser:xthread:123456789012345');
 
 const { ingestDocument, scrubSavedUrl } = await import('../../../engine/pipeline.ts');
+const { prepareGmailMessage, saveGmailMessages, gmailSkipReason } = await import('../../../engine/gmailSync.ts');
 const { isAllowedOauthRedirect, connectorFromRedirect } = await import('../../../engine/oauth.ts');
 const { browserConnectorView, claimBrowserPair, createBrowserPair, forgetBrowserMemories } = await import('../../../engine/browserConnector.ts');
 
@@ -123,6 +126,16 @@ const claimed = await claimBrowserPair(pair.code, 'Edge');
 check('pair claim connects that browser', String(claimed?.access_token || '').startsWith('rk_live_') && browserConnectorView('extuser').browsers.some((row) => row.name === 'Edge' && row.connected));
 check('pair code cannot be reused', (await claimBrowserPair(pair.code, 'Edge')) === null);
 check('unknown pair code fails', (await claimBrowserPair('not-a-code', 'Chrome')) === null);
+
+check('gmail skips a sign-in code', gmailSkipReason('Your code', 'verification code 123456') === 'one-time code');
+const mail = prepareGmailMessage({ id: 'm1', subject: 'Class notes', from: 'Ada <ada@school.edu>', date: 'Tue', body: 'Read chapter 2. Code in the repo is 4421.' });
+check('gmail keeps a normal note', mail?.sourceRef === 'gmail:m1' && mail.text.includes('Read chapter 2'));
+check('gmail drops a password reset', prepareGmailMessage({ id: 'm2', subject: 'Reset your password', from: 'security', date: '', body: 'click here to set a new password' }) === null);
+const savedMail = await saveGmailMessages('extuser', [
+  { id: 'm1', subject: 'Class notes', from: 'Ada <ada@school.edu>', date: 'Tue', body: 'Read chapter 2' },
+  { id: 'm1', subject: 'Class notes', from: 'Ada <ada@school.edu>', date: 'Tue', body: 'Read chapter 2' },
+]);
+check('gmail save dedupes', savedMail.imported === 1 && savedMail.items >= 1);
 
 if (failures.length) {
   console.error(failures.join('\n'));

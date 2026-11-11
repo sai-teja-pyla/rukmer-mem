@@ -712,6 +712,7 @@ function summarizeTag(tag: string, uid?: string) {
   const sites = new Set<string>();
   let browserItems = 0;
   for (const doc of docs) {
+    if (doc.source === 'gmail') sites.add('gmail');
     if (doc.source !== 'browser-extension') continue;
     browserItems += 1;
     sites.add(doc.metadata?.site || 'browser');
@@ -783,6 +784,7 @@ export function folderOf(d: { source?: string; mime?: string; title?: string; co
   if (d.source === 'image' || String(d.mime || '').startsWith('image/')) return 'Images';
   if (d.source === 'video' || String(d.mime || '').startsWith('video/')) return 'Videos';
   if (d.source === 'browser-extension') return 'Browser';
+  if (d.source === 'gmail') return 'Gmail';
   if (d.source === 'github' || d.source === 'notion' || d.source === 's3' || d.source === 'web') return 'Connectors';
   if (d.source === 'conversation' || d.source === 'playground' || d.source === 'memory') return 'Chats';
   if (/\.(ts|tsx|js|py|go|rs|java)$/i.test(d.title || '') || /code|javascript|typescript|python/.test(d.mime || '')) return 'Code';

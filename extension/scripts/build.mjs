@@ -105,7 +105,7 @@ const manifest = {
   incognito: 'not_allowed',
   permissions: ['activeTab', 'contextMenus', 'storage', 'scripting', 'identity', 'sidePanel', 'alarms'],
   optional_permissions: ['bookmarks', 'history'],
-  host_permissions: ['https://app.rukmer.com/*'],
+  host_permissions: ['https://app.rukmer.com/*', 'http://localhost/*', 'http://127.0.0.1/*'],
   optional_host_permissions: [
     '<all_urls>',
     'https://mail.google.com/*',
@@ -122,7 +122,7 @@ const manifest = {
   background: { service_worker: 'background/service-worker.js' },
   content_scripts: [
     {
-      matches: ['https://app.rukmer.com/*'],
+      matches: ['https://app.rukmer.com/*', 'http://localhost/*', 'http://127.0.0.1/*'],
       js: ['content/app.js'],
       run_at: 'document_idle',
     },
