@@ -76,6 +76,7 @@ const { ingestDocument, scrubSavedUrl } = await import('../../../engine/pipeline
 const { prepareGmailMessage, saveGmailMessages, gmailSkipReason } = await import('../../../engine/gmailSync.ts');
 const { isAllowedOauthRedirect, connectorFromRedirect } = await import('../../../engine/oauth.ts');
 const { browserConnectorView, claimBrowserPair, createBrowserPair, forgetBrowserMemories } = await import('../../../engine/browserConnector.ts');
+const { mergeStoredState } = await import('../../../engine/core.ts');
 
 check('extension redirect allowed', isAllowedOauthRedirect('https://abcdefghijklmnop.chromiumapp.org/'));
 check('extension maps to browser', connectorFromRedirect('https://abcdefghijklmnop.chromiumapp.org/') === 'browser');
@@ -126,6 +127,11 @@ const claimed = await claimBrowserPair(pair.code, 'Edge');
 check('pair claim connects that browser', String(claimed?.access_token || '').startsWith('rk_live_') && browserConnectorView('extuser').browsers.some((row) => row.name === 'Edge' && row.connected));
 check('pair code cannot be reused', (await claimBrowserPair(pair.code, 'Edge')) === null);
 check('unknown pair code fails', (await claimBrowserPair('not-a-code', 'Chrome')) === null);
+const merged = mergeStoredState(
+  { rev: 4, browserPairs: [{ hash: 'h1', uid: 'extuser', exp: 9 }], apiKeys: [] },
+  { rev: 4, browserPairs: [], apiKeys: [{ hash: 'k1', id: 'key', name: 'Browser Chrome', prefix: 'rk_live_abcd…', createdAt: '', lastUsed: '', ownerUid: 'extuser', connector: 'browser' }] }
+);
+check('pair survives a same-revision save', merged.rev === 5 && merged.browserPairs.some((row) => row.hash === 'h1') && merged.apiKeys.some((row) => row.hash === 'k1'));
 
 check('gmail skips a sign-in code', gmailSkipReason('Your code', 'verification code 123456') === 'one-time code');
 const mail = prepareGmailMessage({ id: 'm1', subject: 'Class notes', from: 'Ada <ada@school.edu>', date: 'Tue', body: 'Read chapter 2. Code in the repo is 4421.' });

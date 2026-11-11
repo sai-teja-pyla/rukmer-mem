@@ -60,7 +60,8 @@ export function createBrowserPair(uid: string) {
   const code = crypto.randomBytes(24).toString('hex');
   const state = getState();
   const now = Date.now();
-  state.browserPairs = (state.browserPairs || []).filter((row) => row.exp > now && row.uid !== uid);
+  const current = Array.isArray(state.browserPairs) ? state.browserPairs : [];
+  state.browserPairs = current.filter((row) => row.exp > now && row.uid !== uid);
   state.browserPairs.push({ hash: sha(code), uid, exp: now + 2 * 60 * 1000 });
   return { code, expiresIn: 120 };
 }

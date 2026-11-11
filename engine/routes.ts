@@ -78,6 +78,7 @@ function emailClaim(token: string) {
 
 function fail(res: { status: (code: number) => { json: (body: unknown) => void } }, e: { status?: number; message?: string }) {
   const err = publicError(e);
+  if (err.status >= 500) console.error('request failed', e?.message || 'unknown');
   res.status(err.status).json(err.body);
 }
 

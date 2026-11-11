@@ -379,14 +379,9 @@ async function pushGcs(attempt = 0): Promise<boolean> {
         const [meta] = await file.getMetadata();
         const remote = decodeState(buf.toString('utf8'));
         gcsGeneration = Number(meta.generation || 0);
-        if (Number(remote.rev || 0) < Number(state.rev || 0)) return pushGcs(attempt + 1);
-        const seen = new Set((remote.apiKeys || []).map((k) => k.hash));
-        for (const key of state.apiKeys) {
-          if (key?.hash && !seen.has(key.hash)) (remote.apiKeys = remote.apiKeys || []).push(key);
-        }
-        state = { ...empty(), ...remote };
+        state = mergeStoredState(state, remote);
         shapeState();
-        return false;
+        return pushGcs(attempt + 1);
       } catch (inner) {
         console.warn('memory gcs conflict', (inner as Error).message);
         return false;
@@ -397,12 +392,39 @@ async function pushGcs(attempt = 0): Promise<boolean> {
   }
 }
 
+function unionBy<T>(primary: T[] | undefined, extra: T[] | undefined, id: (row: T) => string) {
+  const out: T[] = [];
+  const seen = new Set<string>();
+  for (const row of [...(Array.isArray(primary) ? primary : []), ...(Array.isArray(extra) ? extra : [])]) {
+    const key = id(row);
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    out.push(row);
+  }
+  return out;
+}
+
+/** Keep the newer memory snapshot and carry keys and browser pairings from the other copy. */
+export function mergeStoredState(local: Partial<EngineState>, remote: Partial<EngineState>): EngineState {
+  const remoteRev = Number(remote.rev || 0);
+  const localRev = Number(local.rev || 0);
+  const newer = remoteRev > localRev ? remote : local;
+  const older = newer === remote ? local : remote;
+  const merged = { ...empty(), ...newer };
+  merged.apiKeys = unionBy(newer.apiKeys, older.apiKeys, (row) => row.hash);
+  merged.browserPairs = unionBy(newer.browserPairs, older.browserPairs, (row) => row.hash);
+  merged.oauthRefreshes = unionBy(newer.oauthRefreshes, older.oauthRefreshes, (row) => row.hash);
+  merged.oauthCodes = unionBy(newer.oauthCodes, older.oauthCodes, (row) => row.code);
+  merged.rev = Math.max(remoteRev, localRev) + 1;
+  return merged;
+}
+
 function shapeState() {
   state.triples = (state.triples || []).map(normalizeTriple);
   state.oauthClients = state.oauthClients || [];
   state.oauthCodes = state.oauthCodes || [];
   state.oauthRefreshes = state.oauthRefreshes || [];
-  state.browserPairs = state.browserPairs || [];
+  state.browserPairs = Array.isArray(state.browserPairs) ? state.browserPairs : [];
   state.apiKeys = state.apiKeys || [];
   state.orgs = state.orgs || [];
   state.orgMembers = state.orgMembers || [];
