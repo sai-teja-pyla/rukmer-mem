@@ -1,7 +1,7 @@
 import crypto from 'crypto';
 import type { Express, Request, Response } from 'express';
 import { getState, persistNow, sha, uid, type OauthClientRec, type OauthCodeRec } from './core.js';
-import { rememberKey } from './keys.js';
+import { consumeRefresh, findKey, forgetKey, readRefresh, rememberKey, saveRefresh } from './keys.js';
 import { ALLOWED_ORIGINS } from './security.js';
 
 const ALLOWED_REDIRECT = [
@@ -32,15 +32,20 @@ export function publicOrigin(req: Request) {
   return `https://${host}`;
 }
 
-function hostOk(redirectUri: string) {
+export function isAllowedOauthRedirect(redirectUri: string) {
   try {
     const u = new URL(redirectUri);
     if (u.protocol !== 'https:' && u.hostname !== 'localhost' && u.hostname !== '127.0.0.1') return false;
+    if (u.hostname.endsWith('.chromiumapp.org')) return true;
     if (u.hostname.endsWith('.openai.com') || u.hostname.endsWith('.google.com') || u.hostname.endsWith('.anthropic.com')) return true;
     return ALLOWED_REDIRECT.some((h) => u.hostname === h || u.hostname.endsWith(`.${h}`));
   } catch {
     return false;
   }
+}
+
+function hostOk(redirectUri: string) {
+  return isAllowedOauthRedirect(redirectUri);
 }
 
 function s256(v: string) {
@@ -90,7 +95,7 @@ function bodyOf(req: Request) {
 const CONNECTOR_APPS = ['claude', 'chatgpt', 'grok', 'gemini'] as const;
 export type ConnectorApp = (typeof CONNECTOR_APPS)[number];
 
-export function connectorFromRedirect(redirectUri: string): ConnectorApp | '' {
+export function connectorFromRedirect(redirectUri: string): ConnectorApp | 'browser' | '' {
   let host = '';
   try {
     host = new URL(redirectUri).hostname.toLowerCase();
@@ -102,6 +107,7 @@ export function connectorFromRedirect(redirectUri: string): ConnectorApp | '' {
   if (is('chatgpt.com') || is('openai.com')) return 'chatgpt';
   if (is('grok.com') || is('x.ai')) return 'grok';
   if (is('gemini.google.com') || is('aistudio.google.com') || is('makersuite.google.com')) return 'gemini';
+  if (host.endsWith('.chromiumapp.org')) return 'browser';
   return '';
 }
 
@@ -183,6 +189,7 @@ export function mountOauth(app: Express) {
       return res.status(400).json({ error: 'invalid_redirect_uri' });
     }
     if (!hostOk(redirectUri)) return res.status(400).json({ error: 'invalid_redirect_uri' });
+    const browser = ['Chrome', 'Edge', 'Brave'].includes(String(body.browser || '')) ? String(body.browser) : '';
     const rec: OauthCodeRec = {
       code: crypto.randomBytes(24).toString('hex'),
       uid: uidUser,
@@ -191,6 +198,7 @@ export function mountOauth(app: Express) {
       challenge,
       method,
       exp: Date.now() + 10 * 60 * 1000,
+      label: browser,
     };
     const stateNow = getState();
     stateNow.oauthCodes = stateNow.oauthCodes.filter((c) => c.exp > Date.now());
@@ -206,6 +214,19 @@ export function mountOauth(app: Express) {
     cors(req, res);
     const body = bodyOf(req);
     const grant = String(body.grant_type || 'authorization_code');
+    if (grant === 'refresh_token') {
+      const refresh = String(body.refresh_token || '');
+      const row = refresh ? await readRefresh(sha(refresh)) : null;
+      const old = row ? await findKey(row.keyHash) : null;
+      if (!row || !old || old.ownerUid !== row.uid || old.connector !== 'browser') {
+        return res.status(400).json({ error: 'invalid_grant' });
+      }
+      await consumeRefresh(sha(refresh));
+      const issued = await issueConnectorKey(old.ownerUid, 'browser', old.name.replace(/^Browser\s+/, '') || 'Chrome');
+      await forgetKey(old.hash);
+      await persistNow();
+      return res.json(issued);
+    }
     if (grant !== 'authorization_code') {
       return res.status(400).json({ error: 'unsupported_grant_type' });
     }
@@ -231,26 +252,44 @@ export function mountOauth(app: Express) {
         return res.status(400).json({ error: 'invalid_grant' });
       }
     }
-    const secret = 'rk_live_' + crypto.randomBytes(18).toString('hex');
     const connector = connectorFromRedirect(rec.redirectUri);
-    await rememberKey({
-      id: uid('key'),
-      name: connector ? `OAuth ${connector}` : 'OAuth connector',
-      prefix: secret.slice(0, 12) + '…',
-      hash: sha(secret.trim()),
-      createdAt: new Date().toISOString(),
-      lastUsed: new Date().toISOString(),
-      ownerUid: rec.uid,
-      connector: connector || undefined,
-    });
+    const issued = await issueConnectorKey(rec.uid, connector, rec.label || '');
     await persistNow();
-    res.json({
-      access_token: secret,
-      token_type: 'bearer',
-      expires_in: 86400 * 30,
-      scope: 'memory',
-    });
+    res.json(issued);
   });
+}
+
+export async function issueBrowserKey(ownerUid: string, label: string) {
+  return issueConnectorKey(ownerUid, 'browser', label);
+}
+
+async function issueConnectorKey(ownerUid: string, connector: ConnectorApp | 'browser' | '', label: string) {
+  const secret = 'rk_live_' + crypto.randomBytes(18).toString('hex');
+  const browser = connector === 'browser';
+  const browserName = label === 'Chrome' || label === 'Edge' || label === 'Brave' ? label : 'Chromium';
+  const rec = {
+    id: uid('key'),
+    name: browser ? `Browser ${browserName}` : connector ? `OAuth ${connector}` : 'OAuth connector',
+    prefix: secret.slice(0, 12) + '…',
+    hash: sha(secret.trim()),
+    createdAt: new Date().toISOString(),
+    lastUsed: new Date().toISOString(),
+    ownerUid,
+    connector: connector || undefined,
+  };
+  await rememberKey(rec);
+  const body: Record<string, string | number> = {
+    access_token: secret,
+    token_type: 'bearer',
+    expires_in: 86400 * 30,
+    scope: 'memory',
+  };
+  if (browser) {
+    const refresh = crypto.randomBytes(32).toString('hex');
+    await saveRefresh({ hash: sha(refresh), keyHash: rec.hash, uid: ownerUid, exp: Date.now() + 86400 * 30 * 1000 });
+    body.refresh_token = refresh;
+  }
+  return body;
 }
 
 export function mcpUnauthorized(req: Request, res: Response) {

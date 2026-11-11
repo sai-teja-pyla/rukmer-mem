@@ -6,6 +6,20 @@ import { countMemories } from '../../services/memoryCount';
 import { homeTag as makeHomeTag } from '../../services/tenancy';
 import type { UserProfile } from '../../types';
 
+function sourceMark(node: { source?: string; site?: string; browser?: string }) {
+  if (node.site === 'gmail') return 'G';
+  if (node.site === 'canvas') return 'C';
+  if (node.site === 'x') return 'X';
+  if (node.source === 'browser-extension' || node.browser) return 'B';
+  return '';
+}
+
+function sourceCaption(node: { source?: string; site?: string; browser?: string; captureType?: string }) {
+  const site = node.site === 'gmail' ? 'Gmail' : node.site === 'canvas' ? 'Canvas' : node.site === 'x' ? 'X' : '';
+  const browser = node.browser || (node.source === 'browser-extension' ? 'Browser' : '');
+  return [browser, site, node.captureType].filter(Boolean).join(' · ');
+}
+
 type Fact = {
   id: string;
   subject: string;
@@ -28,6 +42,9 @@ type GraphNode = {
   kind: string;
   type?: string;
   source?: string;
+  site?: string;
+  browser?: string;
+  captureType?: string;
   mime?: string;
   containerTag?: string;
   createdAt?: string;
@@ -410,6 +427,11 @@ export default function MemoryGraphPage() {
                 ) : null}
                 <polygon points={hexPoints(x, y, 18)} fill="transparent" stroke={stroke} strokeWidth={active ? 1.8 : 1.35} />
                 {latest && !isDoc ? <circle cx={x} cy={y} r="5.2" fill="var(--graph-latest)" /> : null}
+                {sourceMark(node) ? (
+                  <text x={x} y={y + 3} textAnchor="middle" fontSize="8" fill="var(--graph-text)" style={{ pointerEvents: 'none' }}>
+                    {sourceMark(node)}
+                  </text>
+                ) : null}
                 {flags.expiring ? <circle cx={x - 16} cy={y - 16} r="3.4" fill="#f0a202" /> : null}
               </g>
             );
@@ -472,6 +494,9 @@ export default function MemoryGraphPage() {
               <div className="flex items-center gap-2">
                 <Brain size={16} strokeWidth={1.7} />
                 <span className="text-[14px] font-medium">{selected.kind === 'document' ? 'Document' : 'Memory'}</span>
+                {sourceMark(selected) ? (
+                  <span className="text-[10px] tracking-wide graph-muted">{sourceCaption(selected)}</span>
+                ) : null}
               </div>
               <button
                 type="button"

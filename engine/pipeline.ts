@@ -26,7 +26,7 @@ import { canAccessTag, homeTag, ownsTag, scopeFromTag, uidFromTag } from './tena
 import { checkUpload, sanitizeName, sanitizePlain } from './security.js';
 import { ensureIndex, rankTagged, tagCount, vectorDim, type MetaFilter, type Retrieval } from './search-index.js';
 import { selectMemories } from './relevance.js';
-import { assignGovernance, audit, canRead, eraseBulk, eraseMemory, findMemory, govOf, prepareWrite, teamContainer } from './governance.js';
+import { assignGovernance, audit, canErase, canRead, eraseBulk, eraseMemory, findMemory, govOf, prepareWrite, teamContainer } from './governance.js';
 
 export type SearchOpts = {
   containerTag?: string | null;
@@ -52,6 +52,70 @@ function scopedChunks(tag?: string | null, includeForgotten = false) {
     if (!includeForgotten && c.forgotten) return false;
     return true;
   });
+}
+
+const SECRET_QUERY = /token|key|code|session|auth|password|secret|sig|signature/i;
+
+export function scrubSavedUrl(raw: string) {
+  const value = String(raw || '').trim();
+  if (!value) return '';
+  try {
+    const url = new URL(value);
+    for (const key of [...url.searchParams.keys()]) {
+      if (SECRET_QUERY.test(key)) url.searchParams.delete(key);
+    }
+    url.hash = '';
+    return url.toString();
+  } catch {
+    return value;
+  }
+}
+
+async function attachChunks(doc: DocRec, text: string) {
+  const state = getState();
+  const code = /code|javascript|typescript|python|json|x-sh/.test(doc.mime) || /\.(ts|tsx|js|py|go|rs|java)$/i.test(doc.title);
+  const pieces = code ? chunkCode(text) : chunkText(text);
+  const fresh: { text: string; hash: string; index: number }[] = [];
+  pieces.forEach((piece, index) => {
+    const hash = sha(doc.containerTag + piece);
+    if (state.chunks.some((c) => c.hash === hash && !c.forgotten)) return;
+    fresh.push({ text: piece, hash, index });
+  });
+  const header = `[${doc.title} · ${doc.source}]`;
+  const vectors = fresh.length ? await embedMany(fresh.map((p) => `${header}\n${p.text}`)) : [];
+  return fresh.map((piece, i) => {
+    const chunk: ChunkRec = {
+      id: uid('chk'),
+      docId: doc.id,
+      containerTag: doc.containerTag,
+      text: `${header}\n${piece.text}`,
+      index: piece.index,
+      embedding: vectors[i] || [],
+      embeddingModel: isNeuralEmbed(vectors[i]) ? EMBED_MODEL : undefined,
+      hash: piece.hash,
+      createdAt: doc.createdAt,
+      source: doc.source,
+      forgotten: false,
+      metadata: doc.metadata,
+      scope: doc.scope,
+      gov: doc.gov ? { ...doc.gov } : undefined,
+    };
+    state.chunks.push(chunk);
+    return chunk;
+  });
+}
+
+async function extractInto(tag: string, text: string, gov?: DocRec['gov']) {
+  const state = getState();
+  const graph = await extractGraph(text.slice(0, 8000));
+  for (const e of graph.entities || []) {
+    const name = String(e.name || '').trim();
+    if (!name) continue;
+    if (state.entities.some((x) => x.containerTag === tag && x.name.toLowerCase() === name.toLowerCase())) continue;
+    state.entities.push({ id: uid('ent'), containerTag: tag, name, type: e.type || 'topic' });
+  }
+  upsertFacts(tag, graph.triples || [], text.slice(0, 240), gov);
+  deriveFacts(tag);
 }
 
 export async function ingestDocument(input: {
@@ -96,6 +160,64 @@ export async function ingestDocument(input: {
   const redacted = [...new Set([...cleaned.redacted, ...titleClean.redacted])];
   if (gov && redacted.length) gov.redacted = redacted;
   const state = getState();
+  const sourceRef = String(input.sourceRef || '').slice(0, 200);
+  const contentHash = sha(text);
+  const metadata = sanitizeMeta({
+    ...(input.metadata || {}),
+    ...(sourceRef ? { dedupeKey: sourceRef, contentHash } : {}),
+  });
+  if (metadata?.url) {
+    const clean = scrubSavedUrl(metadata.url).slice(0, 200);
+    if (clean) metadata.url = clean;
+    else delete metadata.url;
+  }
+  const entityCount = () => getState().entities.filter((e) => e.containerTag === tag).length;
+  if (sourceRef) {
+    const existing = state.documents.find(
+      (d) => !d.forgotten && d.containerTag === tag && (d.gov?.sourceRef === sourceRef || d.metadata?.dedupeKey === sourceRef)
+    );
+    if (existing) {
+      if (actorId && !canErase(actorId, existing)) throw Object.assign(new Error('forbidden'), { status: 403 });
+      if (existing.metadata?.contentHash === contentHash || existing.text === text) {
+        return { document: existing, chunks: 0, entities: entityCount(), duplicate: true, updated: false, created: false };
+      }
+      existing.title = titleClean.text || 'Untitled';
+      existing.text = text;
+      existing.source = input.source || existing.source;
+      existing.mime = input.mime || existing.mime;
+      existing.metadata = sanitizeMeta({ ...(existing.metadata || {}), ...(metadata || {}) });
+      if (existing.gov) existing.gov.sourceRef = sourceRef;
+      for (const chunk of state.chunks) {
+        if (chunk.docId !== existing.id || chunk.forgotten) continue;
+        chunk.forgotten = true;
+        chunk.embedding = [];
+        if (chunk.gov) chunk.gov.deletedAt = new Date().toISOString();
+      }
+      const chunks = await attachChunks(existing, text);
+      if (input.task !== 'rag' && input.extract !== false) await extractInto(tag, text, existing.gov);
+      state.jobs.push({
+        id: uid('job'),
+        status: 'done',
+        message: `Updated ${existing.title} (${chunks.length} chunks)`,
+        at: new Date().toISOString(),
+        ownerUid: uidFromTag(tag),
+        containerTag: tag,
+      });
+      if (actorId) {
+        audit({
+          actorId,
+          action: 'write',
+          memoryId: existing.id,
+          tenantId: existing.gov?.tenantId || tenantId,
+          purpose: 'ingest',
+          detail: 'updated',
+        });
+      }
+      saveState();
+      void embedMissingFacts(12).catch(() => undefined);
+      return { document: existing, chunks: chunks.length, entities: entityCount(), duplicate: false, updated: true, created: false };
+    }
+  }
   const doc: DocRec = {
     id: uid('doc'),
     containerTag: tag,
@@ -106,50 +228,14 @@ export async function ingestDocument(input: {
     createdAt: new Date().toISOString(),
     forgotten: false,
     fileId: input.fileId,
-    metadata: sanitizeMeta(input.metadata),
+    metadata,
     scope: scopeFromTag(tag),
     gov: gov ? { ...gov } : undefined,
   };
-  const code = /code|javascript|typescript|python|json|x-sh/.test(doc.mime) || /\.(ts|tsx|js|py|go|rs|java)$/i.test(doc.title);
-  const pieces = code ? chunkCode(text) : chunkText(text);
-  const fresh: { text: string; hash: string; index: number }[] = [];
-  pieces.forEach((piece, index) => {
-    const hash = sha(tag + piece);
-    if (state.chunks.some((c) => c.hash === hash && !c.forgotten)) return;
-    fresh.push({ text: piece, hash, index });
-  });
-  const header = `[${doc.title} · ${doc.source}]`;
-  const vectors = fresh.length ? await embedMany(fresh.map((p) => `${header}\n${p.text}`)) : [];
-  const chunks: ChunkRec[] = fresh.map((piece, i) => ({
-    id: uid('chk'),
-    docId: doc.id,
-    containerTag: tag,
-    text: `${header}\n${piece.text}`,
-    index: piece.index,
-    embedding: vectors[i] || [],
-    embeddingModel: isNeuralEmbed(vectors[i]) ? EMBED_MODEL : undefined,
-    hash: piece.hash,
-    createdAt: doc.createdAt,
-    source: doc.source,
-    forgotten: false,
-    metadata: doc.metadata,
-    scope: doc.scope,
-    gov: doc.gov ? { ...doc.gov } : undefined,
-  }));
+  const chunks = await attachChunks(doc, text);
   state.documents.push(doc);
-  state.chunks.push(...chunks);
 
-  if (input.task !== 'rag' && input.extract !== false) {
-    const graph = await extractGraph(text.slice(0, 8000));
-    for (const e of graph.entities || []) {
-      const name = String(e.name || '').trim();
-      if (!name) continue;
-      if (state.entities.some((x) => x.containerTag === tag && x.name.toLowerCase() === name.toLowerCase())) continue;
-      state.entities.push({ id: uid('ent'), containerTag: tag, name, type: e.type || 'topic' });
-    }
-    upsertFacts(tag, graph.triples || [], text.slice(0, 240), doc.gov);
-    deriveFacts(tag);
-  }
+  if (input.task !== 'rag' && input.extract !== false) await extractInto(tag, text, doc.gov);
 
   state.jobs.push({
     id: uid('job'),
@@ -171,7 +257,7 @@ export async function ingestDocument(input: {
   }
   saveState();
   void embedMissingFacts(12).catch(() => undefined);
-  return { document: doc, chunks: chunks.length, entities: getState().entities.filter((e) => e.containerTag === tag).length };
+  return { document: doc, chunks: chunks.length, entities: entityCount(), duplicate: false, updated: false, created: true };
 }
 
 export function assertPublicHttpUrl(raw: string) {
@@ -620,25 +706,33 @@ export async function chatWithMemory(
   return { answer, retrieved, injection: mem.injection, graph: graphPayload(tag, opts.actorId) };
 }
 
-function summarizeTag(tag: string) {
+function summarizeTag(tag: string, uid?: string) {
   const state = getState();
+  const docs = state.documents.filter((d) => d.containerTag === tag && !d.forgotten && (!uid || canRead(uid, d)));
+  const sites = new Set<string>();
+  let browserItems = 0;
+  for (const doc of docs) {
+    if (doc.source !== 'browser-extension') continue;
+    browserItems += 1;
+    sites.add(doc.metadata?.site || 'browser');
+  }
   return {
     tag,
-    documents: state.documents.filter((d) => d.containerTag === tag && !d.forgotten).length,
-    memories: state.chunks.filter((c) => c.containerTag === tag && !c.forgotten).length,
-    activity: state.documents
-      .filter((d) => d.containerTag === tag)
-      .sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0]?.createdAt,
+    documents: docs.length,
+    memories: state.chunks.filter((c) => c.containerTag === tag && !c.forgotten && (!uid || canRead(uid, c))).length,
+    activity: docs.map((d) => d.createdAt).sort().pop(),
+    browserItems,
+    sites: [...sites],
   };
 }
 
 export function listTags(uid?: string) {
   const state = getState();
   const tags = [...new Set(state.documents.map((d) => d.containerTag))].filter((tag) => !uid || canAccessTag(uid, tag));
-  const rows = tags.map(summarizeTag);
+  const rows = tags.map((tag) => summarizeTag(tag, uid));
   if (uid) {
     const home = homeTag(uid);
-    if (!rows.some((r) => r.tag === home)) rows.unshift({ tag: home, documents: 0, memories: 0, activity: undefined as any });
+    if (!rows.some((r) => r.tag === home)) rows.unshift({ tag: home, documents: 0, memories: 0, activity: undefined, browserItems: 0, sites: [] });
   }
   return rows;
 }
@@ -688,6 +782,7 @@ export function folderOf(d: { source?: string; mime?: string; title?: string; co
   if (d.source === 'pdf' || d.mime === 'application/pdf') return 'PDFs';
   if (d.source === 'image' || String(d.mime || '').startsWith('image/')) return 'Images';
   if (d.source === 'video' || String(d.mime || '').startsWith('video/')) return 'Videos';
+  if (d.source === 'browser-extension') return 'Browser';
   if (d.source === 'github' || d.source === 'notion' || d.source === 's3' || d.source === 'web') return 'Connectors';
   if (d.source === 'conversation' || d.source === 'playground' || d.source === 'memory') return 'Chats';
   if (/\.(ts|tsx|js|py|go|rs|java)$/i.test(d.title || '') || /code|javascript|typescript|python/.test(d.mime || '')) return 'Code';
@@ -815,6 +910,9 @@ export function graphPayload(containerTag?: string | null, uid?: string) {
         kind: 'document' as const,
         source: d.source,
         mime: d.mime,
+        site: d.metadata?.site || '',
+        browser: d.metadata?.browser || '',
+        captureType: d.metadata?.capture_type || '',
         containerTag: d.containerTag,
         createdAt: d.createdAt,
         text: String(d.text || '').slice(0, 4000),

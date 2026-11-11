@@ -37,6 +37,7 @@ import { addOrgMember, closeSession, createOrg, listOrgs, scopeTagsFor } from '.
 import { importConnector } from './connectors.js';
 import { applyDecay, buildProfile } from './memory.js';
 import { connectedAppsFor, mountOauth } from './oauth.js';
+import { browserConnectorView, claimBrowserPair, createBrowserPair, forgetBrowserMemories } from './browserConnector.js';
 import { findKey, forgetKey, keysAreDurable, keysFor, rememberKey, syncStoredKeys } from './keys.js';
 import {
   addTeamMember,
@@ -540,7 +541,7 @@ export function mountMemoryEngine(app: Express) {
     try {
       const uid = uidOf(req);
       const app = String(req.body?.app || '');
-      if (!['claude', 'chatgpt', 'grok', 'gemini'].includes(app)) {
+      if (!['claude', 'chatgpt', 'grok', 'gemini', 'browser'].includes(app)) {
         return res.status(400).json({ error: 'Unknown app' });
       }
       const state = getState();
@@ -551,6 +552,45 @@ export function mountMemoryEngine(app: Express) {
         await persistNow();
       }
       res.json({ ok: true, apps: connectedAppsFor(uid) });
+    } catch (e: any) {
+      fail(res, e);
+    }
+  });
+
+  app.get('/v4/connectors/browser', (req, res) => {
+    try {
+      const full = String(req.query.full || '') === '1';
+      res.json(browserConnectorView(uidOf(req), full));
+    } catch (e: any) {
+      fail(res, e);
+    }
+  });
+
+  app.post('/v4/connectors/browser/pair', async (req, res) => {
+    try {
+      const pair = createBrowserPair(uidOf(req));
+      await persistNow();
+      res.json(pair);
+    } catch (e: any) {
+      fail(res, e);
+    }
+  });
+
+  app.post('/v4/connectors/browser/claim', async (req, res) => {
+    try {
+      const issued = await claimBrowserPair(String(req.body?.code || ''), String(req.body?.browser || ''));
+      await persistNow();
+      if (!issued) return res.status(400).json({ error: 'That connect code expired. Click Connect this browser again.' });
+      res.json(issued);
+    } catch (e: any) {
+      fail(res, e);
+    }
+  });
+
+  app.post('/v4/connectors/browser/forget', (req, res) => {
+    try {
+      if (req.body?.confirm !== 'forget-browser') return res.status(400).json({ error: 'confirm required' });
+      res.json(forgetBrowserMemories(uidOf(req)));
     } catch (e: any) {
       fail(res, e);
     }

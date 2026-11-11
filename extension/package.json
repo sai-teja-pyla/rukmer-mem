@@ -1,0 +1,18 @@
+{
+  "name": "rukmer-browser",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "zip": "npm run build"
+  },
+  "dependencies": {
+    "@mozilla/readability": "^0.6.0"
+  },
+  "devDependencies": {
+    "@types/chrome": "^0.1.1",
+    "esbuild": "^0.25.0",
+    "typescript": "^5.8.3"
+  }
+}

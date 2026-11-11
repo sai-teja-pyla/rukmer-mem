@@ -1,4 +1,4 @@
-import { getState, mergeRemoteApiKeys, sha, type ApiKeyRec } from './core.js';
+import { getState, mergeRemoteApiKeys, sha, type ApiKeyRec, type OauthRefreshRec } from './core.js';
 
 const COLLECTION = 'rukmerApiKeys';
 
@@ -88,6 +88,43 @@ export async function touchKey(hash: string) {
   const firestore = await db();
   if (!firestore) return;
   await firestore.collection(COLLECTION).doc(hash).set({ lastUsed: now }, { merge: true }).catch(() => undefined);
+}
+
+export async function saveRefresh(rec: OauthRefreshRec) {
+  const state = getState();
+  state.oauthRefreshes = (state.oauthRefreshes || []).filter((row) => row.hash !== rec.hash && row.exp > Date.now());
+  state.oauthRefreshes.push(rec);
+  const firestore = await db();
+  if (!firestore) return;
+  await firestore.collection('rukmerOauthRefresh').doc(rec.hash).set({
+    keyHash: rec.keyHash,
+    uid: rec.uid,
+    exp: rec.exp,
+  });
+}
+
+export async function readRefresh(hash: string) {
+  const state = getState();
+  let rec = (state.oauthRefreshes || []).find((row) => row.hash === hash);
+  const firestore = await db();
+  if (!rec && firestore) {
+    const snap = await firestore.collection('rukmerOauthRefresh').doc(hash).get();
+    if (snap.exists) {
+      const data = snap.data() || {};
+      rec = { hash, keyHash: String(data.keyHash || ''), uid: String(data.uid || ''), exp: Number(data.exp || 0) };
+    }
+  }
+  if (!rec || rec.exp < Date.now() || !rec.keyHash || !rec.uid) return null;
+  return rec;
+}
+
+export async function consumeRefresh(hash: string) {
+  const rec = await readRefresh(hash);
+  const state = getState();
+  state.oauthRefreshes = (state.oauthRefreshes || []).filter((row) => row.hash !== hash);
+  const firestore = await db();
+  if (firestore) await firestore.collection('rukmerOauthRefresh').doc(hash).delete().catch(() => undefined);
+  return rec;
 }
 
 export async function syncStoredKeys() {

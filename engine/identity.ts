@@ -136,6 +136,7 @@ export function isPublicMemoryPath(method: string, path: string) {
   if (method === 'GET' && path === '/mcp') return true;
   if (path.includes('/.well-known/')) return true;
   if (path === '/oauth/authorize' || path === '/oauth/register' || path === '/oauth/token') return true;
+  if (method === 'POST' && path === '/v4/connectors/browser/claim') return true;
   return false;
 }
 

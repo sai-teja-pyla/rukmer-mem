@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Rukmer</title>
+    <link rel="stylesheet" href="../theme.css" />
+    <style>body { width: 360px; }</style>
+  </head>
+  <body>
+    <div class="wrap stack">
+      <div class="row" style="justify-content:space-between">
+        <h1>Rukmer</h1>
+        <span id="state" class="pill"><i id="dot" class="dot"></i><span id="state-label">Not connected</span></span>
+      </div>
+      <p id="notice" class="muted"></p>
+      <section id="setup" class="card stack" hidden>
+        <strong>Choose what this browser may save</strong>
+        <p class="muted">Nothing is captured until you turn a feature on. Banking, mail, health, and password pages stay blocked.</p>
+        <label class="line"><span>Manual save</span><input id="opt-manual" type="checkbox" /></label>
+        <div class="row">
+          <button id="finish" class="btn" type="button">Finish setup</button>
+          <button id="options" class="btn ghost" type="button">All settings</button>
+        </div>
+      </section>
+      <section id="app" class="stack" hidden>
+        <div class="row">
+          <button id="connect" class="btn" type="button">Connect</button>
+          <button id="signout" class="btn ghost" type="button" hidden>Sign out</button>
+          <button id="open-options" class="btn ghost" type="button">Options</button>
+        </div>
+        <p id="connect-help" class="muted">Opens Rukmer. You are already signed in there, so Connect this browser is the only step.</p>
+        <details id="key-fallback">
+          <summary class="muted">Use an API key instead</summary>
+          <form id="key-form" class="row" style="margin-top:8px">
+            <input id="key" class="field" type="password" placeholder="rk_live_ key" autocomplete="off" />
+            <button class="btn ghost" type="submit">Use key</button>
+          </form>
+        </details>
+        <div class="row">
+          <button id="capture" class="btn" type="button">Capture on</button>
+          <button id="pause" class="btn ghost" type="button">Pause</button>
+          <select id="pause-for" class="field" style="width:auto">
+            <option value="60">1 hour</option>
+            <option value="tomorrow">Until tomorrow</option>
+            <option value="0">Resume</option>
+          </select>
+        </div>
+        <label class="line"><span>Container tag</span><input id="tag" class="field" style="width:140px" value="browser" /></label>
+        <button id="save-page" class="btn" type="button">Save this page</button>
+        <form id="search-form" class="row">
+          <input id="search" class="field" placeholder="Search memory" />
+          <button class="btn ghost" type="submit">Search</button>
+        </form>
+        <div id="hits" class="stack"></div>
+        <div>
+          <strong>Recent captures</strong>
+          <ul id="recent" class="list"></ul>
+        </div>
+      </section>
+    </div>
+    <script src="popup.js"></script>
+  </body>
+</html>

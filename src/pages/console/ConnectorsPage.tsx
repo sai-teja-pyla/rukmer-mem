@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Search, ChevronRight, Copy, Check, ExternalLink } from 'lucide-react';
 import { PageHeader, DocLink, Panel, GhostButton, PrimaryButton } from '../../components/console/ui';
 import {
@@ -100,6 +100,141 @@ const AI_APPS: {
     ],
   },
 ];
+
+type BrowserRow = { name: string; lastSync: string | null; items: number; connected: boolean };
+type BrowserInfo = {
+  connected: boolean;
+  items: number;
+  lastSync: string | null;
+  browsers: BrowserRow[];
+  sites: { gmail: number; canvas: number; x: number; browser: number };
+};
+
+function BrowserExtensionCard() {
+  const [info, setInfo] = useState<BrowserInfo | null>(null);
+  const [note, setNote] = useState('');
+  const [installed, setInstalled] = useState(false);
+  const [pairing, setPairing] = useState(false);
+  const load = () => {
+    engine.browserConnector().then((data) => setInfo(data)).catch(() => setInfo(null));
+  };
+  useEffect(() => {
+    load();
+    const look = () => setInstalled(document.documentElement.dataset.rukmerExtension === '1');
+    look();
+    const timer = window.setInterval(look, 500);
+    const onMessage = (event: MessageEvent) => {
+      if (event.origin !== window.location.origin) return;
+      const data = event.data as { source?: string; type?: string; ok?: boolean; error?: string };
+      if (!data || data.source !== 'rukmer-extension' || data.type !== 'paired') return;
+      setPairing(false);
+      setNote(data.ok ? 'This browser is connected.' : data.error || 'Could not connect this browser');
+      if (data.ok) load();
+    };
+    window.addEventListener('message', onMessage);
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener('message', onMessage);
+    };
+  }, []);
+  const connectBrowser = async () => {
+    setNote('');
+    setPairing(true);
+    try {
+      const pair = await engine.pairBrowser();
+      window.postMessage({ source: 'rukmer-page', type: 'pair', code: pair.code }, window.location.origin);
+      window.setTimeout(() => setPairing(false), 8000);
+    } catch (err: any) {
+      setPairing(false);
+      setNote(err.message || 'Could not start the connection');
+    }
+  };
+  const autoStarted = useRef(false);
+  useEffect(() => {
+    if (!installed || autoStarted.current) return;
+    if (new URLSearchParams(window.location.search).get('connect') !== 'browser') return;
+    autoStarted.current = true;
+    void connectBrowser();
+  }, [installed]);
+  const disconnect = async () => {
+    setNote('');
+    try {
+      await engine.disconnectConnector('browser');
+      setNote('Disconnected. Pages already saved stay in memory until you delete them.');
+      load();
+    } catch (err: any) {
+      setNote(err.message || 'Could not disconnect');
+    }
+  };
+  const when = info?.lastSync ? new Date(info.lastSync).toLocaleString() : 'No sync yet';
+  return (
+    <Panel className="mb-4 p-4">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <p className="text-[14px] text-white font-medium">Browser extension</p>
+          <p className="text-[12.5px] text-zinc-400 mt-1 max-w-xl">
+            {installed
+              ? 'The extension is in this browser. One click connects it to the account you are already using.'
+              : 'Install the Rukmer extension in this browser, then come back to this page and click Connect this browser.'}
+          </p>
+        </div>
+        <div className="flex gap-2">
+          <button
+            type="button"
+            onClick={() => void connectBrowser()}
+            disabled={!installed || pairing}
+            className="h-8 px-3 rounded-lg bg-[#2563eb] text-[12px] text-white disabled:opacity-40"
+          >
+            {pairing ? 'Connecting…' : 'Connect this browser'}
+          </button>
+          <button
+            type="button"
+            onClick={disconnect}
+            disabled={!info?.connected}
+            className="h-8 px-3 rounded-lg border border-white/[0.08] text-[12px] text-zinc-300 disabled:opacity-40"
+          >
+            Disconnect
+          </button>
+        </div>
+      </div>
+      <div className="mt-3 flex flex-wrap gap-2 text-[12px]">
+        <span className="px-2 py-1 rounded-md bg-white/[0.04] text-zinc-300">{info?.items || 0} items</span>
+        <span className="px-2 py-1 rounded-md bg-white/[0.04] text-zinc-400">Last sync {when}</span>
+        <span className="px-2 py-1 rounded-md bg-white/[0.04] text-zinc-400">Gmail {info?.sites?.gmail || 0}</span>
+        <span className="px-2 py-1 rounded-md bg-white/[0.04] text-zinc-400">Canvas {info?.sites?.canvas || 0}</span>
+        <span className="px-2 py-1 rounded-md bg-white/[0.04] text-zinc-400">X {info?.sites?.x || 0}</span>
+      </div>
+      <div className="mt-3 space-y-1.5">
+        {(info?.browsers || []).length === 0 ? (
+          <p className="text-[12.5px] text-zinc-500">No browser connected yet.</p>
+        ) : (
+          info?.browsers.map((row) => (
+            <div key={row.name} className="flex items-center justify-between gap-3 text-[13px]">
+              <span className="text-zinc-100 inline-flex items-center gap-2">
+                <BrowserMark name={row.name} />
+                {row.name}
+                <span className="text-[11px] text-zinc-500">{row.connected ? 'Connected' : 'Saved earlier'}</span>
+              </span>
+              <span className="text-zinc-500 text-[12px]">
+                {row.items} items{row.lastSync ? ` · ${new Date(row.lastSync).toLocaleString()}` : ''}
+              </span>
+            </div>
+          ))
+        )}
+      </div>
+      {note && <p className={`text-[12px] mt-2 ${note.includes('connected') ? 'text-emerald-400' : 'text-red-300'}`}>{note}</p>}
+    </Panel>
+  );
+}
+
+function BrowserMark({ name }: { name: string }) {
+  const letter = name === 'Edge' ? 'E' : name === 'Brave' ? 'B' : 'C';
+  return (
+    <span className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-[#2563eb] text-[10px] text-white" aria-hidden>
+      {letter}
+    </span>
+  );
+}
 
 export default function ConnectorsPage() {
   const [tab, setTab] = useState<'ai' | 'all' | Kind>('ai');
@@ -249,6 +384,8 @@ export default function ConnectorsPage() {
           </p>
         )}
       </Panel>
+
+      <BrowserExtensionCard />
 
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 sm:gap-3 mb-3">
         <div className="inline-flex rounded-lg border border-white/[0.08] bg-[#0c0c0e] p-0.5 overflow-x-auto max-w-full">

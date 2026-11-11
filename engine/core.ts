@@ -145,6 +145,20 @@ export interface OauthCodeRec {
   challenge: string;
   method: string;
   exp: number;
+  label?: string;
+}
+
+export interface OauthRefreshRec {
+  hash: string;
+  keyHash: string;
+  uid: string;
+  exp: number;
+}
+
+export interface BrowserPairRec {
+  hash: string;
+  uid: string;
+  exp: number;
 }
 
 export interface TeamRec {
@@ -208,6 +222,8 @@ export interface EngineState {
   jobs: { id: string; status: string; message: string; at: string; ownerUid?: string; containerTag?: string }[];
   oauthClients: OauthClientRec[];
   oauthCodes: OauthCodeRec[];
+  oauthRefreshes: OauthRefreshRec[];
+  browserPairs: BrowserPairRec[];
   orgs: OrgRec[];
   orgMembers: OrgMemberRec[];
   links: LinkRec[];
@@ -234,6 +250,8 @@ function empty(): EngineState {
     jobs: [],
     oauthClients: [],
     oauthCodes: [],
+    oauthRefreshes: [],
+    browserPairs: [],
     orgs: [],
     orgMembers: [],
     links: [],
@@ -383,6 +401,8 @@ function shapeState() {
   state.triples = (state.triples || []).map(normalizeTriple);
   state.oauthClients = state.oauthClients || [];
   state.oauthCodes = state.oauthCodes || [];
+  state.oauthRefreshes = state.oauthRefreshes || [];
+  state.browserPairs = state.browserPairs || [];
   state.apiKeys = state.apiKeys || [];
   state.orgs = state.orgs || [];
   state.orgMembers = state.orgMembers || [];

@@ -13,6 +13,7 @@
     "security": "tsx engine/security-test.ts",
     "security-fixes": "tsx engine/security-fixes-test.ts",
     "playground-fixes": "tsx engine/playground-fixes-test.ts",
+    "extension-tests": "tsx extension/src/lib/extension.test.ts",
     "server": "nodemon --exec tsx server.ts",
     "dev": "vite",
     "build": "vite build",

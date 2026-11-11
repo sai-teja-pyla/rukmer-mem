@@ -4,6 +4,22 @@ import { Search, Tag, Download } from 'lucide-react';
 import { PageHeader, DocLink, Panel, EmptyState, TableHead, PrimaryButton } from '../../components/console/ui';
 import { engine } from '../../services/engineClient';
 
+const SOURCE_LABEL: Record<string, string> = { browser: 'Browser', gmail: 'Gmail', canvas: 'Canvas', x: 'X' };
+
+function SourceMarks({ sites }: { sites: string[] }) {
+  if (!sites.length) return null;
+  return (
+    <>
+      {sites.map((site) => (
+        <span key={site} className="inline-flex items-center gap-1 rounded-full border border-white/[0.08] px-1.5 py-0.5 text-[10px] text-zinc-300" title={SOURCE_LABEL[site] || site}>
+          <i className="h-1.5 w-1.5 rounded-full bg-[#2563eb]" aria-hidden />
+          {SOURCE_LABEL[site] || site}
+        </span>
+      ))}
+    </>
+  );
+}
+
 export default function ContainerTagsPage() {
   const [q, setQ] = useState('');
   const [kind, setKind] = useState<'all' | 'documents' | 'memories'>('all');
@@ -63,7 +79,10 @@ export default function ContainerTagsPage() {
           <div className="overflow-x-auto">
             {filtered.map((t) => (
               <div key={t.tag} className="grid grid-cols-4 min-w-[560px] px-4 py-3 text-[13px] text-zinc-300 border-t border-white/[0.06]">
-                <span className="text-zinc-100">{t.tag}</span>
+                <span className="text-zinc-100 inline-flex items-center gap-1.5 flex-wrap">
+                  {t.tag}
+                  <SourceMarks sites={t.sites || []} />
+                </span>
                 <span>{t.documents}</span>
                 <span>{t.memories}</span>
                 <span className="text-zinc-500">{t.activity ? new Date(t.activity).toLocaleString() : '—'}</span>

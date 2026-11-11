@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Rukmer options</title>
+    <link rel="stylesheet" href="../theme.css" />
+  </head>
+  <body>
+    <main class="wrap" style="max-width:720px">
+      <h1>Rukmer browser</h1>
+      <p class="muted">Each feature stays off until you turn it on. The default blocklist still skips banking, health, mail, password managers, checkout, localhost, and file URLs.</p>
+      <p id="note" class="ok"></p>
+      <h2>Capture</h2>
+      <div id="toggles" class="card"></div>
+      <h2>Sites</h2>
+      <div class="card stack">
+        <label>Gmail senders to auto-save<textarea id="gmail-senders" placeholder="one address per line"></textarea></label>
+        <label>Gmail labels to auto-save<textarea id="gmail-labels"></textarea></label>
+        <label>Never save mail containing<textarea id="gmail-keywords" placeholder="keywords"></textarea></label>
+        <label>Canvas domain<input id="canvas-domain" class="field" placeholder="canvas.school.edu" /></label>
+        <label>History import days<input id="history-days" class="field" type="number" min="1" max="90" value="7" /></label>
+        <div class="row">
+          <button id="import-history" class="btn ghost" type="button">Import history once</button>
+          <button id="import-bookmarks" class="btn ghost" type="button">Import bookmarks</button>
+        </div>
+      </div>
+      <h2>Privacy</h2>
+      <div class="card stack">
+        <label class="line"><span>Allowlist only</span><input id="allow-only" type="checkbox" /></label>
+        <label>Extra blocked domains<textarea id="block" placeholder="example.com"></textarea></label>
+        <label>Default blocks to remove<textarea id="unblock" placeholder="one domain per line"></textarea></label>
+        <label>Allowlist<textarea id="allow"></textarea></label>
+        <label>Default container tag<input id="tag" class="field" value="browser" /></label>
+        <label>Gmail tag<input id="gmail-tag" class="field" value="gmail" /></label>
+        <label>Canvas tag<input id="canvas-tag" class="field" value="canvas" /></label>
+        <label>X tag<input id="x-tag" class="field" value="x" /></label>
+        <label>Rukmer host<input id="host" class="field" value="https://app.rukmer.com" /></label>
+      </div>
+      <div class="row" style="margin-top:12px">
+        <button id="save" class="btn" type="button">Save</button>
+        <button id="export" class="btn ghost" type="button">Export browser data</button>
+        <button id="forget" class="btn ghost" type="button">Delete all browser data</button>
+      </div>
+    </main>
+    <script src="options.js"></script>
+  </body>
+</html>
