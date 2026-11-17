@@ -21,9 +21,10 @@ export function PageHeader({
   );
 }
 
-export function DocLink({ children }: { children: React.ReactNode }) {
+export function DocLink({ children, href, section }: { children: React.ReactNode; href?: string; section?: string }) {
+  const to = href || (section ? `/docs#${section}` : '/docs');
   return (
-    <Link to="/docs" className="text-[#60a5fa] hover:underline">
+    <Link to={to} className="text-[#60a5fa] hover:underline">
       {children}
     </Link>
   );

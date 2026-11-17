@@ -56,7 +56,7 @@ export default function ContainerTagsPage() {
         title="Container Tags"
         subtitle={
           <>
-            One memory space for each project, user, or workspace. <DocLink>How container tags work ↗</DocLink>
+            One memory space for each project, user, or workspace. <DocLink section="container-tags">How container tags work ↗</DocLink>
           </>
         }
       />

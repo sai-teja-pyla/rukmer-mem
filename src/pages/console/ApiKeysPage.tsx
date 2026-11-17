@@ -22,7 +22,7 @@ export default function ApiKeysPage() {
         title="API Keys"
         subtitle={
           <>
-            Create keys that let your apps use the API. <DocLink>How API keys work ↗</DocLink>
+            Create keys that let your apps use the API. <DocLink section="api-keys">How API keys work ↗</DocLink>
           </>
         }
       />
@@ -63,7 +63,7 @@ export default function ApiKeysPage() {
               body="Create your first key to authenticate requests to the Rukmer API."
               action={
                 <div className="flex flex-col items-center gap-3">
-                  <a href="/docs" className="text-[13px] text-[#60a5fa]">
+                  <a href="/docs#api-keys" className="text-[13px] text-[#60a5fa]">
                     Learn how ↗
                   </a>
                   <PrimaryButton onClick={() => setOpen(true)}>

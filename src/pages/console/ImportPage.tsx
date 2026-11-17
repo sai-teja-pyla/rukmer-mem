@@ -136,7 +136,7 @@ export default function ImportPage() {
         title="Import"
         subtitle={
           <>
-            Add content to your memory layer. <DocLink>What you can add ↗</DocLink>
+            Add content to your memory layer. <DocLink section="import">What you can add ↗</DocLink>
           </>
         }
       />

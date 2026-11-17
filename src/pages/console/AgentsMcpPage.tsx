@@ -105,7 +105,7 @@ export default function AgentsMcpPage() {
         subtitle={
           <>
             Coding agents (Cursor, Claude Code, Codex) live here. For Claude, ChatGPT, and Grok as chat apps, use Connectors. Gemini is coming soon.{' '}
-            <DocLink>How agents connect ↗</DocLink>
+            <DocLink section="agents">How agents connect ↗</DocLink>
           </>
         }
       />

@@ -26,7 +26,7 @@ export default function RequestsPage() {
         title="Requests"
         subtitle={
           <>
-            Every API call, with timing and status. <DocLink>How usage is measured ↗</DocLink>
+            Every API call, with timing and status. <DocLink section="usage">How usage is measured ↗</DocLink>
           </>
         }
       />

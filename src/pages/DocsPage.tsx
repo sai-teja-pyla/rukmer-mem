@@ -1,161 +1,155 @@
-import React, { useState } from 'react';
+import React, { useEffect } from 'react';
+import { Link, useLocation } from 'react-router-dom';
+import { ArrowLeft } from 'lucide-react';
 import { useUserSettings } from '../hooks/useUserSettings';
-import { useNavigate } from 'react-router-dom'; 
-import { ArrowLeft, Book, FileText, Video, Layers, Shield, Zap } from 'lucide-react'; 
+
+const SECTIONS = [
+  { id: 'getting-started', label: 'Getting started' },
+  { id: 'connect', label: 'Connect ChatGPT, Claude, Grok' },
+  { id: 'agents', label: 'Agents' },
+  { id: 'container-tags', label: 'Container tags' },
+  { id: 'import', label: 'Import' },
+  { id: 'api-keys', label: 'API keys' },
+  { id: 'insights', label: 'User insights' },
+  { id: 'profiles', label: 'Profiles' },
+  { id: 'usage', label: 'Usage' },
+  { id: 'billing', label: 'Billing' },
+];
+
+const MCP_URL = 'https://app.rukmer.com/mcp';
 
 export default function DocsPage() {
+  const { hash } = useLocation();
   const { settings } = useUserSettings();
-  const navigate = useNavigate();
-  const [activeTab, setActiveTab] = useState('getting-started');
-
-  // Theme Logic
   const isDark = settings?.theme === 'dark';
+  const active = hash.replace(/^#/, '') || 'getting-started';
+
+  useEffect(() => {
+    const id = hash.replace(/^#/, '');
+    if (!id) return;
+    document.getElementById(id)?.scrollIntoView({ block: 'start' });
+  }, [hash]);
+
   const theme = {
     bg: isDark ? 'bg-[#0f0f0f]' : 'bg-slate-50',
     text: isDark ? 'text-gray-200' : 'text-gray-800',
     sidebar: isDark ? 'bg-[#1a1a1a] border-gray-800' : 'bg-white border-gray-200',
     card: isDark ? 'bg-[#1a1a1a] border-gray-800' : 'bg-white border-gray-200',
-    activeLink: isDark ? 'bg-blue-600/10 text-blue-500 border-blue-500' : 'bg-blue-50 text-blue-600 border-blue-600',
-    inactiveLink: isDark ? 'text-gray-400 hover:text-white' : 'text-gray-500 hover:text-gray-900',
     header: isDark ? 'text-white' : 'text-gray-900',
-  };
-
-  // Content Data
-  const content = {
-    'getting-started': {
-      title: "Getting Started",
-      icon: <Zap size={24} className="text-yellow-500"/>,
-      body: (
-        <div className="space-y-6">
-          <p>Welcome to Rukmer AI! This platform helps construction, real estate and insurance managers analyze site photos and generate reports automatically.</p>
-          <div className={`p-4 rounded-lg border-l-4 border-blue-500 ${isDark ? 'bg-blue-900/20' : 'bg-blue-50'}`}>
-            <strong>Quick Start:</strong> Upload your first site photo on the Dashboard to see the AI in action.
-          </div>
-          <h3 className="text-xl font-bold mt-4">System Requirements</h3>
-          <ul className="list-disc pl-5 space-y-2">
-            <li>Modern Web Browser (Chrome, Firefox, Safari)</li>
-            <li>Stable Internet Connection</li>
-            <li>Images in JPG, PNG, or WEBP format</li>
-          </ul>
-        </div>
-      )
-    },
-    'uploading': {
-      title: "Uploading Assets",
-      icon: <Layers size={24} className="text-blue-500"/>,
-      body: (
-        <div className="space-y-6">
-            <p>You can upload multiple files at once. The AI analyzes them as a batch.</p>
-            <h3 className="text-xl font-bold">Supported File Types</h3>
-            <div className="grid grid-cols-2 gap-4">
-                <div className={`p-4 border rounded-lg ${theme.card}`}>
-                    <span className="font-bold block mb-1">Images</span>
-                    <span className="text-sm opacity-70">.jpg, .png, .webp (Max 5MB)</span>
-                </div>
-                <div className={`p-4 border rounded-lg ${theme.card}`}>
-                    <span className="font-bold block mb-1">Documents</span>
-                    <span className="text-sm opacity-70">.pdf (Max 10MB)</span>
-                </div>
-            </div>
-        </div>
-      )
-    },
-    'reports': {
-        title: "Generating Reports",
-        icon: <FileText size={24} className="text-green-500"/>,
-        body: (
-          <div className="space-y-4">
-            <p>Once your files are analyzed, a report is generated automatically. You can export this report to PDF.</p>
-            <ol className="list-decimal pl-5 space-y-3">
-                <li>Upload files</li>
-                <li>Wait for AI Analysis (approx 5-10 seconds)</li>
-                <li>Review the "Accomplishments" and "Concerns"</li>
-                <li>Click the <strong>PDF Icon</strong> to download.</li>
-            </ol>
-          </div>
-        )
-      },
-    'security': {
-      title: "Data Security",
-      icon: <Shield size={24} className="text-purple-500"/>,
-      body: (
-        <div className="space-y-4">
-          <p>Your data security is our top priority.</p>
-          <ul className="list-disc pl-5 space-y-2">
-            <li><strong>Encryption:</strong> All data is encrypted at rest and in transit.</li>
-            <li><strong>Privacy:</strong> We do not use your data to train public AI models.</li>
-            <li><strong>Ownership:</strong> You retain full ownership of all uploaded assets.</li>
-          </ul>
-        </div>
-      )
-    }
+    muted: isDark ? 'text-gray-400' : 'text-gray-600',
+    active: isDark ? 'bg-blue-600/10 text-blue-400' : 'bg-blue-50 text-blue-700',
+    inactive: isDark ? 'text-gray-400 hover:text-white' : 'text-gray-500 hover:text-gray-900',
   };
 
   return (
-    <div className={`min-h-screen flex flex-col md:flex-row ${theme.bg} ${theme.text} transition-colors duration-300`}>
-      
-      {/* SIDEBAR NAVIGATION */}
-      <aside className={`w-full md:w-64 border-r p-6 flex-shrink-0 ${theme.sidebar}`}>
-        <button 
-          onClick={() => navigate('/help')} 
-          className="flex items-center gap-2 mb-8 text-sm font-medium hover:text-blue-500 transition-colors"
-        >
+    <div className={`min-h-screen flex flex-col md:flex-row ${theme.bg} ${theme.text}`}>
+      <aside className={`w-full md:w-72 border-r p-6 flex-shrink-0 md:sticky md:top-0 md:h-screen md:overflow-y-auto ${theme.sidebar}`}>
+        <Link to="/help" className="flex items-center gap-2 mb-8 text-sm font-medium hover:text-blue-500">
           <ArrowLeft size={16} /> Back to Help
-        </button>
-
+        </Link>
         <h2 className="text-xs font-bold uppercase tracking-wider opacity-50 mb-4">Documentation</h2>
-        
         <nav className="space-y-1">
-          <button 
-            onClick={() => setActiveTab('getting-started')}
-            className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg text-sm font-medium transition-all ${activeTab === 'getting-started' ? theme.activeLink : theme.inactiveLink}`}
-          >
-            <Zap size={18} /> Getting Started
-          </button>
-          
-          <button 
-            onClick={() => setActiveTab('uploading')}
-            className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg text-sm font-medium transition-all ${activeTab === 'uploading' ? theme.activeLink : theme.inactiveLink}`}
-          >
-            <Layers size={18} /> Uploading Assets
-          </button>
-
-          <button 
-            onClick={() => setActiveTab('reports')}
-            className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg text-sm font-medium transition-all ${activeTab === 'reports' ? theme.activeLink : theme.inactiveLink}`}
-          >
-            <FileText size={18} /> Reports & PDF
-          </button>
-
-          <button 
-            onClick={() => setActiveTab('security')}
-            className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg text-sm font-medium transition-all ${activeTab === 'security' ? theme.activeLink : theme.inactiveLink}`}
-          >
-            <Shield size={18} /> Security
-          </button>
+          {SECTIONS.map((section) => (
+            <a
+              key={section.id}
+              href={`#${section.id}`}
+              className={`block px-3 py-2 rounded-lg text-sm ${active === section.id ? theme.active : theme.inactive}`}
+            >
+              {section.label}
+            </a>
+          ))}
         </nav>
       </aside>
 
-      {/* MAIN CONTENT AREA */}
-      <main className="flex-1 p-8 md:p-12 overflow-y-auto">
-        <div className="max-w-3xl mx-auto">
-            
-            {/* Dynamic Header */}
-            <div className="flex items-center gap-4 mb-8 border-b pb-6 border-gray-700/20">
-                <div className={`p-3 rounded-xl ${isDark ? 'bg-gray-800' : 'bg-white shadow-sm border'}`}>
-                    {content[activeTab].icon}
-                </div>
-                <h1 className={`text-3xl font-bold ${theme.header}`}>{content[activeTab].title}</h1>
-            </div>
+      <main className="flex-1 p-8 md:p-12">
+        <div className="max-w-3xl mx-auto space-y-14 leading-relaxed">
+          <section id="getting-started" className="scroll-mt-8">
+            <h1 className={`text-3xl font-bold mb-4 ${theme.header}`}>Getting started</h1>
+            <p>
+              Rukmer is a memory layer for you and your agents. Chat, search, and connected apps read the same private store.
+            </p>
+            <ol className="list-decimal pl-5 mt-4 space-y-2">
+              <li>Sign in. Rukmer creates a home container tag for your account.</li>
+              <li>Add memories from Import, or by chatting in Playground.</li>
+              <li>Search them in Playground, or from the sidebar search.</li>
+              <li>Connect ChatGPT, Claude, Grok, or a coding agent when you want those tools to use the same memory.</li>
+            </ol>
+          </section>
 
-            {/* Dynamic Body */}
-            <div className="leading-relaxed text-lg opacity-90">
-                {content[activeTab].body}
-            </div>
+          <section id="connect" className="scroll-mt-8">
+            <h2 className={`text-2xl font-bold mb-4 ${theme.header}`}>Connect ChatGPT, Claude, and Grok</h2>
+            <p>
+              Chat apps connect over MCP. You sign in to Rukmer once. You do not paste a ChatGPT, Claude, or Grok API key.
+            </p>
+            <p className={`mt-4 p-4 rounded-lg border font-mono text-sm break-all ${theme.card}`}>{MCP_URL}</p>
+            <ul className="list-disc pl-5 mt-4 space-y-2">
+              <li>ChatGPT: Settings → Connectors. Create a connector and paste the MCP URL, then Allow Rukmer.</li>
+              <li>Claude: add the Rukmer connector and approve the sign-in in the browser.</li>
+              <li>Grok: paste the same MCP URL and Allow Rukmer.</li>
+            </ul>
+            <p className={`mt-4 text-sm ${theme.muted}`}>Gemini connectors are coming soon. Open Connectors in the console to copy the URL for this site.</p>
+          </section>
 
+          <section id="agents" className="scroll-mt-8">
+            <h2 className={`text-2xl font-bold mb-4 ${theme.header}`}>Agents</h2>
+            <p>Cursor, Claude Code, and Codex use the same MCP endpoint. They share this workspace’s memory after you sign in.</p>
+            <ul className="list-disc pl-5 mt-4 space-y-2">
+              <li>Cursor: Settings → MCP → New MCP server, then paste {MCP_URL} and Allow Rukmer.</li>
+              <li>Claude Code: install the Rukmer plugin, restart, and approve the browser sign-in.</li>
+              <li>Codex: add an MCP server with that URL, restart, and approve Rukmer.</li>
+            </ul>
+            <p className={`mt-4 text-sm ${theme.muted}`}>There is no npm package named rukmer. The Agents page in the console has the exact commands.</p>
+          </section>
+
+          <section id="container-tags" className="scroll-mt-8">
+            <h2 className={`text-2xl font-bold mb-4 ${theme.header}`}>Container tags</h2>
+            <p>
+              A container tag is one memory space. Your home tag holds your own memories. Add another tag for a project, a customer, or a workspace so those memories stay separate.
+            </p>
+            <p className="mt-4">Playground, Import, and search all use the tag you pick. Memories in one tag are not returned for another.</p>
+          </section>
+
+          <section id="import" className="scroll-mt-8">
+            <h2 className={`text-2xl font-bold mb-4 ${theme.header}`}>Import</h2>
+            <p>Import writes documents into the container tag you select. Paste text or add files, then run the import. Finished documents show in that tag’s file list.</p>
+            <p className="mt-4">A tag with no stored documents says so only after the list has loaded. Processing jobs stay in their own list until they finish.</p>
+          </section>
+
+          <section id="api-keys" className="scroll-mt-8">
+            <h2 className={`text-2xl font-bold mb-4 ${theme.header}`}>API keys</h2>
+            <p>
+              Rukmer API keys (they start with <span className="font-mono">rk_live_</span>) let your own apps call the memory API. Create them on API Keys. They are separate from provider keys for Gemini, OpenAI, Anthropic, and xAI.
+            </p>
+            <p className="mt-4">
+              Provider keys are only needed when Playground chats with a model that has no server key. Add those from the plug icon in Playground or Settings → Advanced. Search does not need a provider key.
+            </p>
+          </section>
+
+          <section id="insights" className="scroll-mt-8">
+            <h2 className={`text-2xl font-bold mb-4 ${theme.header}`}>User insights</h2>
+            <p>
+              Insights count the documents, folders, and memories already stored in this workspace. The numbers appear after the store responds. An empty workspace shows zeros only once that response says the store is empty.
+            </p>
+          </section>
+
+          <section id="profiles" className="scroll-mt-8">
+            <h2 className={`text-2xl font-bold mb-4 ${theme.header}`}>Profiles</h2>
+            <p>
+              Settings → General is the organization profile: name, appearance, and the context Rukmer can use when a question is about you. Profile facts are added to chat only when the question is about you, or when the fact itself matches the search.
+            </p>
+          </section>
+
+          <section id="usage" className="scroll-mt-8">
+            <h2 className={`text-2xl font-bold mb-4 ${theme.header}`}>Usage</h2>
+            <p>Requests lists each API call with its timing and status. The count is the number of calls recorded for this workspace, not an estimate.</p>
+          </section>
+
+          <section id="billing" className="scroll-mt-8">
+            <h2 className={`text-2xl font-bold mb-4 ${theme.header}`}>Billing</h2>
+            <p>Plan, balance, and invoices are on Settings → Billing. That page is where you review the current plan and open an invoice.</p>
+          </section>
         </div>
       </main>
-
     </div>
   );
 }

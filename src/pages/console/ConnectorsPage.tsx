@@ -503,7 +503,7 @@ export default function ConnectorsPage() {
         subtitle={
           <>
             Each chat app has its own section. Sign in to Rukmer once, then plug in Claude, ChatGPT, or Grok. Gemini is coming soon.{' '}
-            <DocLink>How connectors work ↗</DocLink>
+            <DocLink section="connect">How connectors work ↗</DocLink>
           </>
         }
       />

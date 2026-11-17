@@ -49,7 +49,7 @@ export default function UserInsightsPage() {
         subtitle={
           <>
             Documents and folders in this workspace, plus memory coverage.{' '}
-            <DocLink>How insights are computed ↗</DocLink>
+            <DocLink section="insights">How insights are computed ↗</DocLink>
           </>
         }
       />

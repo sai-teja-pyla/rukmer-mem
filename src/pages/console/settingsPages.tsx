@@ -62,7 +62,7 @@ export function GeneralSettingsPage() {
         title="General"
         subtitle={
           <>
-            Your organization's context and preferences. <DocLink>How profiles work ↗</DocLink>
+            Your organization's context and preferences. <DocLink section="profiles">How profiles work ↗</DocLink>
           </>
         }
       />
@@ -206,7 +206,7 @@ export function BillingSettingsPage() {
         title="Billing"
         subtitle={
           <>
-            Your balance, your plan, and your invoices. <DocLink>How billing works ↗</DocLink>
+            Your balance, your plan, and your invoices. <DocLink section="billing">How billing works ↗</DocLink>
           </>
         }
       />
