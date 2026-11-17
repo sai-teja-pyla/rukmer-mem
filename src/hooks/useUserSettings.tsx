@@ -1,8 +1,8 @@
 import { useState, useEffect, useContext, createContext, useCallback } from 'react';
 import type { ReactNode } from 'react';
 import { auth, db } from '../firebase';
-import { onAuthStateChanged } from 'firebase/auth';
-import { doc, setDoc, onSnapshot } from 'firebase/firestore';
+import { doc, setDoc } from 'firebase/firestore';
+import { listenForUser, validDocId } from '../lib/firestoreListen';
 
 export interface UserSettings {
   theme: string;
@@ -40,15 +40,11 @@ export function UserSettingsProvider({ children }: { children: ReactNode }) {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    let unsubscribeSnapshot = () => {};
-    const unsubscribeAuth = onAuthStateChanged(auth, (user) => {
-      unsubscribeSnapshot();
-      if (!user) {
-        setLoading(false);
-        return;
-      }
-      const userRef = doc(db, 'users', user.uid);
-      unsubscribeSnapshot = onSnapshot(userRef, (docSnap) => {
+    return listenForUser(
+      'users',
+      (user) => (validDocId(user.uid) ? doc(db, 'users', user.uid) : null),
+      (docSnap, user) => {
+        const userRef = doc(db, 'users', user.uid);
         if (docSnap.exists()) {
           const data = docSnap.data() as UserSettings;
           const consoleTheme = data.consoleTheme || localStorage.getItem('consoleTheme') || 'dark';
@@ -66,21 +62,19 @@ export function UserSettingsProvider({ children }: { children: ReactNode }) {
             plan: 'free',
             createdAt: new Date(),
           };
-          setDoc(userRef, defaults);
+          void setDoc(userRef, defaults).catch((error) => {
+            console.error('Could not create user settings', error?.code || error?.message || 'error');
+          });
           setSettings(defaults);
         }
         setLoading(false);
-      });
-    });
-
-    return () => {
-      unsubscribeAuth();
-      unsubscribeSnapshot();
-    };
+      },
+      () => setLoading(false)
+    );
   }, []);
 
   const updateSettings = useCallback(async (newSettings: Partial<UserSettings>) => {
-    if (!auth.currentUser) return;
+    if (!auth.currentUser || !validDocId(auth.currentUser.uid)) return;
     setSettings(prev => {
       const updated = { ...prev, ...newSettings };
       if (newSettings.consoleTheme) localStorage.setItem('consoleTheme', String(newSettings.consoleTheme));

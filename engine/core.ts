@@ -32,6 +32,7 @@ export interface DocRec {
   source: string;
   mime: string;
   text: string;
+  originalText?: string;
   createdAt: string;
   forgotten: boolean;
   fileId?: string;
@@ -72,6 +73,7 @@ export interface TripleRec {
   predicate: string;
   object: string;
   evidence: string;
+  originalText?: string;
   isLatest: boolean;
   derived: boolean;
   validFrom: string;
@@ -687,6 +689,7 @@ export function expandQuery(query: string) {
   if (/\bme\b|\bmyself\b|\bi\b/.test(lower)) extras.push('profile user preferences about');
   if (/work|project|doing/.test(lower)) extras.push('tasks projects status');
   if (/coffee|drink|food/.test(lower)) extras.push('preferences likes');
+  if (/\bfavou?rites?\b|\bfavorites?\b/.test(lower)) extras.push('prefer');
   return { normalized: q, expanded: extras.length ? `${q} ${extras.join(' ')}` : q };
 }
 

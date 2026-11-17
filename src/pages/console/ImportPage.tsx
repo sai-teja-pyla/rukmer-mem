@@ -7,11 +7,28 @@ import type { UserProfile } from '../../types';
 import { homeTag as makeHomeTag } from '../../services/tenancy';
 
 const TYPES = ['TXT', 'MD', 'JSON', 'CSV', 'HTML', 'PDF', 'PNG', 'JPG'];
+const PASTE_LIMIT = 50000;
+
+export function urlMessage(value: string) {
+  const trimmed = value.trim();
+  if (!trimmed) return 'Enter a URL';
+  try {
+    const parsed = new URL(trimmed);
+    if ((parsed.protocol === 'http:' || parsed.protocol === 'https:') && parsed.hostname) return '';
+  } catch {
+    /* not a URL */
+  }
+  return "That doesn't look like a URL";
+}
 
 export default function ImportPage() {
   const { user, homeTag } = useOutletContext<{ user: UserProfile; homeTag: string }>();
   const mine = homeTag || makeHomeTag(user.uid);
   const [url, setUrl] = useState('');
+  const [urlHint, setUrlHint] = useState('');
+  const [pasteText, setPasteText] = useState('');
+  const [pasteTitle, setPasteTitle] = useState('');
+  const [pasteHint, setPasteHint] = useState('');
   const [staged, setStaged] = useState<{ title: string; text?: string; pdfBase64?: string; imageBase64?: string; mime?: string; source: string }[]>([]);
   const [tag, setTag] = useState(mine);
   const [tags, setTags] = useState<string[]>(mine ? [mine] : []);
@@ -19,6 +36,8 @@ export default function ImportPage() {
   const [jobs, setJobs] = useState<any[]>([]);
   const [docs, setDocs] = useState<any[] | null>(null);
   const [docsError, setDocsError] = useState('');
+  const [docsLoading, setDocsLoading] = useState(true);
+  const [docsLoaded, setDocsLoaded] = useState(false);
   const [jobsStatus, setJobsStatus] = useState<'loading' | 'ready' | 'error'>('loading');
   const [jobsError, setJobsError] = useState('');
   const [openId, setOpenId] = useState<string | null>(null);
@@ -29,7 +48,10 @@ export default function ImportPage() {
   const readerRef = useRef<HTMLDivElement>(null);
   const openReq = useRef(0);
 
+  const docsReq = useRef(0);
   const refresh = async () => {
+    const token = ++docsReq.current;
+    setDocsLoading(true);
     engine.tags().then((d) => setTags([...new Set([mine, ...(d.tags || []).map((t: any) => t.tag)].filter(Boolean))])).catch(() => {});
     engine
       .jobs()
@@ -45,17 +67,26 @@ export default function ImportPage() {
     try {
       const d = await engine.listDocs(tag || mine);
       const documents = d.documents || [];
+      if (docsReq.current !== token) return documents as any[];
       setDocs(documents);
       setDocsError('');
+      setDocsLoaded(true);
       return documents as any[];
     } catch (e: any) {
+      if (docsReq.current !== token) return [] as any[];
       setDocsError(e?.message || 'Could not load files');
       return [] as any[];
+    } finally {
+      if (docsReq.current === token) setDocsLoading(false);
     }
   };
 
   useEffect(() => {
-    refresh();
+    setDocs(null);
+    setDocsLoaded(false);
+    setDocsError('');
+    setDocsLoading(true);
+    void refresh();
   }, [tag, mine]);
 
   useEffect(() => {
@@ -113,8 +144,76 @@ export default function ImportPage() {
     setStaged((p) => [...p, ...next]);
   };
 
+  const explainUrl = () => {
+    const message = urlMessage(url);
+    setUrlHint(message);
+    return message;
+  };
+
+  const addFromWeb = async () => {
+    if (busy) {
+      setStatus('Working…');
+      return;
+    }
+    if (explainUrl()) return;
+    setBusy(true);
+    try {
+      await engine.ingest({ url: url.trim(), containerTag: tag, task });
+      setUrl('');
+      setUrlHint('');
+      setStatus('URL ingested');
+      const documents = await refresh();
+      if (documents[0]?.id) openFile(documents[0].id, documents[0]);
+    } catch (e: any) {
+      setStatus(e.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const explainPaste = () => {
+    const message = pasteText.trim() ? '' : 'Enter some text';
+    setPasteHint(message);
+    return message;
+  };
+
+  const savePaste = async () => {
+    if (busy) {
+      setStatus('Working…');
+      return;
+    }
+    if (explainPaste()) return;
+    if (pasteText.length > PASTE_LIMIT) {
+      setPasteHint('Keep it under 50,000 characters');
+      return;
+    }
+    setBusy(true);
+    try {
+      await engine.ingest({
+        text: pasteText.slice(0, PASTE_LIMIT),
+        title: pasteTitle.trim(),
+        containerTag: tag,
+        task,
+        source: 'paste',
+      });
+      setPasteText('');
+      setPasteTitle('');
+      setPasteHint('');
+      setStatus('Text saved');
+      const documents = await refresh();
+      if (documents[0]?.id) openFile(documents[0].id, documents[0]);
+    } catch (e: any) {
+      setStatus(e.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const runImport = async () => {
-    if (!staged.length) return;
+    if (!staged.length) {
+      setStatus('Add a file first');
+      return;
+    }
     setBusy(true);
     setStatus('Embedding and indexing…');
     try {
@@ -158,6 +257,9 @@ export default function ImportPage() {
           </div>
           {openError ? <p className="mt-3 text-[13px] text-red-300">{openError}</p> : null}
           {!openDoc && !openError ? <p className="mt-3 text-[13px] text-zinc-500">Opening…</p> : null}
+          {openDoc?.originalText ? (
+            <p className="mt-3 text-[13px] leading-relaxed text-zinc-300 whitespace-pre-wrap break-words">Saved as: {openDoc.originalText}</p>
+          ) : null}
           {openDoc ? (
             <div className="mt-3 max-h-[360px] overflow-y-auto rounded-lg border border-white/[0.06] bg-[#0c0c0e] p-3 text-[13px] leading-relaxed text-zinc-200 whitespace-pre-wrap break-words">
               {String(openDoc.text || '').trim() || 'No text was extracted from this file.'}
@@ -195,30 +297,94 @@ export default function ImportPage() {
             <div className="flex gap-2">
               <input
                 value={url}
-                onChange={(e) => setUrl(e.target.value)}
+                onChange={(e) => {
+                  setUrl(e.target.value);
+                  setUrlHint('');
+                }}
+                onBlur={explainUrl}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault();
+                    void addFromWeb();
+                  }
+                }}
+                aria-invalid={!!urlHint}
+                aria-describedby={urlHint ? 'import-url-hint' : undefined}
                 placeholder="https://example.com/article"
                 className="flex-1 h-9 px-3 rounded-lg border border-white/[0.08] bg-[#0c0c0e] text-[13px] outline-none"
               />
-              <GhostButton
-                onClick={async () => {
-                  if (!url.trim()) return;
-                  setBusy(true);
-                  try {
-                    await engine.ingest({ url: url.trim(), containerTag: tag, task });
-                    setUrl('');
-                    setStatus('URL ingested');
-                    const documents = await refresh();
-                    if (documents[0]?.id) openFile(documents[0].id, documents[0]);
-                  } catch (e: any) {
-                    setStatus(e.message);
-                  } finally {
-                    setBusy(false);
-                  }
-                }}
-              >
-                <Plus size={14} /> Add
-              </GhostButton>
+              <span className="relative inline-flex">
+                <GhostButton disabled={!url.trim() || busy} title={!url.trim() ? 'Enter a URL' : busy ? 'Working…' : 'Add'} onClick={() => void addFromWeb()}>
+                  <Plus size={14} /> Add
+                </GhostButton>
+                {!url.trim() && (
+                  <button
+                    type="button"
+                    className="absolute inset-0 cursor-not-allowed rounded-lg"
+                    aria-label="Enter a URL"
+                    title="Enter a URL"
+                    onClick={() => setUrlHint('Enter a URL')}
+                  />
+                )}
+              </span>
             </div>
+            {urlHint ? (
+              <p id="import-url-hint" className="mt-2 text-[12.5px] text-red-300" role="alert">
+                {urlHint}
+              </p>
+            ) : null}
+          </Panel>
+
+          <Panel className="p-4">
+            <p className="text-[13px] text-zinc-300 mb-2">Paste text</p>
+            <input
+              value={pasteTitle}
+              onChange={(e) => setPasteTitle(e.target.value)}
+              placeholder="Title (optional)"
+              aria-label="Paste title"
+              className="w-full h-9 px-3 mb-2 rounded-lg border border-white/[0.08] bg-[#0c0c0e] text-[13px] outline-none"
+            />
+            <textarea
+              value={pasteText}
+              onChange={(e) => {
+                setPasteText(e.target.value.slice(0, PASTE_LIMIT));
+                setPasteHint('');
+              }}
+              onBlur={explainPaste}
+              maxLength={PASTE_LIMIT}
+              rows={6}
+              aria-label="Paste text"
+              aria-invalid={!!pasteHint}
+              aria-describedby={pasteHint ? 'import-paste-hint' : undefined}
+              placeholder="Paste notes, a chat, or any text to remember"
+              className="w-full px-3 py-2 rounded-lg border border-white/[0.08] bg-[#0c0c0e] text-[13px] outline-none resize-y"
+            />
+            <div className="mt-2 flex items-center justify-between gap-3">
+              <p className="text-[12px] text-zinc-500">{pasteText.length.toLocaleString()} / 50,000</p>
+              <span className="relative inline-flex">
+                <GhostButton
+                  disabled={!pasteText.trim() || busy}
+                  title={!pasteText.trim() ? 'Enter some text' : busy ? 'Working…' : 'Save'}
+                  onClick={() => void savePaste()}
+                >
+                  Save
+                </GhostButton>
+                {!pasteText.trim() && (
+                  <button
+                    type="button"
+                    className="absolute inset-0 cursor-not-allowed rounded-lg"
+                    aria-label="Enter some text"
+                    title="Enter some text"
+                    onClick={() => setPasteHint('Enter some text')}
+                  />
+                )}
+              </span>
+            </div>
+            {pasteHint ? (
+              <p id="import-paste-hint" className="mt-2 text-[12.5px] text-red-300" role="alert">
+                {pasteHint}
+              </p>
+            ) : null}
           </Panel>
 
           <Panel>
@@ -256,9 +422,16 @@ export default function ImportPage() {
             </div>
             <div className="flex items-center justify-between px-4 py-3">
               <p className="text-[11px] tracking-[0.12em] text-zinc-500">{staged.length ? `${staged.length} staged` : 'NOTHING STAGED YET'}</p>
-              <PrimaryButton onClick={runImport} className={!staged.length || busy ? 'opacity-50 pointer-events-none' : ''}>
-                {busy ? 'Working…' : 'Import'}
-              </PrimaryButton>
+              <div className="flex items-center gap-3">
+                {!staged.length ? <p className="text-[12px] text-zinc-500">Add a file first</p> : null}
+                <PrimaryButton
+                  onClick={runImport}
+                  disabled={!staged.length || busy}
+                  title={!staged.length ? 'Add a file first' : busy ? 'Working…' : 'Import'}
+                >
+                  {busy ? 'Working…' : 'Import'}
+                </PrimaryButton>
+              </div>
             </div>
             {status && <p className="px-4 pb-3 text-[12px] text-zinc-400">{status}</p>}
           </Panel>
@@ -267,20 +440,20 @@ export default function ImportPage() {
         <div className="space-y-3">
         <Panel className="p-4">
           <p className="text-[13.5px] text-zinc-200 mb-3">Imported files</p>
-          {docs === null && !docsError ? (
+          {docsLoading && !docsLoaded ? (
             <div className="space-y-2" aria-busy="true">
               <Skeleton className="h-12 w-full" />
               <Skeleton className="h-12 w-full" />
               <Skeleton className="h-12 w-4/5" />
             </div>
-          ) : docs === null ? (
+          ) : !docsLoaded ? (
             <div>
-              <p className="text-[12.5px] text-red-300">{docsError}</p>
+              <p className="text-[12.5px] text-red-300">{docsError || 'Could not load files'}</p>
               <button type="button" onClick={() => refresh()} className="mt-2 text-[12.5px] text-blue-300">
                 Retry
               </button>
             </div>
-          ) : docs.length === 0 ? (
+          ) : (docs || []).length === 0 ? (
             <p className="text-[12.5px] text-zinc-500">Nothing stored in this tag yet. After Import finishes, files appear here.</p>
           ) : (
             <div className="space-y-2 max-h-[420px] overflow-y-auto">
@@ -294,6 +467,9 @@ export default function ImportPage() {
                     className={`w-full text-left rounded-lg border p-2.5 ${open ? 'border-blue-400/40 bg-blue-500/10' : 'border-white/[0.06] hover:bg-white/[0.03]'}`}
                   >
                     <p className="text-[13px] text-zinc-200 truncate">{d.title}</p>
+                    {d.originalText ? (
+                      <p className="text-[12px] text-zinc-400 mt-1 whitespace-pre-wrap break-words">Saved as: {d.originalText}</p>
+                    ) : null}
                     <p className="text-[11px] text-zinc-500">
                       {d.folder || d.source} · {d.chars || 0} chars · {d.createdAt ? new Date(d.createdAt).toLocaleString() : 'just now'}
                     </p>

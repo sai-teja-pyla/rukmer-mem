@@ -9,6 +9,7 @@ import {
 import { rememberTranscript } from './pipeline.js';
 import { MEMORY_TOOLS, runMemoryTool } from './tools.js';
 import { resolveOwnedTag } from './tenancy.js';
+import { isProduction } from './security.js';
 
 export type Provider = 'openai' | 'anthropic' | 'gemini' | 'grok';
 
@@ -60,27 +61,28 @@ export function providerFromModel(model: string): Provider {
   return 'openai';
 }
 
+export function serverProviderKey(provider: Provider) {
+  if (provider === 'openai') return String(process.env.OPENAI_API_KEY || '');
+  if (provider === 'anthropic') return String(process.env.ANTHROPIC_API_KEY || '');
+  if (provider === 'gemini') return String(process.env.GEMINI_API_KEY || '');
+  return String(process.env.XAI_API_KEY || process.env.GROK_API_KEY || '');
+}
+
 export function providerStatus() {
   return {
-    gemini: !!process.env.GEMINI_API_KEY,
-    openai: !!process.env.OPENAI_API_KEY,
-    anthropic: !!process.env.ANTHROPIC_API_KEY,
-    grok: !!(process.env.XAI_API_KEY || process.env.GROK_API_KEY),
+    gemini: !!serverProviderKey('gemini'),
+    openai: !!serverProviderKey('openai'),
+    anthropic: !!serverProviderKey('anthropic'),
+    grok: !!serverProviderKey('grok'),
   };
 }
 
-function keyFor(provider: Provider, req: Request) {
+export function keyFor(provider: Provider, req: Request) {
   const token = providerSecret(req);
-  if (provider === 'openai') {
-    return header(req, 'x-openai-key') || token || process.env.OPENAI_API_KEY || '';
-  }
-  if (provider === 'anthropic') {
-    return header(req, 'x-anthropic-key') || header(req, 'x-api-key') || process.env.ANTHROPIC_API_KEY || '';
-  }
-  if (provider === 'gemini') {
-    return header(req, 'x-gemini-key') || header(req, 'x-goog-api-key') || process.env.GEMINI_API_KEY || '';
-  }
-  return header(req, 'x-grok-key') || header(req, 'x-xai-key') || token || process.env.XAI_API_KEY || process.env.GROK_API_KEY || '';
+  if (provider === 'openai') return header(req, 'x-openai-key') || token || serverProviderKey('openai');
+  if (provider === 'anthropic') return header(req, 'x-anthropic-key') || header(req, 'x-api-key') || serverProviderKey('anthropic');
+  if (provider === 'gemini') return header(req, 'x-gemini-key') || header(req, 'x-goog-api-key') || serverProviderKey('gemini');
+  return header(req, 'x-grok-key') || header(req, 'x-xai-key') || token || serverProviderKey('grok');
 }
 
 function rememberLater(tag: string, source: string, query: string, answer: string) {
@@ -277,6 +279,22 @@ export async function completeChat(req: Request, res: Response) {
   }
 
   if (useMemory && status < 400) rememberLater(tag, `${provider}-router`, query, answer);
+  const citations = (mem?.retrieved.matches || []).map((match) => ({
+    id: match.id,
+    text: String(match.text || '').slice(0, 500),
+    title: match.title,
+    source: match.source || 'memory',
+    score: match.score,
+  }));
+  const emptyReason = !tag
+    ? 'no tag'
+    : !memoryOn(req)
+      ? 'memory off'
+      : req.body?.compareWithoutMemory === true
+        ? 'compare mode'
+        : useMemory && citations.length === 0
+          ? 'below threshold'
+          : '';
   res.status(status).json({
     ...json,
     answer,
@@ -284,14 +302,9 @@ export async function completeChat(req: Request, res: Response) {
       injected: useMemory,
       provider,
       containerTag: tag,
-      matches: mem?.retrieved.matches.length || 0,
-      citations: (mem?.retrieved.matches || []).map((match) => ({
-        id: match.id,
-        text: String(match.text || '').slice(0, 500),
-        title: match.title,
-        source: match.source || 'memory',
-        score: match.score,
-      })),
+      matches: citations.length,
+      citations,
+      ...(!isProduction() && citations.length === 0 && emptyReason ? { debug: { reason: emptyReason } } : {}),
     },
   });
 }

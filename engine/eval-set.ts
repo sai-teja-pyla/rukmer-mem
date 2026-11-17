@@ -46,6 +46,12 @@ export const EVAL_CASES: EvalCase[] = [
     expect: 'memory index',
   },
   {
+    id: 'favourite-city',
+    facts: [{ subject: 'Nori', predicate: 'prefers', object: 'Lisbon', evidence: 'Nori prefers Lisbon for testing.' }],
+    query: 'favourite city',
+    expect: 'Lisbon',
+  },
+  {
     id: 'person',
     facts: [
       { subject: 'User', predicate: 'partner_of', object: 'Mina', evidence: 'User partner is Mina' },

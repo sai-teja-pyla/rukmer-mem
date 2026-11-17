@@ -26,14 +26,17 @@ export default function ContainerTagsPage() {
   const [tags, setTags] = useState<any[] | null>(null);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(true);
+  const [loaded, setLoaded] = useState(false);
 
   const load = () => {
     setLoading(true);
+    setError('');
     engine
       .tags()
       .then((d) => {
         setTags(d.tags || []);
         setError('');
+        setLoaded(true);
       })
       .catch((e) => setError(e?.message || 'Could not load container tags'))
       .finally(() => setLoading(false));
@@ -78,15 +81,15 @@ export default function ContainerTagsPage() {
       </div>
       <Panel>
         <TableHead cols={['CONTAINER TAG', 'DOCUMENTS', 'MEMORIES', 'ACTIVITY']} />
-        {loading && tags === null ? (
+        {loading && !loaded ? (
           <div className="px-4 py-4 space-y-3" aria-busy="true">
             <Skeleton className="h-8 w-full" />
             <Skeleton className="h-8 w-full" />
             <Skeleton className="h-8 w-4/5" />
           </div>
-        ) : error && tags === null ? (
+        ) : error && !loaded ? (
           <LoadError message={error} onRetry={load} />
-        ) : filtered.length === 0 ? (
+        ) : loaded && filtered.length === 0 ? (
           <EmptyState
             icon={<Tag size={18} />}
             title={(tags || []).length === 0 ? 'No container tags yet' : 'No tags match'}

@@ -96,15 +96,25 @@ export function PrimaryButton({
   children,
   onClick,
   className = '',
+  disabled = false,
+  title,
 }: {
   children: React.ReactNode;
   onClick?: () => void;
   className?: string;
+  disabled?: boolean;
+  title?: string;
 }) {
   return (
     <button
+      type="button"
+      disabled={disabled}
+      aria-disabled={disabled}
+      title={title}
       onClick={onClick}
-      className={`inline-flex items-center gap-1.5 h-9 px-3.5 rounded-lg bg-[#2563eb] hover:bg-[#1d4ed8] text-white text-[13px] font-medium ${className}`}
+      className={`inline-flex items-center gap-1.5 h-9 px-3.5 rounded-lg text-white text-[13px] font-medium ${
+        disabled ? 'bg-[#2563eb]/40 text-white/80 cursor-not-allowed' : 'bg-[#2563eb] hover:bg-[#1d4ed8]'
+      } ${className}`}
     >
       {children}
     </button>
@@ -131,15 +141,25 @@ export function GhostButton({
   children,
   onClick,
   className = '',
+  disabled = false,
+  title,
 }: {
   children: React.ReactNode;
   onClick?: () => void;
   className?: string;
+  disabled?: boolean;
+  title?: string;
 }) {
   return (
     <button
+      type="button"
+      disabled={disabled}
+      aria-disabled={disabled}
+      title={title}
       onClick={onClick}
-      className={`inline-flex items-center gap-1.5 h-8 px-3 rounded-lg border border-white/[0.1] text-[13px] text-zinc-300 hover:bg-white/[0.04] ${className}`}
+      className={`inline-flex items-center gap-1.5 h-8 px-3 rounded-lg border border-white/[0.1] text-[13px] ${
+        disabled ? 'text-zinc-500 cursor-not-allowed' : 'text-zinc-300 hover:bg-white/[0.04]'
+      } ${className}`}
     >
       {children}
     </button>

@@ -26,6 +26,7 @@ type Fact = {
   predicate: string;
   object: string;
   evidence?: string;
+  originalText?: string;
   isLatest?: boolean;
   derived?: boolean;
   containerTag?: string;
@@ -49,6 +50,7 @@ type GraphNode = {
   containerTag?: string;
   createdAt?: string;
   text?: string;
+  originalText?: string;
   facts?: Fact[];
   x?: number;
   y?: number;
@@ -92,14 +94,33 @@ function isLatestMemory(node: GraphNode) {
   return facts.some((f) => f.isLatest !== false);
 }
 
+function savedAs(node: GraphNode) {
+  const text =
+    node.originalText?.trim() ||
+    (node.facts || []).map((fact) => fact.originalText?.trim()).find(Boolean) ||
+    '';
+  return text ? `Saved as: ${text}` : '';
+}
+
+function factLine(fact: Fact) {
+  const predicate = String(fact.predicate || 'related').replace(/_/g, ' ');
+  return `${fact.subject} — ${predicate} → ${fact.object}`;
+}
+
 function memoryCopy(node: GraphNode) {
   const text = node.text?.trim();
   if (text) return text;
   const facts = node.facts || [];
-  const evidence = [...new Set(facts.map((f) => f.evidence?.trim()).filter(Boolean))] as string[];
-  if (evidence.length) return evidence.join(' ');
-  if (facts.length) return facts.map((f) => `${f.subject} ${f.predicate} ${f.object}`).join('. ');
+  if (facts.length === 1) return factLine(facts[0]);
   return node.label || '';
+}
+
+function shortLabel(label: string) {
+  const text = String(label || '').replace(/\s+/g, ' ').trim();
+  if (text.length <= 16) return text;
+  const slice = text.slice(0, 15);
+  const cut = slice.lastIndexOf(' ');
+  return `${(cut > 6 ? slice.slice(0, cut) : slice).trim()}…`;
 }
 
 function versionOf(node: GraphNode) {
@@ -171,13 +192,13 @@ function spokeKind(hubId: string | null, nodeId: string, edges: GraphEdge[]) {
 function orbitOf(nodes: GraphNode[]) {
   const n = nodes.length;
   if (!n) return [];
-  const minGap = 64;
+  const minGap = 84;
   const placed: { node: GraphNode; ring: number; index: number; count: number; radius: number }[] = [];
   let cursor = 0;
   let ring = 0;
   while (cursor < n) {
-    const radius = 188 + ring * 92;
-    const cap = Math.max(8, Math.floor((2 * Math.PI * radius) / minGap));
+    const radius = 196 + ring * 108;
+    const cap = Math.max(6, Math.floor((2 * Math.PI * radius) / minGap));
     const count = Math.min(cap, n - cursor);
     for (let index = 0; index < count; index += 1) {
       placed.push({ node: nodes[cursor + index], ring, index, count, radius });
@@ -187,7 +208,7 @@ function orbitOf(nodes: GraphNode[]) {
   }
   return placed.map(({ node, ring, index, count, radius }) => {
     const turn = (index / count) * Math.PI * 2 - Math.PI / 2 + ring * 0.38;
-    const wobble = ((index * 53 + ring * 17) % 56) - 22;
+    const wobble = ((index * 17 + ring * 5) % 12) - 6;
     const r = radius + wobble;
     return {
       ...node,
@@ -238,6 +259,7 @@ function Legend() {
         <p className="text-[10px] tracking-[0.14em] graph-faint mb-1.5">CONNECTIONS</p>
         <div className="space-y-1.5">
           <p className="flex items-center gap-2"><span className="w-7 border-t" style={{ borderColor: 'var(--graph-line)' }} /> Doc → Memory</p>
+          <p className="flex items-center gap-2"><span className="w-7 border-t" style={{ borderColor: 'var(--graph-memory)' }} /> Subject → object</p>
           <p className="flex items-center gap-2"><span className="w-7 border-t border-dashed" style={{ borderColor: 'var(--graph-line)' }} /> Doc similarity</p>
           <p className="flex items-center gap-2"><span className="w-7 border-t" style={{ borderColor: 'var(--graph-version)' }} /> Version chain</p>
         </div>
@@ -343,6 +365,14 @@ export default function MemoryGraphPage() {
   }, [orbit, selectedId]);
 
   const selected = visible.find((n) => n.id === selectedId) || graph.nodes.find((n) => n.id === selectedId) || null;
+  const placed = useMemo(() => new Map(orbit.map((node) => [node.id, node])), [orbit]);
+  const factEdges = useMemo(
+    () =>
+      graph.edges.filter(
+        (edge) => edge.label !== 'mentions' && edge.source !== edge.target && placed.has(edge.source) && placed.has(edge.target)
+      ),
+    [graph.edges, placed]
+  );
   const memoryCount = countMemories(tagRows, space);
   const spaceLabel = space === 'all' ? 'All Spaces' : space;
   const hasPlot = orbit.length > 0 || !!hub;
@@ -397,6 +427,33 @@ export default function MemoryGraphPage() {
         onDoubleClick={() => setView({ x: 0, y: 0, k: 1 })}
       >
         <g transform={`translate(${HUB.x} ${HUB.y}) translate(${view.x} ${view.y}) scale(${view.k}) translate(${-HUB.x} ${-HUB.y})`}>
+          {factEdges.map((edge) => {
+            const from = placed.get(edge.source);
+            const to = placed.get(edge.target);
+            if (!from || !to) return null;
+            const end = trimLine(from.x ?? 0, from.y ?? 0, to.x ?? 0, to.y ?? 0, 22, 22);
+            const active = selected?.id === edge.source || selected?.id === edge.target;
+            const midX = (end.x1 + end.x2) / 2;
+            const midY = (end.y1 + end.y2) / 2;
+            return (
+              <g key={`fact-${edge.id}`}>
+                <line
+                  x1={end.x1}
+                  y1={end.y1}
+                  x2={end.x2}
+                  y2={end.y2}
+                  stroke="var(--graph-memory)"
+                  strokeWidth={active ? 1.4 : 0.9}
+                  opacity={active ? 0.9 : 0.35}
+                />
+                {active ? (
+                  <text x={midX} y={midY - 4} textAnchor="middle" fontSize="8" fill="var(--graph-text)">
+                    {shortLabel(String(edge.label || '').replace(/_/g, ' '))}
+                  </text>
+                ) : null}
+              </g>
+            );
+          })}
           {orbit.map((node) => {
             const kind = spokeKind(hub?.id || null, node.id, graph.edges);
             const active = selected?.id === node.id;
@@ -442,6 +499,17 @@ export default function MemoryGraphPage() {
                   </text>
                 ) : null}
                 {flags.expiring ? <circle cx={x - 16} cy={y - 16} r="3.4" fill="#f0a202" /> : null}
+                {(node.facts?.length || 0) > 1 ? (
+                  <g style={{ pointerEvents: 'none' }}>
+                    <circle cx={x + 16} cy={y - 14} r="8" fill="var(--graph-hub)" stroke={stroke} strokeWidth="1" />
+                    <text x={x + 16} y={y - 11} textAnchor="middle" fontSize="8" fill="var(--graph-text)">
+                      {node.facts!.length > 99 ? '99' : node.facts!.length}
+                    </text>
+                  </g>
+                ) : null}
+                <text x={x} y={y + 32} textAnchor="middle" fontSize="9" fill="var(--graph-text)" style={{ pointerEvents: 'none' }}>
+                  {shortLabel(node.label)}
+                </text>
               </g>
             );
           })}
@@ -493,7 +561,7 @@ export default function MemoryGraphPage() {
           <span className="flex-1 min-w-0">
             <span className="block text-[13.5px] font-medium truncate">{spaceLabel}</span>
             <span className="block text-[11.5px] graph-muted">
-              {ready ? `${memoryCount} total memories` : error ? 'Could not load memories' : 'Loading memories…'}
+              {ready ? `${memoryCount} total memories` : '—'}
             </span>
           </span>
           <ChevronDown size={16} className={`graph-muted shrink-0 transition-transform ${menuOpen ? 'rotate-180' : ''}`} />
@@ -536,8 +604,28 @@ export default function MemoryGraphPage() {
               </button>
             </div>
             <div className="overflow-y-auto min-h-0 px-4 pb-3">
-              <p className="text-[10px] tracking-[0.14em] graph-faint mb-1">MEMORY</p>
-              <p className="text-[13px] leading-relaxed whitespace-pre-wrap">{memoryCopy(selected)}</p>
+              <div className="flex items-center gap-2 mb-1">
+                <p className="text-[10px] tracking-[0.14em] graph-faint">MEMORY</p>
+                {(selected.facts?.length || 0) > 0 ? (
+                  <span className="text-[10px] rounded-full px-1.5 py-0.5 border" style={{ borderColor: 'var(--graph-border)' }}>
+                    {selected.facts?.length}
+                  </span>
+                ) : null}
+              </div>
+              {selected.facts?.length ? (
+                <ul className="space-y-1.5">
+                  {selected.facts.map((fact) => (
+                    <li key={fact.id} className="text-[13px] leading-relaxed break-words">
+                      {factLine(fact)}
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <p className="text-[13px] leading-relaxed whitespace-pre-wrap">{memoryCopy(selected)}</p>
+              )}
+              {savedAs(selected) ? (
+                <p className="text-[13px] leading-relaxed whitespace-pre-wrap mt-2">{savedAs(selected)}</p>
+              ) : null}
               <div className="mt-4 space-y-3">
                 <div>
                   <p className="text-[10px] tracking-[0.14em] graph-faint">SPACE</p>

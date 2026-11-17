@@ -21,7 +21,7 @@ function keyOf(tag: string, subject: string, predicate: string) {
   return `${tag}::${subject.trim().toLowerCase()}::${predicate.trim().toLowerCase()}`;
 }
 
-export function upsertFacts(tag: string, facts: IncomingFact[], evidence = '', gov?: MemoryGov) {
+export function upsertFacts(tag: string, facts: IncomingFact[], evidence = '', gov?: MemoryGov, originalText = '') {
   const state = getState();
   const now = new Date().toISOString();
   let updates = 0;
@@ -40,8 +40,12 @@ export function upsertFacts(tag: string, facts: IncomingFact[], evidence = '', g
     const sameObject = latest && latest.object.trim().toLowerCase() === object.toLowerCase();
 
     const cleanEvidence = gov?.tenantId ? redactText(gov.tenantId, evidence).text : evidence;
+    const cleanOriginal = String(gov?.tenantId ? redactText(gov.tenantId, originalText).text : originalText || '')
+      .trim()
+      .slice(0, 4000);
     if (latest && sameObject) {
       latest.evidence = `${latest.evidence} | ${cleanEvidence}`.slice(0, 900);
+      if (cleanOriginal) latest.originalText = cleanOriginal;
       latest.kind = 'extend';
       latest.updatedAt = now;
       if (!latest.recordedAt) latest.recordedAt = latest.validFrom || now;
@@ -64,6 +68,7 @@ export function upsertFacts(tag: string, facts: IncomingFact[], evidence = '', g
       predicate,
       object,
       evidence: String(cleanEvidence || '').slice(0, 400),
+      originalText: cleanOriginal || undefined,
       isLatest: true,
       derived: raw.kind === 'derive',
       validFrom: raw.validFrom || now,

@@ -15,6 +15,8 @@ import {
 } from 'lucide-react';
 
 import { engine } from '../../services/engineClient';
+import { friendlyModelError, isRawKeyError } from '../../services/modelError';
+import { threadTitle, titleAfterSend } from '../../services/threadTitle';
 import { keyHeaders, loadProviderKeys, pickReadyModel, saveProviderKeys, type ProviderKeys } from '../../services/providerKeys';
 import type { UserProfile } from '../../types';
 import { homeTag as makeHomeTag } from '../../services/tenancy';
@@ -23,7 +25,7 @@ type MemoryMode = 'agentic' | 'auto';
 type Retrieval = 'hybrid' | 'semantic' | 'keyword';
 type RequestTab = 'prompt' | 'curl' | 'ts' | 'py';
 type Citation = { id: string; text: string; title?: string; source?: string; score?: number };
-type ChatMsg = { role: 'user' | 'assistant'; text: string; citations?: Citation[] };
+type ChatMsg = { role: 'user' | 'assistant'; text: string; citations?: Citation[]; error?: boolean };
 type Thread = { id: string; title: string; updatedAt: string; messages: ChatMsg[] };
 
 function threadStore(uid: string) {
@@ -34,7 +36,23 @@ function loadThreads(uid: string): Thread[] {
   try {
     const raw = localStorage.getItem(threadStore(uid));
     const parsed = raw ? JSON.parse(raw) : [];
-    return Array.isArray(parsed) ? parsed : [];
+    if (!Array.isArray(parsed)) return [];
+    return parsed.flatMap((row) => {
+      const id = String(row?.id || '');
+      if (!id) return [];
+      const messages = Array.isArray(row.messages)
+        ? row.messages.flatMap((message: { role?: string; text?: string; content?: string; citations?: Citation[]; error?: boolean }) => {
+            const role = message?.role === 'assistant' ? 'assistant' : message?.role === 'user' ? 'user' : '';
+            if (!role) return [];
+            const text = String(message.text || message.content || '');
+            const rawKey = role === 'assistant' && isRawKeyError(text);
+            const error = rawKey || message.error === true;
+            const citations = !error && Array.isArray(message.citations) ? message.citations : undefined;
+            return [{ role, text: rawKey ? friendlyModelError(text) : text, ...(error ? { error: true } : {}), ...(citations ? { citations } : {}) }];
+          })
+        : [];
+      return [{ id, title: String(row.title || 'New chat'), updatedAt: String(row.updatedAt || new Date().toISOString()), messages }];
+    });
   } catch {
     return [];
   }
@@ -128,16 +146,6 @@ function Stepper({
   );
 }
 
-function friendlyModelError(message: string) {
-  const text = String(message || '');
-  if (/openai/i.test(text) && /api key/i.test(text)) return 'Add an OpenAI API key to use this model. Open the plug icon or Settings → Advanced.';
-  if (/anthropic/i.test(text) && /api key/i.test(text)) return 'Add an Anthropic API key to use this model. Open the plug icon or Settings → Advanced.';
-  if (/\bxai\b|grok/i.test(text) && /api key/i.test(text)) return 'Add an xAI API key to use this model. Open the plug icon or Settings → Advanced.';
-  if (/gemini/i.test(text) && /api key/i.test(text)) return 'Add a Gemini API key to use this model. Open the plug icon or Settings → Advanced.';
-  if (/api key/i.test(text)) return 'Add a provider API key to use this model. Open the plug icon or Settings → Advanced.';
-  return text || 'Memory engine is unreachable.';
-}
-
 function MessageBody({ text }: { text: string }) {
   const [open, setOpen] = useState(false);
   const long = text.length > 480;
@@ -199,7 +207,12 @@ export default function PlaygroundPage() {
   const [mode, setMode] = useState<Mode>('chat');
   const [memoryMode, setMemoryMode] = useState<MemoryMode>('agentic');
   const [input, setInput] = useState('');
-  const [model, setModel] = useState<(typeof MODELS)[number]>(MODELS[0]);
+  const [model, setModel] = useState<(typeof MODELS)[number]>(() => {
+    const stored = loadProviderKeys();
+    const ready: Record<string, boolean> = {};
+    for (const candidate of MODELS) ready[candidate.provider] = !!stored[candidate.provider];
+    return pickReadyModel(MODELS, ready) || MODELS[0];
+  });
   const [tag, setTag] = useState(mine);
   const [tagOptions, setTagOptions] = useState<string[]>(mine ? [mine] : []);
   const [keys, setKeys] = useState<ProviderKeys>(() => loadProviderKeys());
@@ -228,6 +241,10 @@ export default function PlaygroundPage() {
   const [threadId, setThreadId] = useState(() => (loadThreads(user.uid)[0] || newThread()).id);
   const [hits, setHits] = useState<any[]>([]);
   const [busy, setBusy] = useState(false);
+  const [renaming, setRenaming] = useState(false);
+  const [renameValue, setRenameValue] = useState('');
+  const [renameHint, setRenameHint] = useState('');
+  const [confirmDelete, setConfirmDelete] = useState(false);
   const thread = threads.find((t) => t.id === threadId) || threads[0];
   const messages = thread?.messages || [];
 
@@ -242,6 +259,34 @@ export default function PlaygroundPage() {
     persistThreads([created, ...threads], created.id);
     setHits([]);
     setInput('');
+    setRenaming(false);
+    setConfirmDelete(false);
+  };
+
+  const saveRename = () => {
+    const next = threadTitle(renameValue, 80);
+    if (!renameValue.trim() || next === 'New chat') {
+      setRenameHint('Enter a title');
+      return;
+    }
+    persistThreads(
+      threads.map((item) => (item.id === threadId ? { ...item, title: next, updatedAt: new Date().toISOString() } : item))
+    );
+    setRenaming(false);
+    setRenameHint('');
+  };
+
+  const removeThread = () => {
+    const rest = threads.filter((item) => item.id !== threadId);
+    if (!rest.length) {
+      const created = newThread();
+      persistThreads([created], created.id);
+    } else {
+      persistThreads(rest, rest[0].id);
+    }
+    setHits([]);
+    setRenaming(false);
+    setConfirmDelete(false);
   };
 
   useEffect(() => {
@@ -284,19 +329,20 @@ export default function PlaygroundPage() {
     const params = new URLSearchParams(search);
     const nextMode = params.get('mode');
     const q = params.get('q');
+    const thread = params.get('thread');
     if (nextMode === 'search' || nextMode === 'chat') setMode(nextMode);
     if (q) setInput(q);
-  }, [search]);
+    if (thread && loadThreads(user.uid).some((item) => item.id === thread)) setThreadId(thread);
+  }, [search, user.uid]);
 
   const providerReady = (provider: string) => !!(serverProviders[provider] || keys[provider as keyof ProviderKeys]);
-  const modelReady = providerReady(model.provider);
+  const noneReady = !MODELS.some((candidate) => providerReady(candidate.provider));
 
   useEffect(() => {
     const ready: Record<string, boolean> = {};
-    for (const candidate of MODELS) {
-      ready[candidate.provider] = !!(serverProviders[candidate.provider] || keys[candidate.provider]);
-    }
-    setModel((cur) => (ready[cur.provider] ? cur : pickReadyModel(MODELS, ready) || cur));
+    for (const candidate of MODELS) ready[candidate.provider] = providerReady(candidate.provider);
+    const first = pickReadyModel(MODELS, ready);
+    setModel((cur) => (ready[cur.provider] ? cur : first || cur));
   }, [serverProviders, keys]);
 
   useEffect(() => {
@@ -384,21 +430,26 @@ export default function PlaygroundPage() {
   const send = async (text?: string) => {
     const value = (text ?? input).trim();
     if (!value || busy) return;
+    if (mode === 'chat' && noneReady) return;
     const withUser = threads.map((t) =>
       t.id === threadId
-        ? { ...t, title: t.messages.length ? t.title : value.slice(0, 42), updatedAt: new Date().toISOString(), messages: [...t.messages, { role: 'user' as const, text: value }] }
+        ? {
+            ...t,
+            title: titleAfterSend(t, value),
+            updatedAt: new Date().toISOString(),
+            messages: [...t.messages, { role: 'user' as const, text: value }],
+          }
         : t
     );
-    if (mode === 'chat' && !providerReady(model.provider)) {
-      const note = friendlyModelError(`Add a ${model.vendor} API key to use ${model.label}.`);
+    const failThread = (message: string) => {
       persistThreads(
         withUser.map((t) =>
-          t.id === threadId ? { ...t, messages: [...t.messages, { role: 'assistant' as const, text: note }] } : t
+          t.id === threadId
+            ? { ...t, messages: [...t.messages, { role: 'assistant' as const, text: friendlyModelError(message), error: true }] }
+            : t
         )
       );
-      setInput('');
-      return;
-    }
+    };
     setBusy(true);
     persistThreads(withUser);
     setInput('');
@@ -415,7 +466,7 @@ export default function PlaygroundPage() {
       include,
       remember: true,
       source: 'playground',
-      history: [...messages, { role: 'user' as const, text: value }].map((m) => ({ role: m.role, content: m.text })),
+      history: [...messages, { role: 'user' as const, text: value }].filter((m) => !m.error).map((m) => ({ role: m.role, content: m.text })),
     };
     try {
       if (mode === 'search') {
@@ -436,10 +487,12 @@ export default function PlaygroundPage() {
           )
         );
       } else {
-        const history = [...messages, { role: 'user' as const, text: value }].map((m) => ({
-          role: m.role,
-          content: m.text,
-        }));
+        const history = [...messages, { role: 'user' as const, text: value }]
+          .filter((m) => !m.error)
+          .map((m) => ({
+            role: m.role,
+            content: m.text,
+          }));
         const out = await engine.complete(
           {
             model: model.id,
@@ -460,10 +513,22 @@ export default function PlaygroundPage() {
             'x-rukmer-mode': memoryMode,
           }
         );
-        const content = out.choices?.[0]?.message?.content;
-        const rawError = typeof out.error === 'string' ? out.error : out.error?.message || out.error?.error;
-        if (!out.answer && !content && rawError) throw new Error(String(rawError));
-        const answer = out.answer || content || 'No answer.';
+        const content = String(out.choices?.[0]?.message?.content || '').trim();
+        const rawError = [out.error, out.message]
+          .map((item) => (typeof item === 'string' ? item : item?.message || item?.error || ''))
+          .map((item: string) => String(item || '').trim())
+          .find(Boolean);
+        const answerText = String(out.answer || content || '').trim();
+        if (rawError && (!answerText || answerText === rawError || isRawKeyError(answerText))) {
+          failThread(rawError);
+          return;
+        }
+        if (isRawKeyError(answerText)) {
+          failThread(answerText);
+          return;
+        }
+        if (!answerText) throw new Error('The model did not reply.');
+        const answer = answerText;
         const citations = (out.rukmer?.citations || []) as Citation[];
         setHits([]);
         persistThreads(
@@ -479,21 +544,15 @@ export default function PlaygroundPage() {
         );
       }
     } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : 'The model did not reply.';
-      persistThreads(
-        withUser.map((t) =>
-          t.id === threadId
-            ? { ...t, messages: [...t.messages, { role: 'assistant', text: friendlyModelError(message) }] }
-            : t
-        )
-      );
+      failThread(err instanceof Error ? err.message : 'The model did not reply.');
     } finally {
       setBusy(false);
     }
   };
 
-  const chatBlocked = mode === 'chat' && !modelReady;
+  const chatBlocked = mode === 'chat' && noneReady;
   const canSend = !!input.trim() && !busy && !chatBlocked;
+  const sendTitle = chatBlocked ? 'Add an API key' : busy ? 'Waiting for a reply' : input.trim() ? 'Send' : 'Enter a query';
 
   return (
     <div className="h-full min-h-0 flex flex-col px-3 sm:px-5 pt-3 sm:pt-4 pb-3">
@@ -510,7 +569,8 @@ export default function PlaygroundPage() {
 
       <div className="flex-1 min-h-0 grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_300px] gap-3 overflow-y-auto xl:overflow-hidden">
         <section className="min-h-[420px] xl:min-h-0 rounded-2xl border border-white/[0.07] bg-[#111113] flex flex-col overflow-hidden">
-          <div className="flex flex-wrap items-center justify-between gap-2 px-3 sm:px-4 pt-3 pb-2">
+          <div className="flex flex-col gap-2 px-3 sm:px-4 pt-3 pb-2">
+          <div className="flex flex-wrap items-center justify-between gap-2">
             <div className="inline-flex rounded-lg border border-white/[0.08] bg-[#0c0c0e] p-0.5">
               <button
                 onClick={() => setMode('chat')}
@@ -529,15 +589,17 @@ export default function PlaygroundPage() {
                 <Search size={14} /> Search
               </button>
             </div>
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               <select
                 aria-label="Chat thread"
                 value={threadId}
                 onChange={(e) => {
                   setThreadId(e.target.value);
                   setHits([]);
+                  setRenaming(false);
+                  setConfirmDelete(false);
                 }}
-                className="h-8 max-w-[160px] px-2 rounded-lg border border-white/[0.08] bg-[#0c0c0e] text-[12px] text-zinc-300"
+                className="h-8 max-w-[220px] px-2 rounded-lg border border-white/[0.08] bg-[#0c0c0e] text-[12px] text-zinc-300"
               >
                 {threads.map((t) => (
                   <option key={t.id} value={t.id}>
@@ -552,10 +614,85 @@ export default function PlaygroundPage() {
               >
                 <Plus size={13} /> New chat
               </button>
+              <button
+                type="button"
+                disabled={busy}
+                title={busy ? 'Waiting for a reply' : 'Rename chat'}
+                onClick={() => {
+                  setRenaming(true);
+                  setRenameValue(thread?.title || '');
+                  setRenameHint('');
+                  setConfirmDelete(false);
+                }}
+                className="h-8 px-2.5 rounded-lg border border-white/[0.08] text-[12.5px] text-zinc-300 hover:bg-white/[0.04] disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                Rename
+              </button>
+              <button
+                type="button"
+                disabled={busy}
+                title={busy ? 'Waiting for a reply' : 'Delete chat'}
+                onClick={() => {
+                  setConfirmDelete(true);
+                  setRenaming(false);
+                }}
+                className="h-8 px-2.5 rounded-lg border border-white/[0.08] text-[12.5px] text-zinc-300 hover:bg-white/[0.04] disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                Delete
+              </button>
               <Link to="/connectors" className="text-[12.5px] text-zinc-500 hover:text-zinc-300 hidden sm:inline">
                 Connect apps
               </Link>
             </div>
+          </div>
+          {renaming ? (
+            <div className="flex flex-wrap items-center gap-2">
+              <input
+                aria-label="Thread title"
+                value={renameValue}
+                onChange={(e) => {
+                  setRenameValue(e.target.value);
+                  setRenameHint('');
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault();
+                    saveRename();
+                  }
+                }}
+                className="h-8 min-w-[180px] flex-1 px-2 rounded-lg border border-white/[0.08] bg-[#0c0c0e] text-[12.5px] text-zinc-200 outline-none"
+              />
+              <button type="button" onClick={saveRename} className="h-8 px-2.5 rounded-lg bg-[#2563eb] text-[12.5px] text-white">
+                Save
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setRenaming(false);
+                  setRenameHint('');
+                }}
+                className="h-8 px-2.5 rounded-lg border border-white/[0.08] text-[12.5px] text-zinc-300"
+              >
+                Cancel
+              </button>
+              {renameHint ? <span className="text-[12px] text-red-300">{renameHint}</span> : null}
+            </div>
+          ) : null}
+          {confirmDelete ? (
+            <div className="flex flex-wrap items-center gap-2 text-[12.5px] text-zinc-300">
+              <span>Delete this chat?</span>
+              <button type="button" onClick={removeThread} className="h-8 px-2.5 rounded-lg bg-red-500/20 text-red-100">
+                Delete
+              </button>
+              <button
+                type="button"
+                onClick={() => setConfirmDelete(false)}
+                className="h-8 px-2.5 rounded-lg border border-white/[0.08] text-zinc-300"
+              >
+                Cancel
+              </button>
+            </div>
+          ) : null}
           </div>
 
           <div className="flex-1 min-h-0 overflow-y-auto px-3 sm:px-6 flex flex-col">
@@ -573,14 +710,18 @@ export default function PlaygroundPage() {
                 {messages.map((m, i) => (
                   <div key={i} className={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
                     <div
+                      role={m.error ? 'alert' : undefined}
                       className={`max-w-[92%] sm:max-w-[80%] min-w-0 rounded-xl px-3.5 py-2 text-[13.5px] leading-relaxed whitespace-pre-wrap [overflow-wrap:anywhere] break-words ${
-                        m.role === 'user'
-                          ? 'bg-[#1e3a5f] text-zinc-100'
-                          : 'bg-white/[0.04] border border-white/[0.06] text-zinc-300'
+                        m.error
+                          ? 'bg-red-500/10 border border-red-400/30 text-red-100'
+                          : m.role === 'user'
+                            ? 'bg-[#1e3a5f] text-zinc-100'
+                            : 'bg-white/[0.04] border border-white/[0.06] text-zinc-300'
                       }`}
                     >
+                      {m.error ? <p className="text-[11px] tracking-wide text-red-300/80 mb-1">Error</p> : null}
                       <MessageBody text={m.text} />
-                      {m.role === 'assistant' ? <MemoriesUsed citations={m.citations} /> : null}
+                      {m.role === 'assistant' && !m.error ? <MemoriesUsed citations={m.citations} /> : null}
                     </div>
                   </div>
                 ))}
@@ -609,9 +750,26 @@ export default function PlaygroundPage() {
           </div>
 
           <div className="px-4 pb-3 pt-1">
+            {chatBlocked && (
+              <div className="mb-2 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-amber-300/25 bg-amber-400/10 px-3 py-2 text-[12.5px] text-amber-100">
+                <span>No model key yet. Add one in Settings → Advanced or use Search mode</span>
+                <Link
+                  to="/settings/advanced"
+                  className="h-7 px-2.5 rounded-md bg-amber-200 text-[#1c1917] text-[12px] font-medium inline-flex items-center"
+                >
+                  Add key
+                </Link>
+              </div>
+            )}
             <div className="rounded-xl border border-white/[0.09] bg-[#0c0c0e]">
               <div className="px-3 pt-2.5 pb-1 text-[12.5px] text-zinc-500">
-                {mode === 'chat' ? 'Pick a container tag below to start' : 'Enter a query, then pick a container tag'}
+                {!tag
+                  ? mode === 'chat'
+                    ? 'Pick a container tag below to start'
+                    : 'Enter a query, then pick a container tag'
+                  : mode === 'chat'
+                    ? `Ask anything — memory from ${tag} is used`
+                    : 'Search your memories'}
               </div>
               <textarea
                 value={input}
@@ -627,15 +785,6 @@ export default function PlaygroundPage() {
                 className="w-full bg-transparent px-3 text-[13.5px] text-zinc-200 outline-none resize-none min-h-[44px]"
               />
               <div className="flex flex-wrap items-center gap-2 px-2.5 pb-2">
-                <button
-                  type="button"
-                  onClick={startChat}
-                  className="h-7 w-7 rounded-md border border-white/[0.08] text-zinc-400 hover:text-white flex items-center justify-center"
-                  title="New chat"
-                  aria-label="Start a new chat"
-                >
-                  <Plus size={14} />
-                </button>
                 <div>
                   <button
                     ref={modelBtnRef}
@@ -709,11 +858,20 @@ export default function PlaygroundPage() {
                   <Plug size={14} />
                 </button>
                 <button
-                  onClick={() => send()}
+                  type="button"
+                  onClick={() => {
+                    if (!canSend) return;
+                    send();
+                  }}
                   disabled={!canSend}
-                  title={chatBlocked ? 'Add an API key to chat' : input.trim() ? 'Send' : 'Enter a query'}
-                  aria-label={chatBlocked ? 'Add an API key to chat' : input.trim() ? 'Send' : 'Enter a query'}
-                  className="h-7 w-7 rounded-md bg-[#2563eb] hover:bg-[#1d4ed8] text-white flex items-center justify-center disabled:opacity-50"
+                  aria-disabled={!canSend}
+                  title={sendTitle}
+                  aria-label={sendTitle}
+                  className={`h-7 w-7 rounded-md flex items-center justify-center ${
+                    canSend
+                      ? 'bg-[#2563eb] hover:bg-[#1d4ed8] text-white'
+                      : 'bg-[#2563eb]/40 text-white/80 cursor-not-allowed'
+                  }`}
                 >
                   <ArrowUp size={14} />
                 </button>
@@ -736,19 +894,6 @@ export default function PlaygroundPage() {
                 </select>
               </label>
             </div>
-
-            {chatBlocked && (
-              <div className="mt-2 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-amber-300/25 bg-amber-400/10 px-3 py-2 text-[12.5px] text-amber-100">
-                <span>Add a {model.vendor} API key to use {model.label}. Search still works without a key.</span>
-                <button
-                  type="button"
-                  onClick={() => setKeysOpen(true)}
-                  className="h-7 px-2.5 rounded-md bg-amber-200 text-[#1c1917] text-[12px] font-medium"
-                >
-                  Add key
-                </button>
-              </div>
-            )}
 
             {messages.length === 0 && mode === 'chat' && (
               <div className="mt-3 flex flex-wrap gap-2">

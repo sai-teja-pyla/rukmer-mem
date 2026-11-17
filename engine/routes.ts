@@ -714,7 +714,8 @@ export function mountMemoryEngine(app: Express) {
   app.get('/v3/requests', (req, res) => {
     try {
       const uid = uidOf(req);
-      const rows = getState().requests.filter((r) => r.ownerUid === uid);
+      const weekAgo = Date.now() - 7 * 86400000;
+      const rows = getState().requests.filter((r) => r.ownerUid === uid && Date.parse(r.at) >= weekAgo);
       const byType: Record<string, number> = {};
       let ok = 0;
       let searchMs = 0;
@@ -728,7 +729,8 @@ export function mountMemoryEngine(app: Express) {
         }
       }
       res.json({
-        requests: rows.slice(0, 80),
+        requests: rows.slice(0, 400),
+        window: '7d',
         byType,
         ok,
         avgMs: searchN ? Math.round(searchMs / searchN) : 0,

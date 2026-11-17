@@ -1,3 +1,4 @@
+import { onAuthStateChanged, type User } from 'firebase/auth';
 import { auth } from '../firebase';
 
 const base = '';
@@ -6,17 +7,27 @@ function wait(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+let firstAuthUser: Promise<User | null> | null = null;
+
 function waitForAuth() {
   if (auth.currentUser) return Promise.resolve(auth.currentUser);
-  return auth.authStateReady().then(() => auth.currentUser);
+  if (!firstAuthUser) {
+    firstAuthUser = new Promise((resolve) => {
+      const stop = onAuthStateChanged(auth, (user) => {
+        stop();
+        resolve(user);
+      });
+    });
+  }
+  return firstAuthUser;
 }
 
-async function authHeaders() {
+async function authHeaders(forceToken = false) {
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
   const user = (await waitForAuth()) || auth.currentUser;
   if (user) {
     try {
-      headers.Authorization = `Bearer ${await user.getIdToken()}`;
+      headers.Authorization = `Bearer ${await user.getIdToken(forceToken)}`;
     } catch {
       /* token refresh can fail while signed out */
     }
@@ -25,8 +36,9 @@ async function authHeaders() {
   return headers;
 }
 
-async function req(path: string, init?: RequestInit, attempt = 0): Promise<any> {
-  const headers = { ...(await authHeaders()), ...((init?.headers as Record<string, string>) || {}) };
+async function req(path: string, init?: RequestInit, state: { warming?: number; refreshed?: boolean } = {}): Promise<any> {
+  const warming = state.warming || 0;
+  const headers = { ...(await authHeaders(!!state.refreshed)), ...((init?.headers as Record<string, string>) || {}) };
   const res = await fetch(`${base}${path}`, {
     ...init,
     headers,
@@ -38,11 +50,15 @@ async function req(path: string, init?: RequestInit, attempt = 0): Promise<any> 
   } catch {
     throw new Error(res.ok ? 'Memory engine returned a non-JSON response' : `Memory engine ${res.status}`);
   }
-  if (!res.ok && attempt < 1 && (res.status === 401 || res.status === 503)) {
+  if (!res.ok && res.status === 503 && data.error === 'warming_up' && warming < 3) {
     const retryAfter = Number(res.headers.get('Retry-After'));
-    const backoff = Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter * 1000 : res.status === 503 ? 800 : 400;
-    await wait(Math.min(backoff, 5000));
-    return req(path, init, attempt + 1);
+    const baseWait = Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter * 1000 : 2000;
+    await wait(Math.min(baseWait * (warming + 1), 8000));
+    return req(path, init, { ...state, warming: warming + 1 });
+  }
+  if (!res.ok && res.status === 401 && !state.refreshed) {
+    await wait(400);
+    return req(path, init, { ...state, refreshed: true });
   }
   if (!res.ok) {
     const message = data.error === 'warming_up' ? 'Memory is still warming up. Try again.' : data.error || `Memory engine ${res.status}`;

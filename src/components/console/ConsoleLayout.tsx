@@ -1,4 +1,4 @@
-import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import React, { Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import {
   LayoutDashboard,
@@ -34,14 +34,35 @@ import { useUserSettings } from '../../hooks/useUserSettings';
 import { WHATS_NEW } from '../../content/whatsNew';
 import { engine } from '../../services/engineClient';
 import { homeTag as makeHomeTag } from '../../services/tenancy';
+import { Skeleton } from './ui';
 
 interface ConsoleLayoutProps {
   user: UserProfile;
+  restoring?: boolean;
 }
 
 type NavItem =
   | { section: string }
   | { to: string; label: string; icon: LucideIcon; chevron?: boolean };
+
+type MemoryHit = { id: string; title: string; text: string; source: string };
+type ChatHit = { id: string; title: string };
+
+function loadChatTitles(uid: string): ChatHit[] {
+  try {
+    const raw = localStorage.getItem(`rukmer.playground.${uid}`);
+    const parsed = raw ? JSON.parse(raw) : [];
+    if (!Array.isArray(parsed)) return [];
+    return parsed.flatMap((row) => {
+      const id = String(row?.id || '');
+      const title = String(row?.title || '').trim();
+      if (!id || !title || title === 'New chat') return [];
+      return [{ id, title }];
+    });
+  } catch {
+    return [];
+  }
+}
 
 const nav: NavItem[] = [
   { to: '/overview', label: 'Overview', icon: LayoutDashboard },
@@ -70,14 +91,25 @@ const settingsNav: NavItem[] = [
   { to: '/settings/account', label: 'Account', icon: User },
 ];
 
-export default function ConsoleLayout({ user }: ConsoleLayoutProps) {
+function PageSkeleton() {
+  return (
+    <div className="max-w-[1220px] mx-auto space-y-4" aria-busy="true" aria-label="Loading">
+      <Skeleton className="h-8 w-40" />
+      <Skeleton className="h-44 w-full" />
+      <Skeleton className="h-28 w-full" />
+    </div>
+  );
+}
+
+export default function ConsoleLayout({ user, restoring = false }: ConsoleLayoutProps) {
   const { settings, updateSettings } = useUserSettings();
   const appearance = (settings?.consoleTheme || localStorage.getItem('consoleTheme') || 'dark') === 'light' ? 'light' : 'dark';
   const navigate = useNavigate();
   const location = useLocation();
   const [query, setQuery] = useState('');
-  const [memories, setMemories] = useState<{ id: string; title: string; text: string }[]>([]);
+  const [memories, setMemories] = useState<MemoryHit[]>([]);
   const [memoryLoading, setMemoryLoading] = useState(false);
+  const searchRequest = useRef(0);
   const [menuOpen, setMenuOpen] = useState(false);
   const [navOpen, setNavOpen] = useState(false);
   const searchRef = useRef<HTMLInputElement>(null);
@@ -131,41 +163,54 @@ export default function ConsoleLayout({ user }: ConsoleLayoutProps) {
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
     if (!q) return activeNav;
-    return activeNav.filter((item) => !('section' in item) && item.label.toLowerCase().includes(q));
+    const seen = new Set<string>();
+    return [...nav, ...settingsNav].filter((item): item is Extract<NavItem, { to: string }> => {
+      if ('section' in item || !item.label.toLowerCase().includes(q) || seen.has(item.to)) return false;
+      seen.add(item.to);
+      return true;
+    });
   }, [query, activeNav]);
 
+  const chats = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q || !user.uid) return [];
+    return loadChatTitles(user.uid)
+      .filter((chat) => chat.title.toLowerCase().includes(q))
+      .slice(0, 5);
+  }, [query, user.uid]);
+
   useEffect(() => {
+    const requestId = ++searchRequest.current;
     const q = query.trim();
     if (q.length < 2 || !homeTag) {
       setMemories([]);
       setMemoryLoading(false);
       return;
     }
-    let cancel = false;
+    setMemories([]);
     setMemoryLoading(true);
     const timer = window.setTimeout(() => {
       engine
         .search({ query: q, containerTag: homeTag, memoriesRetrieved: 5 })
         .then((out) => {
-          if (cancel) return;
-          const rows = (out.matches || []).slice(0, 5).map((hit: { id?: string; title?: string; text?: string }) => ({
-            id: String(hit.id || ''),
-            title: String(hit.title || ''),
-            text: String(hit.text || '').replace(/\s+/g, ' ').trim(),
-          }));
-          setMemories(rows.filter((row: { id: string }) => row.id));
+          if (requestId !== searchRequest.current) return;
+          const rows = (out.matches || []).slice(0, 5).flatMap((hit: { id?: string; title?: string; text?: string; source?: string }) => {
+            const id = String(hit.id || '');
+            if (!id) return [];
+            const text = String(hit.text || '').replace(/\s+/g, ' ').trim();
+            return [{ id, title: String(hit.title || ''), text: text.slice(0, 80), source: String(hit.source || 'memory') }];
+          });
+          setMemories(rows);
         })
         .catch(() => {
-          if (!cancel) setMemories([]);
+          if (requestId !== searchRequest.current) return;
+          setMemories([]);
         })
         .finally(() => {
-          if (!cancel) setMemoryLoading(false);
+          if (requestId === searchRequest.current) setMemoryLoading(false);
         });
     }, 250);
-    return () => {
-      cancel = true;
-      window.clearTimeout(timer);
-    };
+    return () => window.clearTimeout(timer);
   }, [query, homeTag]);
 
   const isImmersive =
@@ -181,6 +226,12 @@ export default function ConsoleLayout({ user }: ConsoleLayoutProps) {
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             placeholder="Search..."
+            onKeyDown={(e) => {
+              if (e.key !== 'Escape') return;
+              e.preventDefault();
+              if (query) setQuery('');
+              else setNavOpen(false);
+            }}
             className="bg-transparent text-[13px] w-full outline-none placeholder:text-zinc-600"
           />
           <kbd className="hidden sm:inline text-[10px] text-zinc-500 border border-white/[0.08] rounded px-1 py-[1px] font-medium leading-none">
@@ -238,12 +289,28 @@ export default function ConsoleLayout({ user }: ConsoleLayoutProps) {
             </NavLink>
           );
         })}
+        {query.trim() && chats.length > 0 ? (
+          <div className="mt-2">
+            <p className="px-2.5 pt-2 pb-1 text-[10px] font-medium tracking-[0.16em] text-zinc-500">Chats</p>
+            {chats.map((chat) => (
+              <button
+                key={chat.id}
+                type="button"
+                onClick={() => {
+                  setNavOpen(false);
+                  navigate(`/playground?mode=chat&thread=${encodeURIComponent(chat.id)}`);
+                }}
+                className="w-full text-left px-2.5 py-1.5 rounded-lg mb-[1px] hover:bg-white/[0.04]"
+              >
+                <span className="block truncate text-[13px] text-zinc-200">{chat.title}</span>
+              </button>
+            ))}
+          </div>
+        ) : null}
         {query.trim().length >= 2 && (memoryLoading || memories.length > 0) ? (
           <div className="mt-2">
             <p className="px-2.5 pt-2 pb-1 text-[10px] font-medium tracking-[0.16em] text-zinc-500">Memories</p>
-            {memoryLoading && memories.length === 0 ? (
-              <p className="px-2.5 py-1 text-[12px] text-zinc-500">Searching…</p>
-            ) : null}
+            {memoryLoading ? <p className="px-2.5 py-1 text-[12px] text-zinc-500">Searching…</p> : null}
             {memories.map((memory) => (
               <button
                 key={memory.id}
@@ -254,13 +321,16 @@ export default function ConsoleLayout({ user }: ConsoleLayoutProps) {
                 }}
                 className="w-full text-left px-2.5 py-1.5 rounded-lg mb-[1px] hover:bg-white/[0.04]"
               >
-                <span className="block truncate text-[13px] text-zinc-200">{memory.title || memory.text.slice(0, 80)}</span>
-                {memory.title ? <span className="block truncate text-[11px] text-zinc-500">{memory.text.slice(0, 90)}</span> : null}
+                <span className="block truncate text-[13px] text-zinc-200">{memory.title || memory.text || 'Memory'}</span>
+                <span className="block truncate text-[11px] text-zinc-500">
+                  {memory.source}
+                  {memory.text ? ` · ${memory.text}` : ''}
+                </span>
               </button>
             ))}
           </div>
         ) : null}
-        {query.trim() && filtered.length === 0 && memories.length === 0 && !memoryLoading ? (
+        {query.trim() && filtered.length === 0 && chats.length === 0 && memories.length === 0 && !memoryLoading ? (
           <p className="px-2.5 py-2 text-[13px] text-zinc-500">No pages or memories match</p>
         ) : null}
       </nav>
@@ -381,7 +451,13 @@ export default function ConsoleLayout({ user }: ConsoleLayoutProps) {
             isImmersive ? 'overflow-hidden p-0' : 'overflow-y-auto overflow-x-hidden p-3 sm:p-4 md:p-5'
           }`}
         >
-          <Outlet context={{ user, displayName, homeTag: user.uid ? `u_${user.uid}` : '' }} />
+          {restoring ? (
+            <PageSkeleton />
+          ) : (
+            <Suspense fallback={<PageSkeleton />}>
+              <Outlet context={{ user, displayName, homeTag: user.uid ? `u_${user.uid}` : '' }} />
+            </Suspense>
+          )}
         </main>
       </div>
     </div>

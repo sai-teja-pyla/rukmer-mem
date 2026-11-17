@@ -1,6 +1,4 @@
 import React, { useState } from 'react';
-import { db } from '../firebase';
-import { collection, addDoc, onSnapshot } from 'firebase/firestore';
 import { Zap, CreditCard, ArrowLeft, Loader2 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { getFunctions, httpsCallable } from 'firebase/functions';

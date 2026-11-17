@@ -10,6 +10,7 @@ const SECTIONS = [
   { id: 'container-tags', label: 'Container tags' },
   { id: 'import', label: 'Import' },
   { id: 'api-keys', label: 'API keys' },
+  { id: 'playground', label: 'Playground' },
   { id: 'insights', label: 'User insights' },
   { id: 'profiles', label: 'Profiles' },
   { id: 'usage', label: 'Usage' },
@@ -27,7 +28,10 @@ export default function DocsPage() {
   useEffect(() => {
     const id = hash.replace(/^#/, '');
     if (!id) return;
-    document.getElementById(id)?.scrollIntoView({ block: 'start' });
+    const scroll = () => document.getElementById(id)?.scrollIntoView({ block: 'start' });
+    scroll();
+    const frame = requestAnimationFrame(scroll);
+    return () => cancelAnimationFrame(frame);
   }, [hash]);
 
   const theme = {
@@ -79,7 +83,7 @@ export default function DocsPage() {
           <section id="connect" className="scroll-mt-8">
             <h2 className={`text-2xl font-bold mb-4 ${theme.header}`}>Connect ChatGPT, Claude, and Grok</h2>
             <p>
-              Chat apps connect over MCP. You sign in to Rukmer once. You do not paste a ChatGPT, Claude, or Grok API key.
+              Chat apps connect with a custom MCP URL. Rukmer OAuth signs you in once. You do not paste a ChatGPT, Claude, or Grok API key.
             </p>
             <p className={`mt-4 p-4 rounded-lg border font-mono text-sm break-all ${theme.card}`}>{MCP_URL}</p>
             <ul className="list-disc pl-5 mt-4 space-y-2">
@@ -111,7 +115,7 @@ export default function DocsPage() {
 
           <section id="import" className="scroll-mt-8">
             <h2 className={`text-2xl font-bold mb-4 ${theme.header}`}>Import</h2>
-            <p>Import writes documents into the container tag you select. Paste text or add files, then run the import. Finished documents show in that tag’s file list.</p>
+            <p>Import adds files, URLs, and pasted text to the container tag you select. Drop a file, paste a URL, or paste up to 50,000 characters with an optional title. Finished documents show in that tag’s file list.</p>
             <p className="mt-4">A tag with no stored documents says so only after the list has loaded. Processing jobs stay in their own list until they finish.</p>
           </section>
 
@@ -122,6 +126,18 @@ export default function DocsPage() {
             </p>
             <p className="mt-4">
               Provider keys are only needed when Playground chats with a model that has no server key. Add those from the plug icon in Playground or Settings → Advanced. Search does not need a provider key.
+            </p>
+          </section>
+
+          <section id="playground" className="scroll-mt-8">
+            <h2 className={`text-2xl font-bold mb-4 ${theme.header}`}>Playground</h2>
+            <p>Chat and Search use the same container tag and the same memories. They do different jobs.</p>
+            <ul className="list-disc pl-5 mt-4 space-y-2">
+              <li>Chat asks a model and injects memories that meet match strictness. It needs a model key, from the server or from Settings → Advanced.</li>
+              <li>Search looks up memories and does not call a model. It works with no model key.</li>
+            </ul>
+            <p className="mt-4">
+              Match strictness is a score from 0 to 1. The default is 0.40. A memory is used only when its relevance is at least that high. Raise it to keep fewer, closer memories.
             </p>
           </section>
 

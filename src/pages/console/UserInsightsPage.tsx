@@ -8,6 +8,7 @@ export default function UserInsightsPage() {
   const [folder, setFolder] = useState('All');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(true);
+  const [loaded, setLoaded] = useState(false);
   const seen = useRef(false);
 
   const load = (manual = false) => {
@@ -20,6 +21,7 @@ export default function UserInsightsPage() {
       .then((next) => {
         seen.current = true;
         setData(next);
+        setLoaded(true);
         setError('');
       })
       .catch((e) => {
@@ -74,7 +76,7 @@ export default function UserInsightsPage() {
             onClick={() => setFolder('All')}
             className={`w-full text-left h-8 px-2 rounded-md text-[13px] ${folder === 'All' ? 'bg-[#1e3a5f] text-white' : 'text-zinc-400 hover:text-zinc-200'}`}
           >
-            All · {documents.length}
+            All · {loaded ? documents.length : '—'}
           </button>
           {folders.map((f) => (
             <button
@@ -99,9 +101,9 @@ export default function UserInsightsPage() {
               <Skeleton className="h-12 w-full" />
               <Skeleton className="h-12 w-4/5" />
             </div>
-          ) : error && !data ? (
+          ) : error && !loaded ? (
             <LoadError message={error} onRetry={() => load(true)} />
-          ) : shown.length === 0 ? (
+          ) : loaded && shown.length === 0 ? (
             <EmptyState
               icon={<Users size={18} />}
               title="No documents yet"

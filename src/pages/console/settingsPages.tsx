@@ -94,8 +94,8 @@ export function GeneralSettingsPage() {
         <Row label="Organization ID" hint="Used in CLI and API calls.">
           <CopyField value={orgId} />
         </Row>
-        <Row label="Require two-factor for all members" hint="Authenticator codes are not available in private beta.">
-          <span className="text-[13px] text-zinc-400">Not in private beta</span>
+        <Row label="Require two-factor for all members" hint="Authenticator app codes are coming after private beta.">
+          <span className="text-[11px] text-zinc-500 border border-white/[0.08] rounded px-1.5 py-0.5">Coming soon</span>
         </Row>
         <Row label="Organization context" hint="Filters what gets stored during ingestion, guided by a description of your organization.">
           <Toggle
@@ -431,14 +431,13 @@ export function AccountSettingsPage() {
             </div>
             <div>
               <p className="text-[13.5px] text-zinc-200">
-                Authenticator app <span className="ml-2 text-[11px] text-zinc-500 border border-white/[0.08] rounded px-1.5 py-0.5">Off</span>
+                Authenticator app <span className="ml-2 text-[11px] text-zinc-500 border border-white/[0.08] rounded px-1.5 py-0.5">Coming soon</span>
               </p>
               <p className="text-[12px] text-zinc-500 mt-1 max-w-md">
-                Ask for a code from your phone after the email code. Protects you if someone gets into your inbox.
+                Authenticator app codes are coming after private beta.
               </p>
             </div>
           </div>
-          <span className="text-[12px] text-zinc-500 shrink-0">Not in private beta</span>
         </div>
       </Panel>
       <Panel className="mb-3">

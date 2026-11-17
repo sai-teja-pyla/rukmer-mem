@@ -3,6 +3,7 @@ import { BrowserRouter, Routes, Route, Navigate, useLocation } from 'react-route
 import { auth } from './firebase';
 import { onAuthStateChanged, User as FirebaseUser } from 'firebase/auth';
 
+import ConsoleLayout from './components/console/ConsoleLayout';
 import LoginPage from './pages/LoginPage';
 import SignupPage from './pages/SignupPage';
 import PrivacyPage from './pages/PrivacyPage';
@@ -20,7 +21,6 @@ const Dashboard = lazy(() => import('./components/Dashboard'));
 const HelpPage = lazy(() => import('./pages/HelpPage'));
 const DocsPage = lazy(() => import('./pages/DocsPage'));
 const SubscriptionPage = lazy(() => import('./pages/SubscriptionPage'));
-const ConsoleLayout = lazy(() => import('./components/console/ConsoleLayout'));
 const OverviewPage = lazy(() => import('./pages/console/OverviewPage'));
 const PlaygroundPage = lazy(() => import('./pages/console/PlaygroundPage'));
 const ContainerTagsPage = lazy(() => import('./pages/console/ContainerTagsPage'));
@@ -44,7 +44,23 @@ function ToLogin() {
   return <Navigate to={`/login?next=${encodeURIComponent(next)}`} replace />;
 }
 
+const restoringUser: UserProfile = { uid: '', email: '', name: '' };
+
+function ConsoleGate({ user, authLoading }: { user: UserProfile | null; authLoading: boolean }) {
+  if (authLoading) return <ConsoleLayout user={restoringUser} restoring />;
+  if (!user) return <ToLogin />;
+  return <ConsoleLayout user={user} />;
+}
+
 export default function App() {
+  return (
+    <UserSettingsProvider>
+      <AppRoutes />
+    </UserSettingsProvider>
+  );
+}
+
+function AppRoutes() {
   // 2. DEFINE STATE WITH TYPES
   const [user, setUser] = useState<UserProfile | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
@@ -89,26 +105,16 @@ export default function App() {
     return () => unsubscribeAuth();
   }, []);
 
-  if (authLoading) {
-    const isDark = localStorage.getItem('appTheme') === 'dark';
-    return (
-      <div className={`min-h-screen flex items-center justify-center ${isDark ? 'bg-[#0f0f0f]' : 'bg-slate-50'}`}>
-        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-black"></div>
-      </div>
-    );
-  }
-
   const handleLoginSuccess = () => {
     // User state is already updated via Firebase auth listener
     // Navigate happens automatically through route based on user state
   };
 
   return (
-    <UserSettingsProvider>
     <BrowserRouter>
       <Suspense fallback={<div className="min-h-screen bg-[#0a0a0b]" />}>
       <Routes>
-        <Route path="/" element={<Navigate to={user ? '/overview' : '/login'} replace />} />
+        <Route path="/" element={<Navigate to={authLoading || user ? '/overview' : '/login'} replace />} />
         <Route path="/welcome" element={!user ? <LandingPage onLoginSuccess={handleLoginSuccess} /> : <Navigate to="/overview" replace />} />
         <Route
           path="/login"
@@ -130,7 +136,7 @@ export default function App() {
         <Route path="/loi" element={<LoiPage />} />
         <Route path="/legal/loi" element={<LoiPage />} />
 
-        <Route element={user ? <ConsoleLayout user={user} /> : <ToLogin />}>
+        <Route element={<ConsoleGate user={user} authLoading={authLoading} />}>
           <Route path="/overview" element={<OverviewPage />} />
           <Route path="/playground" element={<PlaygroundPage />} />
           <Route path="/container-tags" element={<ContainerTagsPage />} />
@@ -166,6 +172,5 @@ export default function App() {
       </Routes>
       </Suspense>
     </BrowserRouter>
-    </UserSettingsProvider>
   );
 }

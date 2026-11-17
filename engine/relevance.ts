@@ -2,7 +2,8 @@ const STOP = new Set([
   'what', 'does', 'do', 'did', 'is', 'it', 'for', 'the', 'a', 'an', 'to', 'of', 'and', 'or', 'in', 'on',
   'my', 'me', 'i', 'you', 'your', 'about', 'say', 'says', 'said', 'that', 'this', 'with', 'from', 'at',
   'be', 'are', 'was', 'were', 'have', 'has', 'how', 'who', 'why', 'when', 'where', 'can', 'could',
-  'like', 'liked', 'likes', 'just', 'into', 'than', 'then', 'them', 'they', 'their', 'there', 'here',
+  'like', 'liked', 'likes', 'know', 'knows', 'known', 'tell', 'tells', 'told',
+  'just', 'into', 'than', 'then', 'them', 'they', 'their', 'there', 'here',
 ]);
 
 export type MemoryHit = {
@@ -31,10 +32,13 @@ export function contentTokens(text: string) {
   return out;
 }
 
+const PREFER = new Set(['favourite', 'favorite', 'prefer', 'preferred']);
+
 function stemToken(token: string) {
   if (!token || token.length < 3 || STOP.has(token)) return '';
   const stemmed = token.length > 4 && token.endsWith('s') && !token.endsWith('ss') ? token.slice(0, -1) : token;
   if (stemmed.length < 3 || STOP.has(stemmed)) return '';
+  if (PREFER.has(token) || PREFER.has(stemmed)) return 'prefer';
   return stemmed;
 }
 
@@ -66,7 +70,7 @@ export function relevanceScore(query: string, item: MemoryHit) {
   return clamp01(Math.max(lexical, vector));
 }
 
-function normalizeText(value: string) {
+export function memoryTextKey(value: string) {
   return String(value || '')
     .toLowerCase()
     .replace(/[^a-z0-9.\s]+/g, ' ')
@@ -74,10 +78,10 @@ function normalizeText(value: string) {
     .trim();
 }
 
-function spoKey(item: MemoryHit) {
-  const subject = normalizeText(item.subject || '');
-  const predicate = normalizeText(String(item.predicate || '').replace(/_/g, ' ')).replace(/ /g, '_');
-  const object = normalizeText(item.object || '');
+export function memoryFactKey(item: { subject?: string; predicate?: string; object?: string }) {
+  const subject = memoryTextKey(item.subject || '');
+  const predicate = memoryTextKey(String(item.predicate || '').replace(/_/g, ' ')).replace(/ /g, '_');
+  const object = memoryTextKey(item.object || '');
   if (!subject || !predicate || !object) return '';
   return `${subject}|${predicate}|${object}`;
 }
@@ -108,9 +112,9 @@ export function selectMemories<T extends MemoryHit>(
   for (const { item, relevance } of kept) {
     const id = String(item.id || '');
     if (id && seenId.has(id)) continue;
-    const text = normalizeText(item.text);
+    const text = memoryTextKey(item.text);
     if (text && seenText.has(text)) continue;
-    const spo = spoKey(item);
+    const spo = memoryFactKey(item);
     if (spo && seenSpo.has(spo)) continue;
     if (id) seenId.add(id);
     if (text) seenText.add(text);

@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Copy, Check, ChevronDown, Sparkles, Box, FileText, Play, Globe } from 'lucide-react';
+import { engine } from '../../services/engineClient';
 
 const BASE_PROMPT = `# You are onboarding this project to Rukmer Memory
 
@@ -32,6 +33,35 @@ export default function OverviewPage() {
   }, []);
   const [includeKey, setIncludeKey] = useState(true);
   const [manualOpen, setManualOpen] = useState(false);
+  const [counts, setCounts] = useState<{ memories: number | null; documents: number | null; searches: number | null }>({
+    memories: null,
+    documents: null,
+    searches: null,
+  });
+
+  useEffect(() => {
+    let cancel = false;
+    Promise.all([engine.stats(), engine.insights(), engine.requests()])
+      .then(([stats, insights, requests]) => {
+        if (cancel) return;
+        const start = new Date();
+        start.setHours(0, 0, 0, 0);
+        const searches = (requests?.requests || []).filter(
+          (row: { type?: string; at?: string }) => row.type === 'search' && Date.parse(String(row.at || '')) >= start.getTime()
+        ).length;
+        setCounts({
+          memories: Number(insights?.memories ?? stats?.chunks ?? 0),
+          documents: Number(stats?.documents ?? 0),
+          searches,
+        });
+      })
+      .catch(() => {
+        if (!cancel) setCounts({ memories: null, documents: null, searches: null });
+      });
+    return () => {
+      cancel = true;
+    };
+  }, []);
 
   const prompt = useMemo(() => {
     if (!includeKey) return BASE_PROMPT;
@@ -138,12 +168,27 @@ Keep secrets in .env — never commit keys.`;
         </div>
       </div>
 
+      <div className="grid sm:grid-cols-3 gap-3 mt-6">
+        <CountCard label="Memories" value={counts.memories} />
+        <CountCard label="Documents" value={counts.documents} />
+        <CountCard label="Searches today" value={counts.searches} />
+      </div>
+
       <h2 className="text-[16px] font-medium text-zinc-200 mt-8 mb-3">Explore</h2>
       <div className="grid md:grid-cols-3 gap-3">
         <ExploreCard to="/playground" icon={<Play size={16} />} title="Playground" subtitle="Ask what this account already remembers" />
         <ExploreCard to="/import" icon={<Globe size={16} />} title="Import" subtitle="Add a file or note, then search it" />
         <ExploreCard to="/memory-graph" icon={<FileText size={16} />} title="Memory graph" subtitle="See documents and facts after import" />
       </div>
+    </div>
+  );
+}
+
+function CountCard({ label, value }: { label: string; value: number | null }) {
+  return (
+    <div className="rounded-xl border border-white/[0.07] bg-[#141416] px-4 py-3.5">
+      <p className="text-[11px] tracking-[0.12em] text-zinc-500">{label}</p>
+      <p className="text-[22px] text-zinc-100 mt-2">{value === null ? '—' : value}</p>
     </div>
   );
 }

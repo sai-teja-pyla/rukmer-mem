@@ -1,7 +1,7 @@
 import { getState, sanitizeMeta, tokenize, type TemporalKind } from './core.js';
 import { isRetired } from './governance.js';
 import { isUsefulFact } from './quality.js';
-import { relevanceScore } from './relevance.js';
+import { memoryFactKey, memoryTextKey, relevanceScore } from './relevance.js';
 import { queryTimeIntent, timeMultiplier } from './temporal.js';
 
 export type MetaFilter = { all?: Record<string, string>; any?: Record<string, string> };
@@ -248,10 +248,12 @@ function rebuild() {
 }
 
 const SYN: Record<string, string[]> = {
-  prefer: ['prefers', 'like', 'likes'],
-  prefers: ['prefer', 'like', 'likes'],
-  like: ['likes', 'prefer', 'prefers'],
-  likes: ['like', 'prefer'],
+  favourite: ['prefers', 'prefer', 'favorite', 'like'],
+  favorite: ['prefers', 'prefer', 'favourite', 'like'],
+  prefer: ['prefers', 'favourite', 'favorite', 'like'],
+  prefers: ['prefer', 'favourite', 'favorite', 'like'],
+  like: ['likes', 'prefer', 'prefers', 'favourite'],
+  likes: ['like', 'prefer', 'favourite'],
   work: ['works', 'job'],
   works: ['work', 'job'],
   live: ['lives', 'based'],
@@ -277,12 +279,15 @@ export function tagCount(tag: string) {
 
 export function vectorDim(tags: string[]) {
   ensureIndex();
+  let local = 0;
   for (const tag of tags) {
-    const id = (vectorIds.get(tag) || [])[0];
-    const dim = id ? records.get(id)?.embedding?.length : 0;
-    if (dim) return dim;
+    for (const id of vectorIds.get(tag) || []) {
+      const dim = records.get(id)?.embedding?.length || 0;
+      if (dim > 256) return dim;
+      if (dim === 256) local = 256;
+    }
   }
-  return 0;
+  return local;
 }
 
 function keywordSearch(tag: string, query: string) {
@@ -356,6 +361,126 @@ function matchMeta(meta: Record<string, string> | undefined, filter?: MetaFilter
   return true;
 }
 
+const SELF_NODES = new Set(['user', 'i', 'me', 'myself', 'mine', 'someone', 'something', 'it', 'they', 'them']);
+const RELATED_CAP = 4;
+
+export type RelatedFact = {
+  subject: string;
+  predicate: string;
+  object: string;
+  isLatest: boolean;
+  derived: boolean;
+  text: string;
+};
+
+function entityKey(value?: string) {
+  return String(value || '').trim().toLowerCase();
+}
+
+function userNodes(tag: string) {
+  const names = new Set(SELF_NODES);
+  const facts = [...records.values()].filter((rec) => rec.tag === tag && rec.kind === 'fact' && !rec.forgotten);
+  const namePred = /^(name|full_name|called|aka|named|is_named)$/;
+  let grew = true;
+  while (grew) {
+    grew = false;
+    for (const rec of facts) {
+      if (!namePred.test(entityKey(rec.predicate).replace(/\s+/g, '_'))) continue;
+      const subject = entityKey(rec.subject);
+      const object = entityKey(rec.object);
+      if (subject && names.has(subject) && object && !names.has(object)) {
+        names.add(object);
+        grew = true;
+      }
+    }
+  }
+  const counts = new Map<string, number>();
+  for (const rec of facts) {
+    const subject = entityKey(rec.subject);
+    if (subject.length < 2) continue;
+    counts.set(subject, (counts.get(subject) || 0) + 1);
+  }
+  let top = '';
+  let topN = 0;
+  for (const [name, count] of counts) {
+    if (count > topN) {
+      top = name;
+      topN = count;
+    }
+  }
+  if (top && topN >= 2 && topN * 2 >= facts.length) names.add(top);
+  return names;
+}
+
+/** Neighbors of matches that already passed strictness. Empty when nothing was kept. */
+export function relatedForMatches(
+  matches: { id: string; text?: string; subject?: string; predicate?: string; object?: string; containerTag?: string }[],
+  opts: { visible?: (id: string) => boolean } = {}
+): RelatedFact[] {
+  if (!matches.length) return [];
+  ensureIndex();
+  const tags = new Set<string>();
+  for (const match of matches) {
+    if (match.containerTag) tags.add(match.containerTag);
+    const rec = records.get(match.id);
+    if (rec) tags.add(rec.tag);
+  }
+  const self = new Set<string>();
+  for (const tag of tags) for (const name of userNodes(tag)) self.add(name);
+  const anchors = new Set<string>();
+  for (const match of matches) {
+    const rec = records.get(match.id);
+    for (const name of [match.subject || rec?.subject, match.object || rec?.object]) {
+      const key = entityKey(name);
+      if (key.length < 2 || self.has(key)) continue;
+      anchors.add(key);
+    }
+  }
+  if (!anchors.size) return [];
+
+  const seenId = new Set<string>();
+  const seenText = new Set<string>();
+  const seenSpo = new Set<string>();
+  for (const match of matches) {
+    const rec = records.get(match.id);
+    if (match.id) seenId.add(match.id);
+    const text = memoryTextKey(match.text || rec?.text || '');
+    if (text) seenText.add(text);
+    const spo = memoryFactKey({
+      subject: match.subject || rec?.subject,
+      predicate: match.predicate || rec?.predicate,
+      object: match.object || rec?.object,
+    });
+    if (spo) seenSpo.add(spo);
+  }
+
+  const related: RelatedFact[] = [];
+  for (const rec of records.values()) {
+    if (rec.kind !== 'fact' || rec.forgotten || !rec.isLatest || !tags.has(rec.tag)) continue;
+    if (opts.visible && !opts.visible(rec.id)) continue;
+    const subject = entityKey(rec.subject);
+    const object = entityKey(rec.object);
+    if (!anchors.has(subject) && !anchors.has(object)) continue;
+    if (seenId.has(rec.id)) continue;
+    const text = memoryTextKey(rec.text || rec.title);
+    const spo = memoryFactKey(rec);
+    if ((text && seenText.has(text)) || (spo && seenSpo.has(spo))) continue;
+    seenId.add(rec.id);
+    if (text) seenText.add(text);
+    if (spo) seenSpo.add(spo);
+    related.push({
+      subject: rec.subject || '',
+      predicate: rec.predicate || '',
+      object: rec.object || '',
+      isLatest: rec.isLatest,
+      derived: false,
+      text: rec.text,
+    });
+    if (related.length >= RELATED_CAP) break;
+  }
+  return related;
+}
+
 export function rankTagged(
   query: string,
   tags: string[],
@@ -413,36 +538,10 @@ export function rankTagged(
     )
     .slice(0, Math.max(opts.topK * 3, opts.topK));
 
-  const relatedIds = new Set<string>();
-  for (const row of ranked) {
-    if (!row.subject && !row.object) continue;
-    const table = entityIds.get(row.tag);
-    if (!table) continue;
-    for (const name of [row.subject, row.object]) {
-      const key = String(name || '').toLowerCase();
-      if (!key || key === 'user') continue;
-      for (const id of table.get(key) || []) {
-        if (opts.visible && !opts.visible(id)) continue;
-        relatedIds.add(id);
-      }
-    }
-  }
-  const related = [...relatedIds]
-    .map((id) => records.get(id))
-    .filter((r): r is Rec => !!r && r.kind === 'fact')
-    .slice(0, 8)
-    .map((r) => ({
-      subject: r.subject || '',
-      predicate: r.predicate || '',
-      object: r.object || '',
-      isLatest: r.isLatest,
-      derived: false,
-    }));
-
   return {
     intent,
     ranked: ranked.slice(0, opts.topK),
-    related,
+    related: [] as RelatedFact[],
     channels: { semantic: useVec, keyword: useKw, graph: useEnt },
     stats: { ...lastQueryStats },
   };

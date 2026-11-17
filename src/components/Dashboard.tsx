@@ -6,8 +6,9 @@ import {
   Sparkles, Command, Search, Send, Paperclip, ArrowRight
 } from 'lucide-react';
 
-import { collection, addDoc, getDocs, getDoc, query, where, orderBy, serverTimestamp, doc, updateDoc, deleteDoc, onSnapshot, setDoc } from "firebase/firestore";
+import { collection, addDoc, getDocs, getDoc, query, where, orderBy, serverTimestamp, doc, updateDoc, deleteDoc, setDoc } from "firebase/firestore";
 import { db, auth } from "../firebase";
+import { isConsolePath, listenForUser, validDocId } from "../lib/firestoreListen";
 import { getAuth } from "firebase/auth";
 
 import { sendChatMessage as saveToDB } from '../services/api';
@@ -79,13 +80,15 @@ export default function Dashboard({ user, isPro }: DashboardProps) {
 
   // --- EFFECTS ---
   useEffect(() => {
-    if (!user?.uid) return;
-    const connRef = doc(db, "userConnections", user.uid);
-    const unsubscribe = onSnapshot(connRef, (docSnap) => {
-      if (docSnap.exists()) setAppConnections(docSnap.data());
-    });
-    return () => unsubscribe();
-  }, [user?.uid]);
+    if (isConsolePath(window.location.pathname)) return;
+    return listenForUser(
+      'userConnections',
+      (signedIn) => (validDocId(signedIn.uid) ? doc(db, 'userConnections', signedIn.uid) : null),
+      (docSnap) => {
+        if (docSnap.exists()) setAppConnections((docSnap.data() || {}) as Record<string, boolean>);
+      }
+    );
+  }, []);
 
   useEffect(() => {
     if (!user?.uid) return;

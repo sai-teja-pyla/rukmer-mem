@@ -24,7 +24,7 @@ import { applyDecay } from './memory.js';
 import { buildMemoryInjection } from './inject.js';
 import { canAccessTag, homeTag, ownsTag, scopeFromTag, uidFromTag } from './tenancy.js';
 import { checkUpload, sanitizeName, sanitizePlain } from './security.js';
-import { ensureIndex, rankTagged, tagCount, vectorDim, type MetaFilter, type Retrieval } from './search-index.js';
+import { ensureIndex, rankTagged, relatedForMatches, tagCount, vectorDim, type MetaFilter, type Retrieval } from './search-index.js';
 import { selectMemories } from './relevance.js';
 import { assignGovernance, audit, canErase, canRead, eraseBulk, eraseMemory, findMemory, govOf, prepareWrite, teamContainer } from './governance.js';
 
@@ -105,7 +105,7 @@ async function attachChunks(doc: DocRec, text: string) {
   });
 }
 
-async function extractInto(tag: string, text: string, gov?: DocRec['gov']) {
+async function extractInto(tag: string, text: string, gov?: DocRec['gov'], originalText = '') {
   const state = getState();
   const graph = await extractGraph(text.slice(0, 8000));
   for (const e of graph.entities || []) {
@@ -114,7 +114,7 @@ async function extractInto(tag: string, text: string, gov?: DocRec['gov']) {
     if (state.entities.some((x) => x.containerTag === tag && x.name.toLowerCase() === name.toLowerCase())) continue;
     state.entities.push({ id: uid('ent'), containerTag: tag, name, type: e.type || 'topic' });
   }
-  upsertFacts(tag, graph.triples || [], text.slice(0, 240), gov);
+  upsertFacts(tag, graph.triples || [], text.slice(0, 240), gov, originalText || text);
   deriveFacts(tag);
 }
 
@@ -134,6 +134,7 @@ export async function ingestDocument(input: {
   memoryKind?: string;
   sourceRef?: string;
   extraction?: string;
+  originalText?: string;
 }) {
   const raw = sanitizePlain(input.text, 200000).trim();
   if (!raw) throw new Error('Empty document');
@@ -156,6 +157,7 @@ export async function ingestDocument(input: {
   const cleaned = prepareWrite(tenantId, raw);
   const titleClean = prepareWrite(tenantId, input.title || 'Untitled');
   const text = cleaned.text;
+  const keptOriginal = input.originalText ? prepareWrite(tenantId, input.originalText).text.trim().slice(0, 4000) : '';
   if (!text.trim()) throw Object.assign(new Error('Nothing left to store after redaction'), { status: 422 });
   const redacted = [...new Set([...cleaned.redacted, ...titleClean.redacted])];
   if (gov && redacted.length) gov.redacted = redacted;
@@ -183,6 +185,7 @@ export async function ingestDocument(input: {
       }
       existing.title = titleClean.text || 'Untitled';
       existing.text = text;
+      if (keptOriginal) existing.originalText = keptOriginal;
       existing.source = input.source || existing.source;
       existing.mime = input.mime || existing.mime;
       existing.metadata = sanitizeMeta({ ...(existing.metadata || {}), ...(metadata || {}) });
@@ -194,7 +197,7 @@ export async function ingestDocument(input: {
         if (chunk.gov) chunk.gov.deletedAt = new Date().toISOString();
       }
       const chunks = await attachChunks(existing, text);
-      if (input.task !== 'rag' && input.extract !== false) await extractInto(tag, text, existing.gov);
+      if (input.task !== 'rag' && input.extract !== false) await extractInto(tag, text, existing.gov, existing.originalText || text);
       state.jobs.push({
         id: uid('job'),
         status: 'done',
@@ -225,6 +228,7 @@ export async function ingestDocument(input: {
     source: input.source || 'upload',
     mime: input.mime || 'text/plain',
     text,
+    originalText: keptOriginal || undefined,
     createdAt: new Date().toISOString(),
     forgotten: false,
     fileId: input.fileId,
@@ -235,7 +239,7 @@ export async function ingestDocument(input: {
   const chunks = await attachChunks(doc, text);
   state.documents.push(doc);
 
-  if (input.task !== 'rag' && input.extract !== false) await extractInto(tag, text, doc.gov);
+  if (input.task !== 'rag' && input.extract !== false) await extractInto(tag, text, doc.gov, doc.originalText || text);
 
   state.jobs.push({
     id: uid('job'),
@@ -426,7 +430,8 @@ export async function searchMemory(query: string, opts: SearchOpts = {}) {
   const retrieval = retrievalOf(opts.retrieval);
   const qRaw = sanitizePlain(query, 2000);
   const { normalized, expanded } = expandQuery(qRaw);
-  const q = opts.rewrite ? expanded : normalized;
+  const shortFavourite = /\bfavou?rites?\b|\bfavorites?\b/i.test(normalized) && normalized.split(/\s+/).filter(Boolean).length <= 4;
+  const q = opts.rewrite || shortFavourite ? expanded : normalized;
   const topK = opts.topK ?? 10;
   const strict = opts.strictness ?? 0.4;
   const tags = (opts.containerTags?.length ? opts.containerTags : [opts.containerTag]).filter((t): t is string => !!t);
@@ -442,6 +447,7 @@ export async function searchMemory(query: string, opts: SearchOpts = {}) {
       query: q,
       intent: classifyIntent(q),
       matches: [],
+      related: [],
       tookMs: Date.now() - started,
       embedMs: 0,
       mode: 'empty',
@@ -451,7 +457,14 @@ export async function searchMemory(query: string, opts: SearchOpts = {}) {
   }
   const embedStarted = Date.now();
   let qVec = await embedP;
-  if (!qVec.length && wantVector && vectorDim(tags) === 256) qVec = localQueryEmbed(q);
+  const dim = wantVector ? vectorDim(tags) : 0;
+  if (dim > 256) {
+    if (qVec.length !== dim) qVec = [];
+  } else if (dim === 256 && qVec.length !== 256) {
+    qVec = localQueryEmbed(q);
+  } else if (dim && qVec.length && qVec.length !== dim) {
+    qVec = [];
+  }
   const embedMs = wantVector ? Date.now() - embedStarted : 0;
   const visible = opts.actorId
     ? (id: string) => {
@@ -513,7 +526,10 @@ export async function searchMemory(query: string, opts: SearchOpts = {}) {
     intent: classifyIntent(q),
     timeIntent: ranked.intent,
     matches,
-    related: opts.includeRelated === false ? [] : ranked.related,
+    related:
+      opts.includeRelated === false || !matches.length
+        ? []
+        : relatedForMatches(matches, { visible }),
     tookMs: Date.now() - started,
     embedMs,
     mode: retrieval === 'hybrid' && !qVec.length ? 'keyword' : retrieval,
@@ -547,7 +563,7 @@ export async function commitImportantMemory(input: {
   const graph = quick.triples.length ? quick : await extractGraph(raw).catch(() => quick);
   if (quick.triples.length) {
     void extractGraph(raw)
-      .then((rich) => upsertFacts(tag, rich.triples || [], raw.slice(0, 240)))
+      .then((rich) => upsertFacts(tag, rich.triples || [], raw.slice(0, 240), undefined, raw))
       .catch(() => undefined);
   }
   const triples = (graph.triples || []).filter(isUsefulFact);
@@ -555,6 +571,7 @@ export async function commitImportantMemory(input: {
     const doc = await ingestDocument({
       title: input.title || raw.slice(0, 80),
       text: raw,
+      originalText: raw,
       containerTag: tag,
       source: input.source || 'memory',
       mime: 'text/plain',
@@ -577,11 +594,18 @@ export async function commitImportantMemory(input: {
     if (state.entities.some((x) => x.containerTag === tag && x.name.toLowerCase() === name.toLowerCase())) continue;
     state.entities.push({ id: uid('ent'), containerTag: tag, name, type: e.type || 'topic' });
   }
-  const saved = upsertFacts(tag, triples, text.slice(0, 240), input.actorId ? assignGovernance({ actorId: input.actorId, containerTag: tag, visibility: input.visibility, memoryKind: 'fact' }) : undefined);
+  const saved = upsertFacts(
+    tag,
+    triples,
+    text.slice(0, 240),
+    input.actorId ? assignGovernance({ actorId: input.actorId, containerTag: tag, visibility: input.visibility, memoryKind: 'fact' }) : undefined,
+    raw
+  );
   deriveFacts(tag);
   const doc = await ingestDocument({
     title: input.title || text.split('\n')[0].slice(0, 80),
     text,
+    originalText: raw,
     containerTag: tag,
     source: input.source || 'memory',
     mime: 'text/plain',
@@ -756,6 +780,7 @@ export function readDocument(id: string, uid?: string) {
     chars: (doc.text || '').length,
     folder: folderOf(doc),
     text: String(doc.text || '').slice(0, 20000),
+    originalText: doc.originalText || '',
   };
 }
 
@@ -779,6 +804,7 @@ export function listDocuments(containerTag?: string | null, uid?: string) {
       chars: (d.text || '').length,
       folder: folderOf(d),
       preview: String(d.text || '').slice(0, 4000),
+      originalText: d.originalText || '',
     }));
 }
 
@@ -841,6 +867,7 @@ export function graphPayload(containerTag?: string | null, uid?: string) {
     predicate: t.predicate,
     object: t.object,
     evidence: t.evidence,
+    originalText: t.originalText || '',
     isLatest: t.isLatest !== false,
     derived: !!t.derived,
     containerTag: t.containerTag,
@@ -921,8 +948,27 @@ export function graphPayload(containerTag?: string | null, uid?: string) {
         containerTag: d.containerTag,
         createdAt: d.createdAt,
         text: String(d.text || '').slice(0, 4000),
+        originalText: d.originalText || '',
         facts: factsAbout(d.title),
       })),
+      ...docs
+        .filter((d) => {
+          const original = String(d.originalText || '').trim();
+          if (!original) return false;
+          return !triples.some((t) => t.containerTag === d.containerTag && String(t.originalText || '').trim() === original);
+        })
+        .map((d) => ({
+          id: `note_${d.id}`,
+          label: 'Note',
+          kind: 'memory' as const,
+          type: 'note',
+          source: d.source,
+          containerTag: d.containerTag,
+          createdAt: d.createdAt,
+          text: d.originalText || '',
+          originalText: d.originalText || '',
+          facts: [] as ReturnType<typeof factRow>[],
+        })),
       ...entities.map((e) => {
         const facts = factsAbout(e.name);
         return {
@@ -932,6 +978,8 @@ export function graphPayload(containerTag?: string | null, uid?: string) {
           type: e.type,
           containerTag: e.containerTag,
           createdAt: addedAt(facts),
+          text: '',
+          originalText: facts.find((f) => f.originalText)?.originalText || '',
           facts,
         };
       }),
@@ -941,6 +989,7 @@ export function graphPayload(containerTag?: string | null, uid?: string) {
           ...n,
           containerTag: facts[0]?.containerTag,
           createdAt: addedAt(facts),
+          originalText: facts.find((f) => f.originalText)?.originalText || '',
           facts,
         };
       }),
@@ -1020,10 +1069,22 @@ export function stats(uid?: string) {
   };
 }
 
+const REQUEST_WINDOW_MS = 7 * 86400000;
+
+export function keptRequests<T extends { at: string }>(rows: T[], now = Date.now()) {
+  const cutoff = now - REQUEST_WINDOW_MS;
+  return rows
+    .filter((row) => {
+      const at = Date.parse(row.at);
+      return Number.isFinite(at) && at >= cutoff;
+    })
+    .slice(0, 4000);
+}
+
 export function logRequest(rec: { method: string; path: string; status: number; ms: number; type: string; ownerUid?: string }) {
   const s = getState();
   s.requests.unshift({ id: uid('req'), at: new Date().toISOString(), ...rec });
-  s.requests = s.requests.slice(0, 500);
+  s.requests = keptRequests(s.requests);
   saveState();
 }
 
