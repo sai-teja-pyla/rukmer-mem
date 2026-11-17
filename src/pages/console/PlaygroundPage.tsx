@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Link, useOutletContext } from 'react-router-dom';
+import { Link, useOutletContext, useSearchParams } from 'react-router-dom';
 import {
   MessageSquare,
   Search,
@@ -194,6 +194,7 @@ function CircleCheck({ on, onClick, label }: { on: boolean; onClick: () => void;
 
 export default function PlaygroundPage() {
   const { user, homeTag } = useOutletContext<{ user: UserProfile; homeTag: string }>();
+  const [searchParams] = useSearchParams();
   const mine = homeTag || makeHomeTag(user.uid);
   const [mode, setMode] = useState<Mode>('chat');
   const [memoryMode, setMemoryMode] = useState<MemoryMode>('agentic');
@@ -277,6 +278,15 @@ export default function PlaygroundPage() {
       window.removeEventListener('pointerdown', close);
     };
   }, [modelOpen]);
+
+  const search = searchParams.toString();
+  useEffect(() => {
+    const params = new URLSearchParams(search);
+    const nextMode = params.get('mode');
+    const q = params.get('q');
+    if (nextMode === 'search' || nextMode === 'chat') setMode(nextMode);
+    if (q) setInput(q);
+  }, [search]);
 
   useEffect(() => {
     if (mine) {

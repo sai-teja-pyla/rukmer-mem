@@ -32,6 +32,8 @@ import type { LucideIcon } from 'lucide-react';
 import type { UserProfile } from '../../types';
 import { useUserSettings } from '../../hooks/useUserSettings';
 import { WHATS_NEW } from '../../content/whatsNew';
+import { engine } from '../../services/engineClient';
+import { homeTag as makeHomeTag } from '../../services/tenancy';
 
 interface ConsoleLayoutProps {
   user: UserProfile;
@@ -74,9 +76,12 @@ export default function ConsoleLayout({ user }: ConsoleLayoutProps) {
   const navigate = useNavigate();
   const location = useLocation();
   const [query, setQuery] = useState('');
+  const [memories, setMemories] = useState<{ id: string; title: string; text: string }[]>([]);
+  const [memoryLoading, setMemoryLoading] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [navOpen, setNavOpen] = useState(false);
   const searchRef = useRef<HTMLInputElement>(null);
+  const homeTag = makeHomeTag(user.uid);
 
   useLayoutEffect(() => {
     document.body.style.backgroundColor = appearance === 'light' ? '#f4f5f7' : '#0a0a0b';
@@ -129,6 +134,40 @@ export default function ConsoleLayout({ user }: ConsoleLayoutProps) {
     return activeNav.filter((item) => !('section' in item) && item.label.toLowerCase().includes(q));
   }, [query, activeNav]);
 
+  useEffect(() => {
+    const q = query.trim();
+    if (q.length < 2 || !homeTag) {
+      setMemories([]);
+      setMemoryLoading(false);
+      return;
+    }
+    let cancel = false;
+    setMemoryLoading(true);
+    const timer = window.setTimeout(() => {
+      engine
+        .search({ query: q, containerTag: homeTag, memoriesRetrieved: 5 })
+        .then((out) => {
+          if (cancel) return;
+          const rows = (out.matches || []).slice(0, 5).map((hit: { id?: string; title?: string; text?: string }) => ({
+            id: String(hit.id || ''),
+            title: String(hit.title || ''),
+            text: String(hit.text || '').replace(/\s+/g, ' ').trim(),
+          }));
+          setMemories(rows.filter((row: { id: string }) => row.id));
+        })
+        .catch(() => {
+          if (!cancel) setMemories([]);
+        })
+        .finally(() => {
+          if (!cancel) setMemoryLoading(false);
+        });
+    }, 250);
+    return () => {
+      cancel = true;
+      window.clearTimeout(timer);
+    };
+  }, [query, homeTag]);
+
   const isImmersive =
     location.pathname.startsWith('/playground') || location.pathname.startsWith('/memory-graph');
 
@@ -168,6 +207,9 @@ export default function ConsoleLayout({ user }: ConsoleLayoutProps) {
             Settings
           </button>
         )}
+        {query.trim() && filtered.length > 0 ? (
+          <p className="px-2.5 pt-2 pb-1 text-[10px] font-medium tracking-[0.16em] text-zinc-500">Pages</p>
+        ) : null}
         {filtered.map((item, i) => {
           if ('section' in item) {
             return (
@@ -196,8 +238,30 @@ export default function ConsoleLayout({ user }: ConsoleLayoutProps) {
             </NavLink>
           );
         })}
-        {query.trim() && filtered.length === 0 ? (
-          <p className="px-2.5 py-2 text-[13px] text-zinc-500">No results</p>
+        {query.trim().length >= 2 && (memoryLoading || memories.length > 0) ? (
+          <div className="mt-2">
+            <p className="px-2.5 pt-2 pb-1 text-[10px] font-medium tracking-[0.16em] text-zinc-500">Memories</p>
+            {memoryLoading && memories.length === 0 ? (
+              <p className="px-2.5 py-1 text-[12px] text-zinc-500">Searching…</p>
+            ) : null}
+            {memories.map((memory) => (
+              <button
+                key={memory.id}
+                type="button"
+                onClick={() => {
+                  setNavOpen(false);
+                  navigate(`/playground?mode=search&q=${encodeURIComponent(query.trim())}`);
+                }}
+                className="w-full text-left px-2.5 py-1.5 rounded-lg mb-[1px] hover:bg-white/[0.04]"
+              >
+                <span className="block truncate text-[13px] text-zinc-200">{memory.title || memory.text.slice(0, 80)}</span>
+                {memory.title ? <span className="block truncate text-[11px] text-zinc-500">{memory.text.slice(0, 90)}</span> : null}
+              </button>
+            ))}
+          </div>
+        ) : null}
+        {query.trim() && filtered.length === 0 && memories.length === 0 && !memoryLoading ? (
+          <p className="px-2.5 py-2 text-[13px] text-zinc-500">No pages or memories match</p>
         ) : null}
       </nav>
 
