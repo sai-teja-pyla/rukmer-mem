@@ -15,7 +15,7 @@ import {
 } from 'lucide-react';
 
 import { engine } from '../../services/engineClient';
-import { keyHeaders, loadProviderKeys, saveProviderKeys, type ProviderKeys } from '../../services/providerKeys';
+import { keyHeaders, loadProviderKeys, pickReadyModel, saveProviderKeys, type ProviderKeys } from '../../services/providerKeys';
 import type { UserProfile } from '../../types';
 import { homeTag as makeHomeTag } from '../../services/tenancy';
 
@@ -288,6 +288,17 @@ export default function PlaygroundPage() {
     if (q) setInput(q);
   }, [search]);
 
+  const providerReady = (provider: string) => !!(serverProviders[provider] || keys[provider as keyof ProviderKeys]);
+  const modelReady = providerReady(model.provider);
+
+  useEffect(() => {
+    const ready: Record<string, boolean> = {};
+    for (const candidate of MODELS) {
+      ready[candidate.provider] = !!(serverProviders[candidate.provider] || keys[candidate.provider]);
+    }
+    setModel((cur) => (ready[cur.provider] ? cur : pickReadyModel(MODELS, ready) || cur));
+  }, [serverProviders, keys]);
+
   useEffect(() => {
     if (mine) {
       setTag(mine);
@@ -373,12 +384,22 @@ export default function PlaygroundPage() {
   const send = async (text?: string) => {
     const value = (text ?? input).trim();
     if (!value || busy) return;
-    setBusy(true);
     const withUser = threads.map((t) =>
       t.id === threadId
         ? { ...t, title: t.messages.length ? t.title : value.slice(0, 42), updatedAt: new Date().toISOString(), messages: [...t.messages, { role: 'user' as const, text: value }] }
         : t
     );
+    if (mode === 'chat' && !providerReady(model.provider)) {
+      const note = friendlyModelError(`Add a ${model.vendor} API key to use ${model.label}.`);
+      persistThreads(
+        withUser.map((t) =>
+          t.id === threadId ? { ...t, messages: [...t.messages, { role: 'assistant' as const, text: note }] } : t
+        )
+      );
+      setInput('');
+      return;
+    }
+    setBusy(true);
     persistThreads(withUser);
     setInput('');
     const body = {
@@ -439,7 +460,10 @@ export default function PlaygroundPage() {
             'x-rukmer-mode': memoryMode,
           }
         );
-        const answer = out.answer || out.choices?.[0]?.message?.content || out.error || 'No answer.';
+        const content = out.choices?.[0]?.message?.content;
+        const rawError = typeof out.error === 'string' ? out.error : out.error?.message || out.error?.error;
+        if (!out.answer && !content && rawError) throw new Error(String(rawError));
+        const answer = out.answer || content || 'No answer.';
         const citations = (out.rukmer?.citations || []) as Citation[];
         setHits([]);
         persistThreads(
@@ -454,11 +478,12 @@ export default function PlaygroundPage() {
           )
         );
       }
-    } catch (err: any) {
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'The model did not reply.';
       persistThreads(
         withUser.map((t) =>
           t.id === threadId
-            ? { ...t, messages: [...t.messages, { role: 'assistant', text: friendlyModelError(err.message) }] }
+            ? { ...t, messages: [...t.messages, { role: 'assistant', text: friendlyModelError(message) }] }
             : t
         )
       );
@@ -467,9 +492,8 @@ export default function PlaygroundPage() {
     }
   };
 
-  const providerReady = (provider: string) => !!(serverProviders[provider] || keys[provider as keyof ProviderKeys]);
-  const modelReady = providerReady(model.provider);
-  const canSend = !!input.trim() && !busy;
+  const chatBlocked = mode === 'chat' && !modelReady;
+  const canSend = !!input.trim() && !busy && !chatBlocked;
 
   return (
     <div className="h-full min-h-0 flex flex-col px-3 sm:px-5 pt-3 sm:pt-4 pb-3">
@@ -560,6 +584,13 @@ export default function PlaygroundPage() {
                     </div>
                   </div>
                 ))}
+                {busy ? (
+                  <div className="flex justify-start">
+                    <div className="rounded-xl px-3.5 py-2 text-[13.5px] text-zinc-400 bg-white/[0.04] border border-white/[0.06]">
+                      Waiting for a reply…
+                    </div>
+                  </div>
+                ) : null}
                 {hits.length > 0 && (
                   <div className="space-y-2 pt-2">
                     {hits.map((h) => (
@@ -680,8 +711,8 @@ export default function PlaygroundPage() {
                 <button
                   onClick={() => send()}
                   disabled={!canSend}
-                  title={input.trim() ? 'Send' : 'Enter a query'}
-                  aria-label={input.trim() ? 'Send' : 'Enter a query'}
+                  title={chatBlocked ? 'Add an API key to chat' : input.trim() ? 'Send' : 'Enter a query'}
+                  aria-label={chatBlocked ? 'Add an API key to chat' : input.trim() ? 'Send' : 'Enter a query'}
                   className="h-7 w-7 rounded-md bg-[#2563eb] hover:bg-[#1d4ed8] text-white flex items-center justify-center disabled:opacity-50"
                 >
                   <ArrowUp size={14} />
@@ -706,11 +737,17 @@ export default function PlaygroundPage() {
               </label>
             </div>
 
-            {!modelReady && mode === 'chat' && (
-              <p className="mt-2 text-[12.5px] text-amber-200/90">
-                Add a {model.vendor} API key to use {model.label}. Use the plug icon or{' '}
-                <Link to="/settings/advanced" className="underline">Settings → Advanced</Link>.
-              </p>
+            {chatBlocked && (
+              <div className="mt-2 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-amber-300/25 bg-amber-400/10 px-3 py-2 text-[12.5px] text-amber-100">
+                <span>Add a {model.vendor} API key to use {model.label}. Search still works without a key.</span>
+                <button
+                  type="button"
+                  onClick={() => setKeysOpen(true)}
+                  className="h-7 px-2.5 rounded-md bg-amber-200 text-[#1c1917] text-[12px] font-medium"
+                >
+                  Add key
+                </button>
+              </div>
             )}
 
             {messages.length === 0 && mode === 'chat' && (
@@ -719,7 +756,8 @@ export default function PlaygroundPage() {
                   <button
                     key={s}
                     onClick={() => send(s)}
-                    className="h-8 px-3 rounded-full border border-white/[0.08] bg-[#0c0c0e] text-[12.5px] text-zinc-300 hover:bg-white/[0.04] inline-flex items-center gap-2"
+                    disabled={chatBlocked}
+                    className="h-8 px-3 rounded-full border border-white/[0.08] bg-[#0c0c0e] text-[12.5px] text-zinc-300 hover:bg-white/[0.04] inline-flex items-center gap-2 disabled:opacity-50"
                   >
                     <Search size={12} className="text-zinc-500" />
                     {s}

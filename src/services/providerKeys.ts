@@ -23,6 +23,13 @@ export function saveProviderKeys(keys: ProviderKeys) {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(keys));
 }
 
+export function pickReadyModel<T extends { provider: string }>(
+  models: readonly T[],
+  ready: Record<string, boolean | undefined>
+): T | null {
+  return models.find((model) => ready[model.provider]) ?? null;
+}
+
 export function keyHeaders(keys: ProviderKeys, extra?: Record<string, string>) {
   const headers: Record<string, string> = { ...(extra || {}) };
   if (keys.openai) headers['x-openai-key'] = keys.openai;

@@ -25,6 +25,7 @@ const { homeTag } = await import('./tenancy.js');
 const { commitImportantMemory, ingestDocument, searchMemory } = await import('./pipeline.js');
 const { buildMemoryInjection } = await import('./inject.js');
 const { upsertFacts } = await import('./facts.js');
+const { pickReadyModel } = await import('../src/services/providerKeys.js');
 
 const failures: string[] = [];
 function check(name: string, ok: boolean, detail = '') {
@@ -146,6 +147,16 @@ const lisbonInjected = await buildMemoryInjection('Lisbon', cityTag, { topK, str
 check('chat and search match for Lisbon', sameIds(lisbonInjected.retrieved.matches, lisbonSearch.matches));
 check('injected texts are unique', uniqueTexts(cityRows) && uniqueTexts(lisbonInjected.retrieved.matches));
 check('Lisbon search drops the duplicate text', uniqueTexts(lisbonSearch.matches));
+
+const modelCatalog = [
+  { id: 'gemini-3.8-flash', provider: 'gemini' },
+  { id: 'gpt-4o-mini', provider: 'openai' },
+  { id: 'claude-sonnet-4-5', provider: 'anthropic' },
+  { id: 'grok-3-mini', provider: 'grok' },
+];
+check('server gemini key stays the default model', pickReadyModel(modelCatalog, { gemini: true })?.id === 'gemini-3.8-flash');
+check('default model skips a provider with no key', pickReadyModel(modelCatalog, { openai: true })?.id === 'gpt-4o-mini');
+check('no ready model leaves chat without a default', pickReadyModel(modelCatalog, {}) === null);
 
 if (failures.length) {
   console.error(`\n${failures.length} playground fix check(s) failed`);
