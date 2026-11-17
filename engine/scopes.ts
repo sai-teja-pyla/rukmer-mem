@@ -10,7 +10,7 @@ export function createOrg(uid: string, name: string) {
   if (state.orgs.some((o) => o.id === id)) throw Object.assign(new Error('Org already exists'), { status: 409 });
   const rec = { id, name: label, createdBy: uid, createdAt: new Date().toISOString() };
   state.orgs.push(rec);
-  state.orgMembers.push({ orgId: id, uid, role: 'owner' });
+  state.orgMembers.push({ orgId: id, uid, role: 'owner', status: 'active', joinedAt: rec.createdAt });
   audit({ actorId: uid, action: 'retain', memoryId: id, tenantId: id, detail: 'org-created result=ok' });
   saveState();
   return rec;
@@ -24,7 +24,7 @@ export function addOrgMember(actorUid: string, orgId: string, memberUid: string)
   const actor = state.orgMembers.find((m) => m.orgId === tag && m.uid === actorUid);
   if (!actor || actor.role !== 'owner') throw Object.assign(new Error('Only the org owner can add members'), { status: 403 });
   if (!state.orgMembers.some((m) => m.orgId === tag && m.uid === member)) {
-    state.orgMembers.push({ orgId: tag, uid: member, role: 'member' });
+    state.orgMembers.push({ orgId: tag, uid: member, role: 'member', status: 'active', joinedAt: new Date().toISOString() });
     audit({ actorId: actorUid, action: 'retain', memoryId: tag, tenantId: tag, detail: `org-member-added:${member} result=ok` });
     saveState();
   }

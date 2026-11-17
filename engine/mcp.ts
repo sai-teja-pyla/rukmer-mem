@@ -4,7 +4,7 @@ import { MEMORY_TOOLS, runMemoryTool } from './tools.js';
 const PROTOCOL = '2024-11-05';
 
 export const MCP_INSTRUCTIONS =
-  'Rukmer stores and searches long-term memory for the signed-in user. searchMemories reads stored memories. addMemory writes one memory.';
+  'Rukmer stores a private brain for the signed-in user and any team brains they belong to. searchMemories reads those spaces. addMemory stays private unless scope is team.';
 
 const MCP_TOOLS = MEMORY_TOOLS.map((t) => ({
   name: t.function.name,

@@ -20,6 +20,7 @@ const LandingPage = lazy(() => import('./components/LandingPage'));
 const Dashboard = lazy(() => import('./components/Dashboard'));
 const HelpPage = lazy(() => import('./pages/HelpPage'));
 const DocsPage = lazy(() => import('./pages/DocsPage'));
+const JoinTeamPage = lazy(() => import('./pages/JoinTeamPage'));
 const SubscriptionPage = lazy(() => import('./pages/SubscriptionPage'));
 const OverviewPage = lazy(() => import('./pages/console/OverviewPage'));
 const PlaygroundPage = lazy(() => import('./pages/console/PlaygroundPage'));
@@ -130,6 +131,7 @@ function AppRoutes() {
           }
         />
         <Route path="/connect/oauth" element={user ? <OAuthConsentPage /> : <Navigate to={`/login?next=${encodeURIComponent(window.location.pathname + window.location.search)}`} replace />} />
+        <Route path="/join/:token" element={user ? <JoinTeamPage /> : <ToLogin />} />
         <Route path="/signup" element={!user ? <SignupPage /> : <Navigate to="/overview" replace />} />
         <Route path="/privacy" element={<PrivacyPage />} />
         <Route path="/terms" element={<TermsPage />} />

@@ -1396,6 +1396,7 @@ app.post('/api/webhooks/slack', async (req: any, res: any) => {
       let workspaceContext = "";
       if (orgId) {
         try {
+          // Slack stays on the private home tag until a workspace is linked to an org.
           const found = await searchMemory(cleanPrompt, { containerTag: homeTag(orgId), actorId: orgId, topK: 6, purpose: 'slack' });
           const rows = (found.matches || []).map((match) => {
             const row = findMemory(match.id);

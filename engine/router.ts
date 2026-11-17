@@ -8,6 +8,7 @@ import {
 } from './inject.js';
 import { rememberTranscript } from './pipeline.js';
 import { MEMORY_TOOLS, runMemoryTool } from './tools.js';
+import { readTagsFor } from './spaces.js';
 import { resolveOwnedTag } from './tenancy.js';
 import { isProduction } from './security.js';
 
@@ -207,6 +208,8 @@ export async function completeChat(req: Request, res: Response) {
   let mem: Awaited<ReturnType<typeof buildMemoryInjection>> | null = null;
   let messages = rawMessages;
   if (useMemory) {
+    const scope = String(req.headers['x-rukmer-scope'] || req.body?.memoryScope || req.body?.scope || 'all');
+    const tags = uid ? readTagsFor(uid, { scope, teamId: req.body?.teamId, containerTag: tag }) : [tag];
     mem = await buildMemoryInjection(query, tag, {
       topK: Number(req.body?.memoriesRetrieved || 8),
       strictness: Number(req.body?.matchStrictness ?? req.body?.strictness ?? 0.4),
@@ -215,6 +218,7 @@ export async function completeChat(req: Request, res: Response) {
       retrieval: req.body?.retrieval === 'semantic' || req.body?.retrieval === 'keyword' ? req.body.retrieval : undefined,
       actorId: uid,
       purpose: 'chat',
+      containerTags: tags,
     });
     messages = injectOpenAIMessages(rawMessages, mem.injection, mem.system);
   }

@@ -211,7 +211,8 @@ console.log('\n== Security ==');
 const foreign = await searchMemory('company brain', { containerTag: tag, topK: 5 });
 check('user search does not leak org fact', !foreign.matches.some((m) => /company brain/i.test(`${m.title} ${m.text}`)));
 const secretId = getState().triples.find((t) => t.containerTag === org.id)?.id || '';
-check('member can forget org fact', forgetById(secretId, 'userb').ok === true);
+check('member cannot forget an org fact', forgetById(secretId, 'userb').ok === false);
+check('org owner can forget an org fact', forgetById(secretId, 'usera').ok === true);
 check('stranger cannot forget home chunk', forgetById('chk_maple', 'userc').ok === false);
 
 process.env.MEMORY_REQUIRE_AUTH = '1';

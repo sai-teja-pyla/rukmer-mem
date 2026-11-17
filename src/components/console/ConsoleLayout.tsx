@@ -45,7 +45,7 @@ type NavItem =
   | { section: string }
   | { to: string; label: string; icon: LucideIcon; chevron?: boolean };
 
-type MemoryHit = { id: string; title: string; text: string; source: string };
+type MemoryHit = { id: string; title: string; text: string; source: string; space?: string; authorName?: string; authoredAt?: string };
 type ChatHit = { id: string; title: string };
 
 function loadChatTitles(uid: string): ChatHit[] {
@@ -107,6 +107,7 @@ export default function ConsoleLayout({ user, restoring = false }: ConsoleLayout
   const navigate = useNavigate();
   const location = useLocation();
   const [query, setQuery] = useState('');
+  const [memoryScope, setMemoryScope] = useState<'all' | 'private' | 'team'>('all');
   const [memories, setMemories] = useState<MemoryHit[]>([]);
   const [memoryLoading, setMemoryLoading] = useState(false);
   const searchRequest = useRef(0);
@@ -191,14 +192,22 @@ export default function ConsoleLayout({ user, restoring = false }: ConsoleLayout
     setMemoryLoading(true);
     const timer = window.setTimeout(() => {
       engine
-        .search({ query: q, containerTag: homeTag, memoriesRetrieved: 5 })
+        .search({ query: q, containerTag: homeTag, memoriesRetrieved: 5, scope: memoryScope })
         .then((out) => {
           if (requestId !== searchRequest.current) return;
-          const rows = (out.matches || []).slice(0, 5).flatMap((hit: { id?: string; title?: string; text?: string; source?: string }) => {
+          const rows = (out.matches || []).slice(0, 5).flatMap((hit: MemoryHit & { id?: string }) => {
             const id = String(hit.id || '');
             if (!id) return [];
             const text = String(hit.text || '').replace(/\s+/g, ' ').trim();
-            return [{ id, title: String(hit.title || ''), text: text.slice(0, 80), source: String(hit.source || 'memory') }];
+            return [{
+              id,
+              title: String(hit.title || ''),
+              text: text.slice(0, 80),
+              source: String(hit.source || 'memory'),
+              space: hit.space,
+              authorName: hit.authorName,
+              authoredAt: hit.authoredAt,
+            }];
           });
           setMemories(rows);
         })
@@ -211,7 +220,7 @@ export default function ConsoleLayout({ user, restoring = false }: ConsoleLayout
         });
     }, 250);
     return () => window.clearTimeout(timer);
-  }, [query, homeTag]);
+  }, [query, homeTag, memoryScope]);
 
   const isImmersive =
     location.pathname.startsWith('/playground') || location.pathname.startsWith('/memory-graph');
@@ -246,6 +255,18 @@ export default function ConsoleLayout({ user, restoring = false }: ConsoleLayout
         >
           <X size={16} />
         </button>
+      </div>
+      <div className="px-3 pb-1 flex gap-1">
+        {(['all', 'private', 'team'] as const).map((scope) => (
+          <button
+            key={scope}
+            type="button"
+            onClick={() => setMemoryScope(scope)}
+            className={`h-6 px-2 rounded-md text-[11px] ${memoryScope === scope ? 'bg-white/[0.08] text-zinc-100' : 'text-zinc-500'}`}
+          >
+            {scope === 'all' ? 'All' : scope === 'private' ? 'Mine' : 'Team'}
+          </button>
+        ))}
       </div>
 
       <nav className="flex-1 overflow-y-auto px-2 pb-1">
@@ -323,7 +344,7 @@ export default function ConsoleLayout({ user, restoring = false }: ConsoleLayout
               >
                 <span className="block truncate text-[13px] text-zinc-200">{memory.title || memory.text || 'Memory'}</span>
                 <span className="block truncate text-[11px] text-zinc-500">
-                  {memory.source}
+                  {memory.space === 'team' ? `Team${memory.authorName ? ` · ${memory.authorName}` : ''}` : memory.source}
                   {memory.text ? ` · ${memory.text}` : ''}
                 </span>
               </button>

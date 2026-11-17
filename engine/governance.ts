@@ -21,7 +21,7 @@ import {
   type RedactMode,
   type Visibility,
 } from './core.js';
-import { canAccessTag, homeTag, ownsTag, uidFromTag } from './tenancy.js';
+import { activeTeamMember, canAccessTag, homeTag, ownsTag, uidFromTag } from './tenancy.js';
 
 const DEFAULT_TTL: Record<MemoryKind, number> = {
   session: 7,
@@ -103,15 +103,16 @@ export function scopeTagsForActor(actor: string, primary: string) {
 }
 
 export function isTeamMember(actor: string, teamId: string) {
-  if (!actor || !teamId) return false;
-  return getState().teamMembers.some((m) => m.teamId === teamId && m.uid === actor);
+  return !!activeTeamMember(actor, teamId);
 }
 
 export function isTenantAdmin(actor: string, tenantId: string) {
   if (!actor || !tenantId) return false;
   if (tenantId === homeTag(actor)) return true;
   if (tenantId.startsWith('org_')) {
-    return getState().orgMembers.some((m) => m.orgId === tenantId && m.uid === actor && m.role === 'owner');
+    return getState().orgMembers.some(
+      (m) => m.orgId === tenantId && m.uid === actor && m.status !== 'removed' && (m.role === 'owner' || m.role === 'admin')
+    );
   }
   return false;
 }
@@ -119,18 +120,26 @@ export function isTenantAdmin(actor: string, tenantId: string) {
 export function canRead(actor: string, row: { containerTag: string; forgotten?: boolean; gov?: MemoryGov }) {
   if (!actor || isRetired(row)) return false;
   const gov = govOf(row);
-  if (gov.visibility === 'org') return gov.ownerId === actor || canAccessTag(actor, gov.tenantId || row.containerTag);
-  if (gov.visibility === 'team') return gov.ownerId === actor || isTeamMember(actor, gov.teamId || '');
+  if (gov.visibility === 'org') return canAccessTag(actor, gov.tenantId || row.containerTag);
+  if (gov.visibility === 'team') return isTeamMember(actor, gov.teamId || '');
   if (row.gov) return gov.ownerId === actor;
   return ownsTag(actor, row.containerTag);
 }
 
+function teamRole(actor: string, teamId: string) {
+  return activeTeamMember(actor, teamId)?.role;
+}
+
 export function canErase(actor: string, row: { containerTag: string; gov?: MemoryGov }) {
   const gov = govOf(row);
-  if (gov.ownerId && gov.ownerId === actor) return true;
+  if (gov.ownerId && gov.ownerId === actor && gov.visibility !== 'team') return true;
+  if (gov.visibility === 'team') {
+    if (gov.ownerId === actor || gov.createdBy === actor) return isTeamMember(actor, gov.teamId || '');
+    const role = teamRole(actor, gov.teamId || '');
+    return role === 'owner' || role === 'admin';
+  }
   if (!row.gov && ownsTag(actor, row.containerTag)) return true;
-  if (gov.visibility === 'org' && canAccessTag(actor, gov.tenantId || row.containerTag)) return true;
-  if (gov.visibility === 'team' && isTeamMember(actor, gov.teamId || '')) return true;
+  if (gov.visibility === 'org') return isTenantAdmin(actor, gov.tenantId || row.containerTag);
   return isTenantAdmin(actor, gov.tenantId);
 }
 
@@ -225,38 +234,61 @@ export function expiresOn(tenantId: string, kind: MemoryKind, from = new Date())
   return new Date(from.getTime() + days * 86400000).toISOString();
 }
 
+export function pickTeam(actor: string, teamId?: string) {
+  const state = getState();
+  if (teamId) {
+    const team = state.teams.find((row) => row.id === teamId && !row.archivedAt);
+    if (!team || !isTeamMember(actor, team.id)) throw Object.assign(new Error('Team membership required'), { status: 403 });
+    return team;
+  }
+  const generals = state.teams.filter(
+    (row) => !row.archivedAt && (row.kind === 'general' || !row.kind) && isTeamMember(actor, row.id)
+  );
+  if (generals.length !== 1) throw Object.assign(new Error('teamId required'), { status: 400 });
+  return generals[0];
+}
+
 export function assignGovernance(input: {
   actorId: string;
   containerTag: string;
   visibility?: Visibility | string;
+  scope?: string;
   teamId?: string;
   memoryKind?: MemoryKind | string;
   sourceRef?: string;
   extraction?: string;
+  durable?: boolean;
 }) {
   const actor = input.actorId;
   const tag = input.containerTag;
-  const requested = String(input.visibility || 'private');
+  const requested = String(input.scope || input.visibility || 'private');
   const visibility: Visibility = requested === 'team' || requested === 'org' ? requested : 'private';
-  const tenantId = tag.startsWith('org_') ? tag : homeTag(actor);
+  let tenantId = tag.startsWith('org_') ? tag : homeTag(actor);
+  let teamId = String(input.teamId || '');
   if (visibility === 'org' && !canAccessTag(actor, tenantId)) {
     throw Object.assign(new Error('Not allowed to share this memory with the org'), { status: 403 });
   }
   if (visibility === 'team') {
-    const teamId = String(input.teamId || '');
-    const team = getState().teams.find((t) => t.id === teamId);
-    if (!team || !isTeamMember(actor, team.id)) {
-      throw Object.assign(new Error('Team membership required'), { status: 403 });
+    const team = pickTeam(actor, teamId || undefined);
+    teamId = team.id;
+    tenantId = team.orgId || team.tenantId;
+    const dest = teamContainer(team.id);
+    if (!ownsTag(actor, tag) && tag !== dest) {
+      throw Object.assign(new Error('Cannot write into another user store'), { status: 403 });
     }
-  }
-  if (!tag.startsWith('org_') && !ownsTag(actor, tag)) {
+  } else if (!tag.startsWith('org_') && !ownsTag(actor, tag)) {
     throw Object.assign(new Error('Cannot write into another user store'), { status: 403 });
   }
   if (tag.startsWith('org_') && !canAccessTag(actor, tag)) {
     throw Object.assign(new Error('Not a member of this org'), { status: 403 });
   }
   const kinds: MemoryKind[] = ['session', 'working', 'preference', 'fact', 'decision', 'summary', 'context'];
-  const memoryKind = kinds.includes(input.memoryKind as MemoryKind) ? (input.memoryKind as MemoryKind) : tag.includes('--ses--') ? 'session' : 'context';
+  let memoryKind = kinds.includes(input.memoryKind as MemoryKind) ? (input.memoryKind as MemoryKind) : tag.includes('--ses--') ? 'session' : 'context';
+  let expiresAt = expiresOn(tenantId, memoryKind);
+  if (visibility === 'team' || input.durable) {
+    if (!input.memoryKind || memoryKind === 'context') memoryKind = visibility === 'team' ? 'decision' : 'fact';
+    expiresAt = null;
+  }
   const gov: MemoryGov = {
     ownerId: actor,
     tenantId,
@@ -265,10 +297,10 @@ export function assignGovernance(input: {
     sourceRef: input.sourceRef ? String(input.sourceRef).slice(0, 200) : undefined,
     memoryKind,
     extraction: input.extraction || 'heuristic',
-    expiresAt: expiresOn(tenantId, memoryKind),
+    expiresAt,
     archived: false,
     deletedAt: null,
-    teamId: visibility === 'team' ? String(input.teamId || '') : undefined,
+    teamId: visibility === 'team' ? teamId : undefined,
   };
   return gov;
 }
@@ -461,10 +493,18 @@ export function createTeam(actor: string, name: string, tenantId?: string) {
   if (tenantId && tenant !== tenantId) throw Object.assign(new Error('Tenant admin required'), { status: 403 });
   const label = String(name || '').trim().slice(0, 80);
   if (!label) throw Object.assign(new Error('Team name required'), { status: 400 });
-  const team = { id: uid('team'), name: label, tenantId: tenant, createdBy: actor, createdAt: new Date().toISOString() };
+  const team = {
+    id: uid('team'),
+    name: label,
+    tenantId: tenant,
+    orgId: tenant.startsWith('org_') ? tenant : '',
+    kind: 'custom' as const,
+    createdBy: actor,
+    createdAt: new Date().toISOString(),
+  };
   const state = getState();
   state.teams.push(team);
-  state.teamMembers.push({ teamId: team.id, uid: actor, role: 'owner' });
+  state.teamMembers.push({ teamId: team.id, uid: actor, role: 'owner', status: 'active', joinedAt: team.createdAt, displayName: actor });
   audit({ actorId: actor, action: 'retain', memoryId: team.id, tenantId: tenant, detail: `team-created result=ok` });
   saveState();
   return team;
@@ -477,7 +517,7 @@ export function addTeamMember(actor: string, teamId: string, memberUid: string) 
   if (!team || !owner) throw Object.assign(new Error('Only the team owner can add members'), { status: 403 });
   if (!/^[A-Za-z0-9_-]{1,128}$/.test(memberUid)) throw Object.assign(new Error('Invalid member'), { status: 400 });
   if (!state.teamMembers.some((m) => m.teamId === teamId && m.uid === memberUid)) {
-    state.teamMembers.push({ teamId, uid: memberUid, role: 'member' });
+    state.teamMembers.push({ teamId, uid: memberUid, role: 'member', status: 'active', joinedAt: new Date().toISOString(), displayName: memberUid });
     audit({ actorId: actor, action: 'retain', memoryId: teamId, tenantId: team.tenantId, detail: `member-added:${memberUid} result=ok` });
     saveState();
   }
@@ -488,7 +528,7 @@ export function exportTenant(actor: string, tenantId: string) {
   if (!isTenantAdmin(actor, tenantId)) throw Object.assign(new Error('Tenant admin required'), { status: 403 });
   const state = getState();
   const inTenant = (row: { containerTag: string; gov?: MemoryGov; forgotten?: boolean }) =>
-    (govOf(row).tenantId === tenantId || row.containerTag === tenantId) && !isRetired(row);
+    (govOf(row).tenantId === tenantId || row.containerTag === tenantId) && govOf(row).visibility !== 'private' && !isRetired(row);
   audit({ actorId: actor, action: 'export', memoryId: '', tenantId, purpose: 'tenant-export' });
   return {
     exportedAt: new Date().toISOString(),
@@ -550,11 +590,42 @@ export function migrateGovernance() {
   const state = getState();
   state.teams = state.teams || [];
   state.teamMembers = state.teamMembers || [];
+  state.teamInvites = state.teamInvites || [];
   state.retentionPolicies = state.retentionPolicies || [];
   state.redactionPolicies = state.redactionPolicies || [];
   state.audit = state.audit || [];
   state.erasures = state.erasures || [];
   let changed = false;
+  for (const team of state.teams) {
+    if (!team.kind) {
+      team.kind = 'general';
+      changed = true;
+    }
+    if (!team.orgId) {
+      team.orgId = team.tenantId.startsWith('org_') ? team.tenantId : '';
+      changed = true;
+    }
+  }
+  for (const member of state.teamMembers) {
+    if (!member.status) {
+      member.status = 'active';
+      changed = true;
+    }
+    if (!member.joinedAt) {
+      member.joinedAt = new Date().toISOString();
+      changed = true;
+    }
+  }
+  for (const member of state.orgMembers) {
+    if (!member.status) {
+      member.status = 'active';
+      changed = true;
+    }
+    if (!member.joinedAt) {
+      member.joinedAt = new Date().toISOString();
+      changed = true;
+    }
+  }
   for (const row of [...state.documents, ...state.chunks, ...state.triples]) {
     if (row.gov) continue;
     row.gov = legacyGov(row.containerTag);

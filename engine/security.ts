@@ -29,6 +29,7 @@ const LIMITS: Record<string, number> = {
   forget: 30,
   admin: 30,
   upload: 20,
+  team: 20,
 };
 
 const buckets = new Map<string, { n: number; reset: number }>();
@@ -119,6 +120,7 @@ export function bucketFor(path: string) {
   if (path.includes('/search') || path.includes('/inject') || path.includes('/chat') || path.includes('/consolidate')) return 'search';
   if (path.includes('/documents') || path.includes('/remember') || path.includes('/connectors') || path.includes('/tools/execute')) return 'write';
   if (path.startsWith('/oauth') || path.includes('/keys') || path.includes('/loi-accepted')) return 'auth';
+  if (path.includes('/v4/teams')) return 'team';
   if (path.includes('/governance') || path.includes('/orgs')) return 'admin';
   return '';
 }

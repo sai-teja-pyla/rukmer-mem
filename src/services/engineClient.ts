@@ -104,5 +104,25 @@ export const engine = {
   pairBrowser: () => req('/v4/connectors/browser/pair', { method: 'POST', body: JSON.stringify({}) }),
   disconnectConnector: (app: string) => req('/v4/connectors/disconnect', { method: 'POST', body: JSON.stringify({ app }) }),
   createOrg: (name: string) => req('/v4/orgs', { method: 'POST', body: JSON.stringify({ name }) }),
+  teams: () => req('/v4/teams'),
+  bootstrapTeam: (orgName: string, displayName?: string) =>
+    req('/v4/teams/bootstrap', { method: 'POST', body: JSON.stringify({ orgName, displayName }) }),
+  createTeamSpace: (orgId: string, slug: string, name?: string) =>
+    req('/v4/teams/spaces', { method: 'POST', body: JSON.stringify({ orgId, slug, name }) }),
+  createInvite: (teamId: string, role = 'member', publicKey = '') =>
+    req(`/v4/teams/${encodeURIComponent(teamId)}/invites`, { method: 'POST', body: JSON.stringify({ role, publicKey }) }),
+  acceptInvite: (body: { token?: string; code?: string; id?: string; publicKey?: string; email?: string }) =>
+    req('/v4/teams/invites/accept', { method: 'POST', body: JSON.stringify(body) }),
+  readInvite: (id: string) => req(`/v4/teams/invites/${encodeURIComponent(id)}`),
+  confirmInvite: (id: string, match: boolean, publicKey = '') =>
+    req(`/v4/teams/invites/${encodeURIComponent(id)}/confirm`, { method: 'POST', body: JSON.stringify({ match, publicKey }) }),
+  revokeInvite: (id: string) => req(`/v4/teams/invites/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+  removeTeammate: (teamId: string, uid: string) =>
+    req(`/v4/teams/${encodeURIComponent(teamId)}/members/${encodeURIComponent(uid)}/remove`, { method: 'POST', body: '{}' }),
+  leaveTeam: (teamId: string) => req(`/v4/teams/${encodeURIComponent(teamId)}/leave`, { method: 'POST', body: '{}' }),
+  setTeammateRole: (teamId: string, uid: string, role: string) =>
+    req(`/v4/teams/${encodeURIComponent(teamId)}/members/${encodeURIComponent(uid)}`, { method: 'PATCH', body: JSON.stringify({ role }) }),
+  moveMemory: (id: string, to: 'private' | 'team', teamId?: string) =>
+    req(`/v4/memories/${encodeURIComponent(id)}/move`, { method: 'POST', body: JSON.stringify({ to, teamId }) }),
   closeSession: (sessionId: string) => req('/v4/sessions/close', { method: 'POST', body: JSON.stringify({ sessionId }) }),
 };

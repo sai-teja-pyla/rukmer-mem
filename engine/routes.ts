@@ -8,6 +8,7 @@ import {
   forgetOwner,
   forgetTenant,
   exportMine,
+  moveMemory,
   resetMine,
   graphPayload,
   ingestPayload,
@@ -32,7 +33,9 @@ import { MEMORY_TOOLS, runMemoryTool } from './tools.js';
 import { CHATGPT_OPENAPI, handleMcp } from './mcp.js';
 import { MEMORY_PROTOCOL } from './protocol.js';
 import { memoryAuth } from './identity.js';
-import { homeTag, resolveScopeTag } from './tenancy.js';
+import { canAccessTag, homeTag, resolveScopeTag } from './tenancy.js';
+import { readTagsFor } from './spaces.js';
+import { mountTeamRoutes } from './teams.js';
 import { addOrgMember, closeSession, createOrg, listOrgs, scopeTagsFor } from './scopes.js';
 import { importConnector } from './connectors.js';
 import { applyDecay, buildProfile } from './memory.js';
@@ -48,7 +51,6 @@ import {
   exportTenant,
   governanceView,
   isTenantAdmin,
-  scopeTagsForActor,
   migrateGovernance,
   runExpiry,
   setRedaction,
@@ -82,8 +84,23 @@ function fail(res: { status: (code: number) => { json: (body: unknown) => void }
   res.status(err.status).json(err.body);
 }
 
+function memoryScope(req: Request) {
+  const uid = uidOf(req);
+  const primary = tagOf(req);
+  const scope = String(req.body?.scope || req.query?.scope || req.headers['x-rukmer-scope'] || 'all');
+  const teamId = String(req.body?.teamId || req.query?.teamId || '');
+  const requested = Array.isArray(req.body?.containerTags) ? req.body.containerTags.map(String) : [];
+  return { uid, primary, tags: readTagsFor(uid, { scope, teamId, containerTag: primary, containerTags: requested }) };
+}
+
 function tagOf(req: Request) {
-  return resolveScopeTag(uidOf(req), {
+  const uid = uidOf(req);
+  const raw = String(req.body?.containerTag || req.query.containerTag || req.headers['x-container-tag'] || '');
+  if (raw.startsWith('tm_')) {
+    if (!canAccessTag(uid, raw)) throw Object.assign(new Error('Not a member of this team'), { status: 403 });
+    return raw;
+  }
+  return resolveScopeTag(uid, {
     containerTag: String(req.body?.containerTag || req.query.containerTag || req.headers['x-container-tag'] || ''),
     scope: String(req.body?.scope || req.query.scope || ''),
     sessionId: String(req.body?.sessionId || req.query.sessionId || ''),
@@ -276,7 +293,7 @@ export function mountMemoryEngine(app: Express) {
         containerTag: tag,
         task,
         actorId: uidOf(req),
-        visibility: req.body?.visibility,
+        visibility: req.body?.visibility || (req.body?.scope === 'team' ? 'team' : undefined),
         teamId: req.body?.teamId,
         memoryKind: req.body?.memoryKind,
         sourceRef: req.body?.sourceRef,
@@ -349,8 +366,9 @@ export function mountMemoryEngine(app: Express) {
   app.post('/v3/documents/list', (req, res) => {
     try {
       const uid = uidOf(req);
-      const tag = tagOf(req);
-      res.json({ documents: listDocuments(tag, uid), tags: listTags(uid), homeTag: homeTag(uid) });
+      const explicit = String(req.body?.containerTag || req.query?.containerTag || req.headers['x-container-tag'] || '');
+      const documents = explicit ? listDocuments(tagOf(req), uid) : memoryScope(req).tags.flatMap((tag) => listDocuments(tag, uid));
+      res.json({ documents, tags: listTags(uid), homeTag: homeTag(uid) });
     } catch (e: any) {
       fail(res, e);
     }
@@ -367,19 +385,18 @@ export function mountMemoryEngine(app: Express) {
   const searchHandler = async (req: Request, res: any) => {
     try {
       const q = sanitizePlain(req.body?.query || req.body?.q || req.body?.prompt || '', 2000);
-      const uid = uidOf(req);
-      const primary = tagOf(req);
+      const scoped = memoryScope(req);
       const extra = req.body?.union
-        ? scopeTagsFor(uid, {
-            containerTag: primary,
+        ? scopeTagsFor(scoped.uid, {
+            containerTag: scoped.primary,
             sessionId: req.body?.sessionId,
             agentId: req.body?.agentId,
             orgId: req.body?.orgId,
             union: true,
-          })
-        : scopeTagsForActor(uid, primary);
+          }).filter((tag) => scoped.tags.includes(tag) || tag === scoped.primary)
+        : scoped.tags;
       const out = await searchMemory(q, {
-        containerTag: primary,
+        containerTag: scoped.primary,
         containerTags: extra,
         topK: req.body?.topK || req.body?.memoriesRetrieved || 10,
         strictness: req.body?.matchStrictness ?? req.body?.strictness ?? 0.4,
@@ -389,7 +406,7 @@ export function mountMemoryEngine(app: Express) {
         includeForgotten: !!req.body?.include?.forgotten,
         includeRelated: req.body?.include?.related !== false,
         filters: req.body?.filters,
-        actorId: uid,
+        actorId: scoped.uid,
         purpose: String(req.body?.purpose || 'search'),
       });
       const bucket = String(req.body?.sources || '');
@@ -428,8 +445,10 @@ export function mountMemoryEngine(app: Express) {
   app.post('/v4/chat', async (req, res) => {
     try {
       const q = sanitizePlain(req.body?.query || req.body?.prompt || '', 2000);
+      const scoped = memoryScope(req);
       const out = await chatWithMemory(q, {
-        containerTag: tagOf(req),
+        containerTag: scoped.primary,
+        containerTags: scoped.tags,
         topK: req.body?.memoriesRetrieved || 10,
         strictness: req.body?.matchStrictness ?? 0.4,
         rerank: !!req.body?.rerank,
@@ -439,7 +458,7 @@ export function mountMemoryEngine(app: Express) {
         history: req.body?.history,
         remember: req.body?.remember !== false,
         source: req.body?.source || 'playground',
-        actorId: uidOf(req),
+        actorId: scoped.uid,
         purpose: 'chat',
       });
       res.json(out);
@@ -451,14 +470,15 @@ export function mountMemoryEngine(app: Express) {
   app.post('/v4/inject', async (req, res) => {
     try {
       const q = sanitizePlain(req.body?.query || req.body?.prompt || '', 2000);
-      const tag = tagOf(req);
-      const out = await buildMemoryInjection(q, tag, {
+      const scoped = memoryScope(req);
+      const out = await buildMemoryInjection(q, scoped.primary, {
         topK: req.body?.topK || req.body?.memoriesRetrieved || 8,
         strictness: req.body?.matchStrictness ?? req.body?.strictness ?? 0.4,
         rewrite: !!req.body?.rewriteQuery,
         rerank: !!req.body?.rerank,
-        actorId: uidOf(req),
+        actorId: scoped.uid,
         purpose: 'inject',
+        containerTags: scoped.tags,
       });
       res.json(out);
     } catch (e: any) {
@@ -523,7 +543,8 @@ export function mountMemoryEngine(app: Express) {
         messages: req.body?.messages || [],
         title: req.body?.title,
         actorId: uidOf(req),
-        visibility: req.body?.visibility,
+        visibility: req.body?.visibility || (req.body?.scope === 'team' ? 'team' : undefined),
+        teamId: req.body?.teamId,
       });
       res.json(out);
     } catch (e: any) {
@@ -549,6 +570,7 @@ export function mountMemoryEngine(app: Express) {
 
   app.post('/v4/orgs/members', (req, res) => {
     try {
+      if (isProduction()) return res.status(410).json({ error: 'Use team invites' });
       res.json(addOrgMember(uidOf(req), String(req.body?.orgId || ''), String(req.body?.uid || '')));
     } catch (e: any) {
       fail(res, e);
@@ -934,8 +956,21 @@ export function mountMemoryEngine(app: Express) {
     }
   });
 
+  app.post('/v4/memories/:id/move', (req, res) => {
+    try {
+      const to = req.body?.to === 'team' ? 'team' : req.body?.to === 'private' ? 'private' : '';
+      if (!to) return res.status(400).json({ error: 'to must be private or team' });
+      res.json(moveMemory(uidOf(req), String(req.params.id || ''), to, req.body?.teamId ? String(req.body.teamId) : undefined));
+    } catch (e: any) {
+      fail(res, e);
+    }
+  });
+
+  mountTeamRoutes(app);
+
   app.post('/v4/governance/teams/members', (req, res) => {
     try {
+      if (isProduction()) return res.status(410).json({ error: 'Use team invites' });
       res.json(addTeamMember(uidOf(req), String(req.body?.teamId || ''), String(req.body?.uid || '')));
     } catch (e: any) {
       fail(res, e);

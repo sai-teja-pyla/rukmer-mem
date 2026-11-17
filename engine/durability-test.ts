@@ -295,7 +295,7 @@ await check('unknown tool rejected', async () => {
     method: 'POST',
     body: JSON.stringify({ name: 'dropDatabase', arguments: {} }),
   });
-  assert(status === 400, `status=${status}`);
+  assert(status === 400 || status === 403, `status=${status}`);
 });
 
 await check('stats insights jobs requests keys', async () => {

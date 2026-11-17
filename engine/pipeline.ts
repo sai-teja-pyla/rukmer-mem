@@ -23,10 +23,11 @@ import { isChatter, isUsefulFact, looksLikeDurableFact, sanitiseGraph } from './
 import { applyDecay } from './memory.js';
 import { buildMemoryInjection } from './inject.js';
 import { canAccessTag, homeTag, ownsTag, scopeFromTag, uidFromTag } from './tenancy.js';
+import { readTagsFor, readableSpaces } from './spaces.js';
 import { checkUpload, sanitizeName, sanitizePlain } from './security.js';
 import { ensureIndex, rankTagged, relatedForMatches, tagCount, vectorDim, type MetaFilter, type Retrieval } from './search-index.js';
 import { selectMemories } from './relevance.js';
-import { assignGovernance, audit, canErase, canRead, eraseBulk, eraseMemory, findMemory, govOf, prepareWrite, teamContainer } from './governance.js';
+import { assignGovernance, audit, canErase, canRead, eraseBulk, eraseMemory, findMemory, govOf, pickTeam, prepareWrite, teamContainer } from './governance.js';
 
 export type SearchOpts = {
   containerTag?: string | null;
@@ -43,6 +44,10 @@ export type SearchOpts = {
   retrieval?: Retrieval;
   actorId?: string;
   purpose?: string;
+  author?: string;
+  since?: string;
+  until?: string;
+  topic?: string;
 };
 
 function scopedChunks(tag?: string | null, includeForgotten = false) {
@@ -135,9 +140,10 @@ export async function ingestDocument(input: {
   sourceRef?: string;
   extraction?: string;
   originalText?: string;
+  durable?: boolean;
 }) {
   const raw = sanitizePlain(input.text, 200000).trim();
-  if (!raw) throw new Error('Empty document');
+  if (!raw) throw Object.assign(new Error('Empty document'), { status: 400 });
   let tag = input.containerTag;
   if (!tag) throw new Error('containerTag required');
   const actorId = input.actorId || uidFromTag(tag);
@@ -150,6 +156,7 @@ export async function ingestDocument(input: {
         memoryKind: input.memoryKind,
         sourceRef: input.sourceRef,
         extraction: input.extraction,
+        durable: input.durable,
       })
     : undefined;
   if (gov?.visibility === 'team' && gov.teamId) tag = teamContainer(gov.teamId);
@@ -351,7 +358,7 @@ export async function ingestPayload(item: {
     await saveBlob(fileId, bytes, mime);
     text = await describeImage(raw, mime);
   } else if (item.pdfBase64 || looksLikePdf(title, item.mime)) {
-    if (!item.pdfBase64) throw new Error(`PDF ${title} is missing file data`);
+    if (!item.pdfBase64) throw Object.assign(new Error(`PDF ${title} is missing file data`), { status: 400 });
     const raw = item.pdfBase64.includes(',') ? item.pdfBase64.slice(item.pdfBase64.indexOf(',') + 1) : item.pdfBase64;
     const bytes = Buffer.from(raw, 'base64');
     mime = checkUpload('application/pdf', bytes);
@@ -425,6 +432,93 @@ export async function warmFactEmbeddings() {
   }
 }
 
+function attributionFor(id: string, containerTag?: string) {
+  const row = findMemory(id);
+  const gov = govOf(row || { containerTag: containerTag || '' });
+  const team = gov.teamId ? getState().teams.find((item) => item.id === gov.teamId) : undefined;
+  const authorUid = gov.createdBy || gov.ownerId || '';
+  const member = team ? getState().teamMembers.find((item) => item.teamId === team.id && item.uid === authorUid) : undefined;
+  const space = gov.visibility === 'team' ? 'team' : gov.visibility === 'org' ? 'org' : 'private';
+  const authoredAt =
+    (row && 'createdAt' in row && row.createdAt) ||
+    (row && 'recordedAt' in row && row.recordedAt) ||
+    (row && 'validFrom' in row && row.validFrom) ||
+    '';
+  return {
+    space,
+    spaceName: space === 'team' ? team?.name || 'Team' : space === 'org' ? gov.tenantId : 'Private',
+    teamId: gov.teamId,
+    authorUid,
+    authorName: member?.displayName || member?.email || authorUid,
+    authoredAt: String(authoredAt || ''),
+  };
+}
+
+export function parseSince(value?: string, now = Date.now()) {
+  const raw = String(value || '').trim();
+  if (!raw) return 0;
+  const days = /^(\d+)d$/.exec(raw);
+  if (days) return now - Number(days[1]) * 86400000;
+  const parsed = Date.parse(raw);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+export function resolveTeammate(actor: string, author?: string) {
+  const needle = String(author || '').trim().toLowerCase();
+  if (!needle) return '';
+  if (needle === actor.toLowerCase()) return actor;
+  const state = getState();
+  const mine = new Set(state.teamMembers.filter((row) => row.uid === actor && row.status !== 'removed').map((row) => row.teamId));
+  const match = state.teamMembers.find((row) => {
+    if (!mine.has(row.teamId) || row.status === 'removed') return false;
+    return [row.uid, row.displayName, row.email].some((value) => String(value || '').trim().toLowerCase() === needle);
+  });
+  return match?.uid || '';
+}
+
+export function listAuthoredMemories(actor: string, opts: SearchOpts = {}) {
+  const tags = new Set(readTagsFor(actor, { scope: 'team' }));
+  const author = resolveTeammate(actor, opts.author) || actor;
+  const since = parseSince(opts.since);
+  const until = opts.until ? Date.parse(opts.until) : Number.POSITIVE_INFINITY;
+  const topic = String(opts.topic || '').trim().toLowerCase();
+  const rows = getState().documents.filter((doc) => {
+    if (!tags.has(doc.containerTag) || !canRead(actor, doc)) return false;
+    const gov = govOf(doc);
+    if (gov.visibility !== 'team') return false;
+    if (opts.author && (gov.createdBy || gov.ownerId) !== author) return false;
+    const at = Date.parse(doc.createdAt || '');
+    if (since && (!Number.isFinite(at) || at < since)) return false;
+    if (Number.isFinite(until) && at > until) return false;
+    if (topic && !`${doc.title} ${doc.text}`.toLowerCase().includes(topic)) return false;
+    return true;
+  });
+  rows.sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
+  const matches = rows.slice(0, opts.topK || 10).map((doc) => ({
+    id: doc.id,
+    title: doc.title,
+    text: doc.text,
+    score: 1,
+    source: doc.source,
+    containerTag: doc.containerTag,
+    ...attributionFor(doc.id, doc.containerTag),
+  }));
+  if (matches.length) {
+    audit({
+      actorId: actor,
+      action: 'read',
+      memoryId: matches[0].id,
+      tenantId: readableSpaces(actor).find((space) => space.kind === 'org')?.orgId || homeTag(actor),
+      purpose: opts.purpose || 'search',
+      detail: matches
+        .slice(0, 25)
+        .map((match) => match.id)
+        .join(','),
+    });
+  }
+  return { query: '', matches, related: [] as [], tookMs: 0 };
+}
+
 export async function searchMemory(query: string, opts: SearchOpts = {}) {
   const started = Date.now();
   const retrieval = retrievalOf(opts.retrieval);
@@ -434,7 +528,10 @@ export async function searchMemory(query: string, opts: SearchOpts = {}) {
   const q = opts.rewrite || shortFavourite ? expanded : normalized;
   const topK = opts.topK ?? 10;
   const strict = opts.strictness ?? 0.4;
-  const tags = (opts.containerTags?.length ? opts.containerTags : [opts.containerTag]).filter((t): t is string => !!t);
+  const requested = (opts.containerTags?.length ? opts.containerTags : [opts.containerTag]).filter((t): t is string => !!t);
+  const tags = opts.actorId
+    ? requested.filter((tag) => ownsTag(opts.actorId || '', tag) || readableSpaces(opts.actorId || '').some((space) => space.tag === tag))
+    : requested;
   for (const tag of tags) applyDecay(tag);
   const wantVector = retrieval !== 'keyword';
   const embedP = wantVector ? embedQuery(q, retrieval === 'semantic' ? 1800 : 1200) : Promise.resolve([] as number[]);
@@ -509,17 +606,23 @@ export async function searchMemory(query: string, opts: SearchOpts = {}) {
     predicate: r.predicate,
     object: r.object,
   }));
-  const matches = selectMemories(qRaw || q, rankedMatches, { strictness: strict, topK });
-  if (opts.actorId) {
-    for (const match of matches.slice(0, 25)) {
-      audit({
-        actorId: opts.actorId,
-        action: 'read',
-        memoryId: match.id,
-        tenantId: govOf({ containerTag: match.containerTag }).tenantId,
-        purpose: opts.purpose || 'search',
-      });
-    }
+  const matches = selectMemories(qRaw || q, rankedMatches, { strictness: strict, topK }).map((match) => ({
+    ...match,
+    ...attributionFor(match.id, match.containerTag),
+  }));
+  if (opts.actorId && matches.length) {
+    const teamHit = matches.find((match) => match.space === 'team');
+    audit({
+      actorId: opts.actorId,
+      action: 'read',
+      memoryId: matches[0].id,
+      tenantId: teamHit?.teamId ? readableSpaces(opts.actorId).find((space) => space.teamId === teamHit.teamId)?.orgId || homeTag(opts.actorId) : homeTag(opts.actorId),
+      purpose: opts.purpose || 'search',
+      detail: matches
+        .slice(0, 25)
+        .map((match) => match.id)
+        .join(','),
+    });
   }
   return {
     query: q,
@@ -551,8 +654,12 @@ export async function commitImportantMemory(input: {
   text: string;
   actorId?: string;
   visibility?: string;
+  scope?: string;
+  teamId?: string;
 }) {
-  const tag = input.containerTag;
+  const scope = input.scope === 'team' || input.visibility === 'team' ? 'team' : 'private';
+  const team = scope === 'team' && input.actorId ? pickTeam(input.actorId, input.teamId) : undefined;
+  const tag = team ? teamContainer(team.id) : input.containerTag;
   const raw = String(input.text || '').trim();
   if (!tag) throw new Error('containerTag required');
   if (!raw) return { skipped: true, reason: 'empty', facts: 0, document: null };
@@ -578,8 +685,10 @@ export async function commitImportantMemory(input: {
       task: 'memory',
       extract: false,
       actorId: input.actorId,
-      visibility: input.visibility,
-      memoryKind: 'context',
+      visibility: scope === 'team' ? 'team' : input.visibility,
+      teamId: team?.id,
+      memoryKind: scope === 'team' || input.source === 'tool' ? (scope === 'team' ? 'decision' : 'fact') : 'context',
+      durable: scope === 'team' || input.source === 'tool',
     });
     noteConversation(tag, raw);
     return { saved: true, skipped: false, type: 'raw', facts: 0, document: doc.document, chunks: doc.chunks };
@@ -598,7 +707,16 @@ export async function commitImportantMemory(input: {
     tag,
     triples,
     text.slice(0, 240),
-    input.actorId ? assignGovernance({ actorId: input.actorId, containerTag: tag, visibility: input.visibility, memoryKind: 'fact' }) : undefined,
+    input.actorId
+      ? assignGovernance({
+          actorId: input.actorId,
+          containerTag: tag,
+          visibility: scope === 'team' ? 'team' : input.visibility,
+          teamId: team?.id,
+          memoryKind: 'fact',
+          durable: scope === 'team' || input.source === 'tool',
+        })
+      : undefined,
     raw
   );
   deriveFacts(tag);
@@ -612,8 +730,10 @@ export async function commitImportantMemory(input: {
     task: 'memory',
     extract: false,
     actorId: input.actorId,
-    visibility: input.visibility,
+    visibility: scope === 'team' ? 'team' : input.visibility,
+    teamId: team?.id,
     memoryKind: 'fact',
+    durable: scope === 'team' || input.source === 'tool',
   });
   noteConversation(tag, raw);
   return { skipped: false, facts: triples.length, triples, saved, document: doc.document, chunks: doc.chunks };
@@ -658,6 +778,7 @@ export async function rememberTranscript(input: {
   messages: { role?: string; content?: string; text?: string }[];
   actorId?: string;
   visibility?: string;
+  teamId?: string;
 }) {
   const tag = input.containerTag;
   if (!tag) throw new Error('containerTag required');
@@ -685,6 +806,8 @@ export async function rememberTranscript(input: {
     text: dialogue,
     actorId: input.actorId,
     visibility: input.visibility,
+    teamId: input.teamId,
+    scope: input.visibility === 'team' ? 'team' : undefined,
   });
 }
 
@@ -756,7 +879,13 @@ function summarizeTag(tag: string, uid?: string) {
 
 export function listTags(uid?: string) {
   const state = getState();
-  const tags = [...new Set(state.documents.map((d) => d.containerTag))].filter((tag) => !uid || canAccessTag(uid, tag));
+  const allowed = uid ? new Set(readableSpaces(uid).map((space) => space.tag)) : undefined;
+  const tags = [
+    ...new Set([
+      ...(allowed ? [...allowed] : []),
+      ...state.documents.map((d) => d.containerTag),
+    ]),
+  ].filter((tag) => !uid || ownsTag(uid, tag) || !!allowed?.has(tag));
   const rows = tags.map((tag) => summarizeTag(tag, uid));
   if (uid) {
     const home = homeTag(uid);
@@ -832,10 +961,8 @@ export function graphPayload(containerTag?: string | null, uid?: string) {
   if (containerTag) {
     if (!uid || canAccessTag(uid, containerTag)) tags.add(containerTag);
   } else if (uid) {
-    for (const d of state.documents) if (canAccessTag(uid, d.containerTag)) tags.add(d.containerTag);
-    for (const t of state.triples) if (canAccessTag(uid, t.containerTag)) tags.add(t.containerTag);
-    for (const e of state.entities) if (canAccessTag(uid, e.containerTag)) tags.add(e.containerTag);
-    tags.add(homeTag(uid));
+    for (const space of readableSpaces(uid)) tags.add(space.tag);
+    for (const d of state.documents) if (ownsTag(uid, d.containerTag)) tags.add(d.containerTag);
   }
   if (!tags.size) return { nodes: [], edges: [], pathExample: null, tags: [] as string[] };
   const inScope = (tag: string) => tags.has(tag);
@@ -1086,6 +1213,50 @@ export function logRequest(rec: { method: string; path: string; status: number; 
   s.requests.unshift({ id: uid('req'), at: new Date().toISOString(), ...rec });
   s.requests = keptRequests(s.requests);
   saveState();
+}
+
+export function moveMemory(actor: string, id: string, to: 'private' | 'team', teamId?: string) {
+  const state = getState();
+  const doc = state.documents.find((row) => row.id === id) || null;
+  const triple = !doc ? state.triples.find((row) => row.id === id) : null;
+  const row = doc || triple;
+  if (!row) throw Object.assign(new Error('Memory not found'), { status: 404 });
+  const gov = govOf(row);
+  if (gov.createdBy !== actor && gov.ownerId !== actor) throw Object.assign(new Error('Only the author can move this memory'), { status: 403 });
+  const from = row.containerTag;
+  const team = to === 'team' ? pickTeam(actor, teamId) : undefined;
+  const target = to === 'private' ? homeTag(actor) : teamContainer(team!.id);
+  const nextGov = assignGovernance({
+    actorId: actor,
+    containerTag: ownsTag(actor, from) ? from : target,
+    visibility: to,
+    teamId: team?.id,
+    memoryKind: gov.memoryKind,
+    sourceRef: gov.sourceRef,
+    durable: true,
+  });
+  const blob = doc ? `${doc.title}\n${doc.text}\n${doc.originalText || ''}` : `${triple?.subject} ${triple?.object} ${triple?.evidence}`;
+  const moved: string[] = [];
+  const retag = (item: { id: string; containerTag: string; gov?: DocRec['gov'] }) => {
+    item.containerTag = target;
+    item.gov = { ...nextGov };
+    moved.push(item.id);
+  };
+  if (doc) {
+    retag(doc);
+    for (const chunk of state.chunks) if (chunk.docId === doc.id) retag(chunk);
+  }
+  for (const fact of state.triples) {
+    if (fact.containerTag !== from && fact.id !== triple?.id) continue;
+    const factText = `${fact.subject} ${fact.object} ${fact.evidence} ${fact.originalText || ''}`;
+    if (fact.id === triple?.id || (doc && (fact.originalText === doc.originalText || (factText && blob.includes(fact.object))))) retag(fact);
+  }
+  for (const entity of state.entities) {
+    if (entity.containerTag === from && entity.memoryIds?.some((memoryId) => moved.includes(memoryId))) entity.containerTag = target;
+  }
+  audit({ actorId: actor, action: 'move', memoryId: id, tenantId: nextGov.tenantId, detail: `${from}->${target}` });
+  saveState();
+  return { id, from, tag: target, moved: moved.length };
 }
 
 export function exportMine(uid: string) {

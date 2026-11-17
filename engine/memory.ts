@@ -43,10 +43,12 @@ function line(t: TripleRec) {
   return `${t.subject} ${t.predicate.replace(/_/g, ' ')} ${t.object}`;
 }
 
-export function buildProfile(tag: string, actorId?: string) {
-  applyDecay(tag);
+export function buildProfile(tag: string | string[], actorId?: string) {
+  const tags = (Array.isArray(tag) ? tag : [tag]).filter(Boolean);
+  for (const item of tags) applyDecay(item);
+  const allowed = new Set(tags);
   const latest = getState().triples.filter(
-    (t) => t.containerTag === tag && t.isLatest !== false && isUsefulFact(t) && (!actorId || canRead(actorId, t))
+    (t) => allowed.has(t.containerTag) && t.isLatest !== false && isUsefulFact(t) && (!actorId || canRead(actorId, t))
   );
   const longTerm = latest.filter((t) => (t.horizon || horizonFor(t.predicate)) === 'long');
   const recent = latest
@@ -62,7 +64,7 @@ export function buildProfile(tag: string, actorId?: string) {
     .map(([name, rows]) => `[${name}]\n${rows.map(line).join('\n')}`)
     .join('\n');
   return {
-    containerTag: tag,
+    containerTag: tags[0] || '',
     static: longTerm,
     dynamic: recent,
     staticText: longTerm.map(line).join('\n'),

@@ -108,7 +108,9 @@ export interface OrgRec {
 export interface OrgMemberRec {
   orgId: string;
   uid: string;
-  role: 'owner' | 'member';
+  role: 'owner' | 'admin' | 'member';
+  status?: 'active' | 'removed';
+  joinedAt?: string;
 }
 
 export interface ApiKeyRec {
@@ -167,6 +169,10 @@ export interface TeamRec {
   id: string;
   name: string;
   tenantId: string;
+  orgId?: string;
+  kind?: 'general' | 'custom';
+  slug?: string;
+  archivedAt?: string | null;
   createdBy: string;
   createdAt: string;
 }
@@ -174,7 +180,35 @@ export interface TeamRec {
 export interface TeamMemberRec {
   teamId: string;
   uid: string;
-  role: 'owner' | 'member';
+  role: 'owner' | 'admin' | 'member';
+  status?: 'active' | 'removed';
+  joinedAt?: string;
+  removedAt?: string;
+  displayName?: string;
+  email?: string;
+  lastActiveAt?: string;
+}
+
+export interface TeamInviteRec {
+  id: string;
+  teamId: string;
+  orgId: string;
+  createdBy: string;
+  tokenHash: string;
+  codeHash: string;
+  role: 'owner' | 'admin' | 'member';
+  expiresAt: string;
+  maxUses: number;
+  status: 'pending' | 'accepted' | 'confirmed' | 'expired' | 'revoked';
+  inviteeUid?: string;
+  inviteeEmail?: string;
+  inviterKey?: string;
+  inviteeKey?: string;
+  sas?: string;
+  sasDigits?: string;
+  inviterConfirmedAt?: string;
+  inviteeConfirmedAt?: string;
+  createdAt: string;
 }
 
 export interface RetentionPolicyRec {
@@ -196,7 +230,7 @@ export interface AuditRec {
   id: string;
   at: string;
   actorId: string;
-  action: 'read' | 'write' | 'delete' | 'export' | 'retain' | 'preview';
+  action: 'read' | 'write' | 'delete' | 'export' | 'retain' | 'preview' | 'move' | 'invite' | 'join' | 'leave' | 'revoke';
   memoryId: string;
   tenantId: string;
   purpose?: string;
@@ -231,6 +265,7 @@ export interface EngineState {
   links: LinkRec[];
   teams: TeamRec[];
   teamMembers: TeamMemberRec[];
+  teamInvites: TeamInviteRec[];
   retentionPolicies: RetentionPolicyRec[];
   redactionPolicies: RedactionPolicyRec[];
   audit: AuditRec[];
@@ -259,6 +294,7 @@ function empty(): EngineState {
     links: [],
     teams: [],
     teamMembers: [],
+    teamInvites: [],
     retentionPolicies: [],
     redactionPolicies: [],
     audit: [],
@@ -433,6 +469,7 @@ function shapeState() {
   state.links = state.links || [];
   state.teams = state.teams || [];
   state.teamMembers = state.teamMembers || [];
+  state.teamInvites = state.teamInvites || [];
   state.retentionPolicies = state.retentionPolicies || [];
   state.redactionPolicies = state.redactionPolicies || [];
   state.audit = state.audit || [];

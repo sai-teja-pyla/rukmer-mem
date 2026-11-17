@@ -21,6 +21,7 @@ These controls sit on the memory engine that already isolates rows, requires a s
 | Secrets | environment | `MEMORY_DATA_KEY` is read from the environment. Production boot prints a warning when it is missing. The key is not in the client. |
 | Memory injection | `engine/inject.ts` | Retrieved profile and passages are wrapped in `<<<MEMORY>>>` … `<<<END MEMORY>>>`. The system text tells the model that block is untrusted data. |
 | Agent keys | `POST /v3/keys`, `DELETE /v3/keys/:id` | A key resolves to its owner and can only see that owner's memory. Revoke with the delete route. Do not share one key across tenants. |
+| Team spaces | `engine/spaces.ts`, `engine/teams.ts` | Search, chat, inject, graph, export, and MCP read `readableSpaces` and then `canRead`. A private row never leaves its owner. Team writes need `scope: "team"`. Invites are single-use, hashed, and confirmed with a 6-emoji code. Remove or leave drops team rows on the next request. |
 
 `GET /health` and `GET /v4/security` report `encryptionAtRest`, `rateLimiting`, `corsMode`, and `debugMode` without secrets.
 

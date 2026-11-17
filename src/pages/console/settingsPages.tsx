@@ -48,7 +48,13 @@ export function GeneralSettingsPage() {
   const [orgContext, setOrgContext] = useState(savedOrg.context);
   const [buckets, setBuckets] = useState<string[]>(savedOrg.buckets);
   const { homeTag } = useOutletContext<Ctx>();
-  const orgId = homeTag || 'your-private-memory';
+  const [orgId, setOrgId] = useState(homeTag || 'your-private-memory');
+  useEffect(() => {
+    engine
+      .teams()
+      .then((out) => setOrgId(out.teams?.[0]?.orgId || homeTag || 'your-private-memory'))
+      .catch(() => setOrgId(homeTag || 'your-private-memory'));
+  }, [homeTag]);
   const { settings, updateSettings } = useUserSettings();
   const light = (settings?.consoleTheme || localStorage.getItem('consoleTheme')) === 'light';
   const persistOrg = (next: { name?: string; context?: boolean; buckets?: string[] }) => {
@@ -164,36 +170,124 @@ export function GeneralSettingsPage() {
 
 export function TeamSettingsPage() {
   const { user, displayName } = useOutletContext<Ctx>();
+  const [data, setData] = useState<any>({ teams: [] });
+  const [invite, setInvite] = useState<any>(null);
+  const [error, setError] = useState('');
+  const [teamId, setTeamId] = useState('');
+  const load = () => {
+    engine
+      .teams()
+      .then((out) => {
+        setData(out);
+        setTeamId((cur) => cur || out.teams?.[0]?.id || '');
+        setError('');
+      })
+      .catch((err) => setError(err.message || 'Could not load the team'));
+  };
+  useEffect(() => {
+    load();
+  }, []);
+  const team = (data.teams || []).find((row: { id: string }) => row.id === teamId) || data.teams?.[0];
+  const mine = team?.members?.find((row: { uid: string }) => row.uid === user.uid);
+  const canAdmin = mine?.role === 'owner' || mine?.role === 'admin';
+  const start = async () => {
+    setError('');
+    try {
+      await engine.bootstrapTeam('Rukmer', displayName);
+      load();
+    } catch (err: any) {
+      setError(err.message || 'Could not create the team brain');
+    }
+  };
+  const inviteTeammate = async () => {
+    if (!team) return;
+    setError('');
+    try {
+      const created = await engine.createInvite(team.id, 'member');
+      setInvite(created);
+      load();
+    } catch (err: any) {
+      setError(err.message || 'Could not create an invite');
+    }
+  };
   return (
     <div className="max-w-[1100px]">
       <PageHeader
         title="Team"
         subtitle="The people in your organization and their roles."
-        action={<span className="text-[12px] text-zinc-500">Private beta is one seat</span>}
+        action={
+          team && canAdmin ? (
+            <button type="button" onClick={() => void inviteTeammate()} className="h-8 px-3 rounded-lg bg-[#2563eb] text-[12.5px] text-white">
+              Invite teammate
+            </button>
+          ) : null
+        }
       />
-      <Panel>
-        <div className="grid grid-cols-[2fr_1fr_1fr_1fr_1fr] px-4 py-2.5 text-[11px] tracking-[0.08em] text-zinc-500 border-b border-white/[0.06]">
-          <span>MEMBER</span>
-          <span>ROLE</span>
-          <span>ACCESS</span>
-          <span>2FA</span>
-          <span>JOINED</span>
-        </div>
-        <div className="grid grid-cols-[2fr_1fr_1fr_1fr_1fr] px-4 py-3.5 text-[13px] items-center">
-          <div>
-            <p className="text-zinc-100">{displayName}</p>
-            <p className="text-[12px] text-zinc-500">{user.email || '—'}</p>
+      {error ? <p className="text-[13px] text-red-300 mb-3">{error}</p> : null}
+      {!team ? (
+        <Panel className="p-4">
+          <p className="text-[13px] text-zinc-300 mb-3">Start a shared team brain. Personal memories stay private until you choose team.</p>
+          <button type="button" onClick={() => void start()} className="h-8 px-3 rounded-lg bg-[#2563eb] text-[12.5px] text-white">
+            Create team brain
+          </button>
+        </Panel>
+      ) : (
+        <Panel>
+          <div className="px-4 py-3 flex items-center justify-between gap-3">
+            <p className="text-[13.5px] text-zinc-200">{team.name}</p>
+            <button type="button" onClick={() => void engine.leaveTeam(team.id).then(load).catch((err) => setError(err.message))} className="text-[12px] text-zinc-400">
+              Leave team
+            </button>
           </div>
-          <span className="text-zinc-300">Owner</span>
-          <span className="text-zinc-300">Full</span>
-          <span className="inline-flex"><span className="h-6 px-2 rounded-md border border-white/[0.08] text-[11px] text-zinc-400">Off</span></span>
-          <span className="text-zinc-400">—</span>
-        </div>
-        <div className="flex items-center justify-between px-4 py-2.5 text-[12px] text-zinc-500 border-t border-white/[0.06]">
-          <span>1 member</span>
-          <span>1/1 seats used</span>
-        </div>
-      </Panel>
+          <div className="grid grid-cols-[2fr_1fr_1fr_1fr] px-4 py-2.5 text-[11px] tracking-[0.08em] text-zinc-500 border-b border-white/[0.06]">
+            <span>MEMBER</span>
+            <span>ROLE</span>
+            <span>ACCESS</span>
+            <span>JOINED</span>
+          </div>
+          {(team.members || []).map((member: { uid: string; displayName?: string; email?: string; role: string; joinedAt?: string; lastActiveAt?: string }) => (
+            <div key={member.uid} className="grid grid-cols-[2fr_1fr_1fr_1fr] px-4 py-3.5 text-[13px] items-center border-t border-white/[0.06]">
+              <div>
+                <p className="text-zinc-100">{member.displayName || member.uid}</p>
+                <p className="text-[12px] text-zinc-500">{member.email || member.lastActiveAt || '—'}</p>
+              </div>
+              {canAdmin && member.uid !== user.uid ? (
+                <select
+                  aria-label={`Role for ${member.displayName || member.uid}`}
+                  value={member.role}
+                  onChange={(e) => void engine.setTeammateRole(team.id, member.uid, e.target.value).then(load)}
+                  className="bg-transparent text-zinc-300"
+                >
+                  <option value="owner">owner</option>
+                  <option value="admin">admin</option>
+                  <option value="member">member</option>
+                </select>
+              ) : (
+                <span className="text-zinc-300">{member.role}</span>
+              )}
+              <span className="text-zinc-300">{team.slug || 'general'}</span>
+              <span className="text-zinc-400">{member.joinedAt ? new Date(member.joinedAt).toLocaleDateString() : '—'}</span>
+            </div>
+          ))}
+          {(team.invites || []).map((row: { id: string; status: string; sas?: string }) => (
+            <div key={row.id} className="px-4 py-2 text-[12px] text-zinc-400 border-t border-white/[0.06] flex justify-between">
+              <span>Pending invite · {row.status} {row.sas || ''}</span>
+              <button type="button" onClick={() => void engine.revokeInvite(row.id).then(load)} className="text-zinc-300">
+                Revoke
+              </button>
+            </div>
+          ))}
+        </Panel>
+      )}
+      {invite ? (
+        <Panel className="p-4 mt-3">
+          <p className="text-[13px] text-zinc-200 mb-2">Share this invite</p>
+          <p className="text-[12px] text-zinc-400 break-all">{invite.inviteUrl}</p>
+          <p className="text-[13px] text-zinc-200 mt-2">Code {invite.code}</p>
+          <div className="mt-2" dangerouslySetInnerHTML={{ __html: invite.qrSvg || '' }} />
+          {invite.sas ? <p className="mt-2 text-[18px]">{invite.sas}</p> : null}
+        </Panel>
+      ) : null}
     </div>
   );
 }
@@ -405,6 +499,31 @@ export function AdvancedSettingsPage() {
   );
 }
 
+function AccountMemberships() {
+  const [teams, setTeams] = useState<any[]>([]);
+  useEffect(() => {
+    engine.teams().then((out) => setTeams(out.teams || [])).catch(() => setTeams([]));
+  }, []);
+  return (
+    <Panel className="mb-3">
+      <div className="px-4 py-3 text-[13.5px] text-zinc-200">Organizations</div>
+      {teams.length === 0 ? (
+        <p className="px-4 py-3.5 text-[13px] text-zinc-500 border-t border-white/[0.06]">No organization memberships yet.</p>
+      ) : (
+        teams.map((team) => (
+          <div key={team.id} className="flex items-center justify-between px-4 py-3.5 border-t border-white/[0.06]">
+            <div>
+              <p className="text-[13.5px] text-zinc-200">{team.name}</p>
+              <p className="text-[12px] text-zinc-500">{team.orgId || team.tag}</p>
+            </div>
+            <span className="text-[11px] tracking-[0.1em] text-zinc-500">{(team.members || []).length} members</span>
+          </div>
+        ))
+      )}
+    </Panel>
+  );
+}
+
 export function AccountSettingsPage() {
   const { user, displayName } = useOutletContext<Ctx>();
   const [signingOut, setSigningOut] = useState(false);
@@ -454,16 +573,7 @@ export function AccountSettingsPage() {
           </div>
         </div>
       </Panel>
-      <Panel className="mb-3">
-        <div className="px-4 py-3 text-[13.5px] text-zinc-200">Organizations</div>
-        <div className="flex items-center justify-between px-4 py-3.5 border-t border-white/[0.06]">
-          <div>
-            <p className="text-[13.5px] text-zinc-200">Rukmer</p>
-            <p className="text-[12px] text-zinc-500">{user.uid ? `u_${user.uid}` : 'private memory'}</p>
-          </div>
-          <span className="text-[11px] tracking-[0.1em] text-zinc-500">OWNER · 1 member</span>
-        </div>
-      </Panel>
+      <AccountMemberships />
       <Panel className="mb-3">
         <div className="flex items-center justify-between px-4 py-4 gap-4">
           <div>

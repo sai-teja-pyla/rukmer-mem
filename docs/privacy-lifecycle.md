@@ -23,7 +23,9 @@ Each document, chunk, and fact keeps its existing id. That id is `memory_id`. A 
 
 `source` stays on the document and chunk (the tool or API that sent it). Teams, retention policies, redaction policies, the audit log, and erasure receipts live beside the memory rows in the same store.
 
-Existing rows are stamped on boot. An org container stays org-visible. A user container stays private to that user. New writes default to `private`, including writes into an org container. Sharing requires `visibility: "org"` or `visibility: "team"`. A team memory is stored in `tm_{teamId}`. A home search includes the teams the caller belongs to. Org memory stays on the org container and is searched when the caller asks for that org.
+Existing rows are stamped on boot. An org container stays org-visible. A user container stays private to that user. New writes default to `private`, including writes into an org container. Sharing requires an explicit `visibility: "org"`, `visibility: "team"`, or MCP `scope: "team"`. A team memory is stored in `tm_{teamId}` and stamped with the org as `tenantId`, not the author's home tag. Reads go through `readableSpaces`: the caller's home tag, active team spaces, and orgs. A removed member loses team rows on the next request, including memories they wrote. Team memories do not get the 30-day context expiry.
+
+Joining a team is an invite. The owner shares a link, code, or QR. The teammate accepts while signed in. Both confirm the same 6-emoji code before membership is active. Personal memories never move unless the author calls `POST /v4/memories/:id/move`.
 
 ## Write
 

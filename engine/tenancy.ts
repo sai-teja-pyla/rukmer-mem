@@ -77,10 +77,22 @@ export function scopeFromTag(tag: string): 'user' | 'session' | 'agent' | 'org' 
   return 'user';
 }
 
+export function activeTeamMember(actor: string, teamId: string) {
+  if (!actor || !teamId) return undefined;
+  const state = getState();
+  const member = state.teamMembers.find((row) => row.teamId === teamId && row.uid === actor && row.status !== 'removed');
+  if (!member) return undefined;
+  const team = state.teams.find((row) => row.id === teamId && !row.archivedAt);
+  if (!team) return undefined;
+  if (team.slug === 'founders' && member.role !== 'owner') return undefined;
+  return member;
+}
+
 export function canAccessTag(uid: string, tag: string) {
   if (ownsTag(uid, tag)) return true;
+  if (tag.startsWith('tm_')) return !!activeTeamMember(uid, tag.slice(3));
   if (!tag.startsWith('org_')) return false;
-  return getState().orgMembers.some((m) => m.orgId === tag && m.uid === uid);
+  return getState().orgMembers.some((m) => m.orgId === tag && m.uid === uid && m.status !== 'removed');
 }
 
 export function resolveScopeTag(
