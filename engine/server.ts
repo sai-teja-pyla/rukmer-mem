@@ -2,7 +2,7 @@ import express from 'express';
 import dotenv from 'dotenv';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { bootMemoryEngine, mountMemoryEngine } from './routes.js';
+import { beginMemoryBoot, bootMemoryEngine, mountMemoryEngine } from './routes.js';
 import { securityMiddleware } from './security.js';
 import { stats } from './pipeline.js';
 
@@ -16,6 +16,7 @@ app.use(express.urlencoded({ extended: true, limit: '40mb' }));
 mountMemoryEngine(app);
 
 const PORT = Number(process.env.PORT || 5001);
+beginMemoryBoot();
 app.listen(PORT, '0.0.0.0', async () => {
   const s = await bootMemoryEngine();
   console.log(`🧠 Rukmer open-core engine on http://localhost:${PORT}`);

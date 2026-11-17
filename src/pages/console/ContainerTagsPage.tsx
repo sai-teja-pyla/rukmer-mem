@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Search, Tag, Download } from 'lucide-react';
-import { PageHeader, DocLink, Panel, EmptyState, TableHead, PrimaryButton } from '../../components/console/ui';
+import { PageHeader, DocLink, Panel, EmptyState, TableHead, PrimaryButton, Skeleton, LoadError } from '../../components/console/ui';
 import { engine } from '../../services/engineClient';
 
 const SOURCE_LABEL: Record<string, string> = { browser: 'Browser', gmail: 'Gmail', canvas: 'Canvas', x: 'X' };
@@ -23,13 +23,27 @@ function SourceMarks({ sites }: { sites: string[] }) {
 export default function ContainerTagsPage() {
   const [q, setQ] = useState('');
   const [kind, setKind] = useState<'all' | 'documents' | 'memories'>('all');
-  const [tags, setTags] = useState<any[]>([]);
+  const [tags, setTags] = useState<any[] | null>(null);
+  const [error, setError] = useState('');
+  const [loading, setLoading] = useState(true);
+
+  const load = () => {
+    setLoading(true);
+    engine
+      .tags()
+      .then((d) => {
+        setTags(d.tags || []);
+        setError('');
+      })
+      .catch((e) => setError(e?.message || 'Could not load container tags'))
+      .finally(() => setLoading(false));
+  };
 
   useEffect(() => {
-    engine.tags().then((d) => setTags(d.tags || [])).catch(() => {});
+    load();
   }, []);
 
-  const filtered = tags.filter((t) => {
+  const filtered = (tags || []).filter((t) => {
     if (!t.tag.toLowerCase().includes(q.toLowerCase())) return false;
     if (kind === 'documents') return Number(t.documents) > 0;
     if (kind === 'memories') return Number(t.memories) > 0;
@@ -64,11 +78,19 @@ export default function ContainerTagsPage() {
       </div>
       <Panel>
         <TableHead cols={['CONTAINER TAG', 'DOCUMENTS', 'MEMORIES', 'ACTIVITY']} />
-        {filtered.length === 0 ? (
+        {loading && tags === null ? (
+          <div className="px-4 py-4 space-y-3" aria-busy="true">
+            <Skeleton className="h-8 w-full" />
+            <Skeleton className="h-8 w-full" />
+            <Skeleton className="h-8 w-4/5" />
+          </div>
+        ) : error && tags === null ? (
+          <LoadError message={error} onRetry={load} />
+        ) : filtered.length === 0 ? (
           <EmptyState
             icon={<Tag size={18} />}
-            title="No container tags yet"
-            body="Tags are created the first time you ingest with a containerTag."
+            title={(tags || []).length === 0 ? 'No container tags yet' : 'No tags match'}
+            body={(tags || []).length === 0 ? 'Tags are created the first time you ingest with a containerTag.' : 'Try a different search or filter.'}
             action={
               <Link to="/import">
                 <PrimaryButton><Download size={14} /> Import data</PrimaryButton>

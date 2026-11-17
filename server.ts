@@ -21,7 +21,7 @@ import { sendWelcomeEmail } from './src/utils/mailer.js';
 import fs from 'fs';
 import admin from 'firebase-admin'; // 🚨 The Security Bouncer
 import { learnWorkspaceData, queryWorkspaceData, clearNamespace, fetchTeamsMessages } from './ingestionService.js';
-import { bootMemoryEngine, mountMemoryEngine } from './engine/routes.js';
+import { beginMemoryBoot, bootMemoryEngine, mountMemoryEngine } from './engine/routes.js';
 import { debugRoutesEnabled, isProduction, securityMiddleware, slackSignatureOk } from './engine/security.js';
 import { claimedUserMismatch } from './engine/actorGuard.js';
 import { consumeOauthState, firestoreOauthStore, issueOauthState, oauthStateSecret } from './engine/oauthLink.js';
@@ -1915,6 +1915,7 @@ app.get('/{*any}', (req: any, res: any): void => {
 });
 
 // --- 7. Start Server ---
+beginMemoryBoot();
 app.listen(PORT, '0.0.0.0', async () => {
     try {
       const mem = await bootMemoryEngine();

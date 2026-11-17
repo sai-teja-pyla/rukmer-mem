@@ -1,20 +1,14 @@
-import { onAuthStateChanged } from 'firebase/auth';
 import { auth } from '../firebase';
 
 const base = '';
 
+function wait(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 function waitForAuth() {
   if (auth.currentUser) return Promise.resolve(auth.currentUser);
-  return new Promise<typeof auth.currentUser>((resolve) => {
-    const unsub = onAuthStateChanged(auth, (user) => {
-      unsub();
-      resolve(user);
-    });
-    setTimeout(() => {
-      unsub();
-      resolve(auth.currentUser);
-    }, 1200);
-  });
+  return auth.authStateReady().then(() => auth.currentUser);
 }
 
 async function authHeaders() {
@@ -31,7 +25,7 @@ async function authHeaders() {
   return headers;
 }
 
-async function req(path: string, init?: RequestInit) {
+async function req(path: string, init?: RequestInit, attempt = 0): Promise<any> {
   const headers = { ...(await authHeaders()), ...((init?.headers as Record<string, string>) || {}) };
   const res = await fetch(`${base}${path}`, {
     ...init,
@@ -44,7 +38,16 @@ async function req(path: string, init?: RequestInit) {
   } catch {
     throw new Error(res.ok ? 'Memory engine returned a non-JSON response' : `Memory engine ${res.status}`);
   }
-  if (!res.ok) throw new Error(data.error || `Memory engine ${res.status}`);
+  if (!res.ok && attempt < 1 && (res.status === 401 || res.status === 503)) {
+    const retryAfter = Number(res.headers.get('Retry-After'));
+    const backoff = Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter * 1000 : res.status === 503 ? 800 : 400;
+    await wait(Math.min(backoff, 5000));
+    return req(path, init, attempt + 1);
+  }
+  if (!res.ok) {
+    const message = data.error === 'warming_up' ? 'Memory is still warming up. Try again.' : data.error || `Memory engine ${res.status}`;
+    throw new Error(message);
+  }
   return data;
 }
 

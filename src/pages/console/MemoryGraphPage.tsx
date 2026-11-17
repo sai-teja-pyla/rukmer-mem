@@ -263,25 +263,34 @@ export default function MemoryGraphPage() {
   const [menuOpen, setMenuOpen] = useState(false);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(true);
+  const [ready, setReady] = useState(false);
   const [view, setView] = useState({ x: 0, y: 0, k: 1 });
   const dismissed = useRef(false);
   const drag = useRef<{ px: number; py: number; x: number; y: number } | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
 
+  const readyRef = useRef(false);
   const load = useCallback(() => {
-    if (!homeTag) {
-      setLoading(false);
-      return;
-    }
+    if (!homeTag) return;
     Promise.all([engine.graph(), engine.tags()])
       .then(([data, tags]) => {
         setGraph({ nodes: data.nodes || [], edges: data.edges || [], tags: data.tags || [] });
         setTagRows(tags.tags || []);
+        readyRef.current = true;
+        setReady(true);
         setError('');
       })
-      .catch((e) => setError(e.message || 'Could not load graph'))
+      .catch((e) => {
+        if (!readyRef.current) setError(e.message || 'Could not load graph');
+      })
       .finally(() => setLoading(false));
   }, [homeTag]);
+
+  const retry = () => {
+    setError('');
+    setLoading(true);
+    load();
+  };
 
   useEffect(() => {
     load();
@@ -442,18 +451,32 @@ export default function MemoryGraphPage() {
         </g>
       </svg>
 
-      {!hasPlot && (
+      {!hasPlot && (loading || !!error || ready) && (
         <div className="absolute inset-0 z-[2] flex items-center justify-center pointer-events-none">
           <div className="pointer-events-auto text-center max-w-sm px-6 -translate-y-6 md:-translate-x-10">
-            <p className="text-[15px]">{error ? 'Memory graph is offline' : loading ? 'Loading memory…' : 'Nothing to plot yet'}</p>
-            <p className="text-[13px] graph-muted mt-1">
-              {error || 'Chat in Playground or import documents. Memories show up here around the space.'}
-            </p>
-            {!error && !loading ? (
-              <Link to="/import" className="inline-block mt-3 text-[13px]" style={{ color: 'var(--graph-memory)' }}>
-                Import documents
-              </Link>
-            ) : null}
+            {loading ? (
+              <div className="space-y-3 w-56 mx-auto" aria-busy="true">
+                <div className="mx-auto h-16 w-16 rounded-full border animate-pulse" style={{ borderColor: 'var(--graph-border)' }} />
+                <div className="h-3 rounded-md animate-pulse" style={{ background: 'var(--graph-hover)' }} />
+                <div className="h-3 w-2/3 mx-auto rounded-md animate-pulse" style={{ background: 'var(--graph-hover)' }} />
+              </div>
+            ) : error ? (
+              <>
+                <p className="text-[15px]">Memory graph is offline</p>
+                <p className="text-[13px] graph-muted mt-1">{error}</p>
+                <button type="button" onClick={retry} className="inline-block mt-3 text-[13px]" style={{ color: 'var(--graph-memory)' }}>
+                  Retry
+                </button>
+              </>
+            ) : (
+              <>
+                <p className="text-[15px]">Nothing to plot yet</p>
+                <p className="text-[13px] graph-muted mt-1">Chat in Playground or import documents. Memories show up here around the space.</p>
+                <Link to="/import" className="inline-block mt-3 text-[13px]" style={{ color: 'var(--graph-memory)' }}>
+                  Import documents
+                </Link>
+              </>
+            )}
           </div>
         </div>
       )}
@@ -469,7 +492,9 @@ export default function MemoryGraphPage() {
           </span>
           <span className="flex-1 min-w-0">
             <span className="block text-[13.5px] font-medium truncate">{spaceLabel}</span>
-            <span className="block text-[11.5px] graph-muted">{memoryCount} total memories</span>
+            <span className="block text-[11.5px] graph-muted">
+              {ready ? `${memoryCount} total memories` : error ? 'Could not load memories' : 'Loading memories…'}
+            </span>
           </span>
           <ChevronDown size={16} className={`graph-muted shrink-0 transition-transform ${menuOpen ? 'rotate-180' : ''}`} />
         </button>

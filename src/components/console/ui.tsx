@@ -110,6 +110,22 @@ export function PrimaryButton({
   );
 }
 
+export function Skeleton({ className = '' }: { className?: string }) {
+  return <div className={`animate-pulse rounded-md bg-white/[0.06] ${className}`} aria-hidden />;
+}
+
+export function LoadError({ message, onRetry }: { message: string; onRetry: () => void }) {
+  return (
+    <div className="flex flex-col items-center justify-center text-center py-16 px-6">
+      <p className="text-[15px] font-medium text-zinc-100">Could not load</p>
+      <p className="text-[13px] text-zinc-500 mt-1 max-w-sm">{message}</p>
+      <div className="mt-4">
+        <GhostButton onClick={onRetry}>Retry</GhostButton>
+      </div>
+    </div>
+  );
+}
+
 export function GhostButton({
   children,
   onClick,

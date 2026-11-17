@@ -92,27 +92,68 @@ function tagOf(req: Request) {
   });
 }
 
+let bootRequired = false;
+let engineReady = false;
+
+/** Call before listen so early requests cannot read an empty store. */
+export function beginMemoryBoot() {
+  bootRequired = true;
+  engineReady = false;
+}
+
+export function memoryEngineReady() {
+  return !bootRequired || engineReady;
+}
+
+function engineRoute(path: string) {
+  return (
+    path === '/health' ||
+    path.startsWith('/v3') ||
+    path.startsWith('/v4') ||
+    path.startsWith('/v1') ||
+    path.startsWith('/mcp') ||
+    path.startsWith('/oauth') ||
+    path === '/api/loi-accepted'
+  );
+}
+
 export async function bootMemoryEngine() {
-  await loadState();
-  migrateGovernance();
-  runExpiry('system');
-  startRetentionLoop();
-  pruneJunkMemory();
-  applyDecay();
-  const remaining = getState().triples.filter(isUsefulFact).length;
-  if (remaining < 2) {
-    for (const doc of getState().documents.filter((d) => !d.forgotten && d.source !== 'conversation').slice(0, 8)) {
-      const graph = await extractGraph(doc.text.slice(0, 4000));
-      upsertFacts(doc.containerTag, graph.triples || [], doc.text.slice(0, 240));
+  beginMemoryBoot();
+  try {
+    await loadState();
+    migrateGovernance();
+    runExpiry('system');
+    startRetentionLoop();
+    pruneJunkMemory();
+    applyDecay();
+    const remaining = getState().triples.filter(isUsefulFact).length;
+    if (remaining < 2) {
+      for (const doc of getState().documents.filter((d) => !d.forgotten && d.source !== 'conversation').slice(0, 8)) {
+        const graph = await extractGraph(doc.text.slice(0, 4000));
+        upsertFacts(doc.containerTag, graph.triples || [], doc.text.slice(0, 240));
+      }
     }
+    if (isProduction() && !encryptionAtRest()) console.warn(encryptionWarning());
+    void syncStoredKeys().catch((err) => console.warn('api key sync skipped', (err as Error).message));
+    void warmFactEmbeddings().catch(() => undefined);
+    const snapshot = stats();
+    engineReady = true;
+    return snapshot;
+  } catch (err) {
+    engineReady = false;
+    throw err;
   }
-  if (isProduction() && !encryptionAtRest()) console.warn(encryptionWarning());
-  void syncStoredKeys().catch((err) => console.warn('api key sync skipped', (err as Error).message));
-  void warmFactEmbeddings().catch(() => undefined);
-  return stats();
 }
 
 export function mountMemoryEngine(app: Express) {
+  app.use((req, res, next) => {
+    if (memoryEngineReady() || !engineRoute(req.path)) return next();
+    res.set('Retry-After', '2');
+    if (req.path === '/health') {
+      return res.status(503).json({ ok: false, ready: false, error: 'warming_up', engine: 'rukmer-open-core' });
+    }
+    return res.status(503).json({ error: 'warming_up' });
+  });
   app.use(memoryAuth);
   app.use(rejectIdentityOverride);
   app.use(rateLimit);
@@ -147,6 +188,7 @@ export function mountMemoryEngine(app: Express) {
   app.get('/health', (_req, res) => {
     res.json({
       ok: true,
+      ready: true,
       engine: 'rukmer-open-core',
       isolation: 'per-user',
       encryptionAtRest: encryptionAtRest(),

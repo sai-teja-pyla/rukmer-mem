@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { useOutletContext } from 'react-router-dom';
 import { Upload, Zap, Plus } from 'lucide-react';
-import { PageHeader, DocLink, Panel, PrimaryButton, GhostButton } from '../../components/console/ui';
+import { PageHeader, DocLink, Panel, PrimaryButton, GhostButton, Skeleton } from '../../components/console/ui';
 import { engine } from '../../services/engineClient';
 import type { UserProfile } from '../../types';
 import { homeTag as makeHomeTag } from '../../services/tenancy';
@@ -17,7 +17,10 @@ export default function ImportPage() {
   const [tags, setTags] = useState<string[]>(mine ? [mine] : []);
   const [task, setTask] = useState<'memory' | 'rag'>('memory');
   const [jobs, setJobs] = useState<any[]>([]);
-  const [docs, setDocs] = useState<any[]>([]);
+  const [docs, setDocs] = useState<any[] | null>(null);
+  const [docsError, setDocsError] = useState('');
+  const [jobsStatus, setJobsStatus] = useState<'loading' | 'ready' | 'error'>('loading');
+  const [jobsError, setJobsError] = useState('');
   const [openId, setOpenId] = useState<string | null>(null);
   const [openDoc, setOpenDoc] = useState<any>(null);
   const [openError, setOpenError] = useState('');
@@ -28,14 +31,25 @@ export default function ImportPage() {
 
   const refresh = async () => {
     engine.tags().then((d) => setTags([...new Set([mine, ...(d.tags || []).map((t: any) => t.tag)].filter(Boolean))])).catch(() => {});
-    engine.jobs().then((d) => setJobs(d.jobs || [])).catch(() => {});
+    engine
+      .jobs()
+      .then((d) => {
+        setJobs(d.jobs || []);
+        setJobsError('');
+        setJobsStatus('ready');
+      })
+      .catch((e) => {
+        setJobsError(e?.message || 'Could not load processing jobs');
+        setJobsStatus((cur) => (cur === 'ready' ? 'ready' : 'error'));
+      });
     try {
       const d = await engine.listDocs(tag || mine);
       const documents = d.documents || [];
       setDocs(documents);
+      setDocsError('');
       return documents as any[];
-    } catch {
-      setDocs([]);
+    } catch (e: any) {
+      setDocsError(e?.message || 'Could not load files');
       return [] as any[];
     }
   };
@@ -253,7 +267,20 @@ export default function ImportPage() {
         <div className="space-y-3">
         <Panel className="p-4">
           <p className="text-[13.5px] text-zinc-200 mb-3">Imported files</p>
-          {docs.length === 0 ? (
+          {docs === null && !docsError ? (
+            <div className="space-y-2" aria-busy="true">
+              <Skeleton className="h-12 w-full" />
+              <Skeleton className="h-12 w-full" />
+              <Skeleton className="h-12 w-4/5" />
+            </div>
+          ) : docs === null ? (
+            <div>
+              <p className="text-[12.5px] text-red-300">{docsError}</p>
+              <button type="button" onClick={() => refresh()} className="mt-2 text-[12.5px] text-blue-300">
+                Retry
+              </button>
+            </div>
+          ) : docs.length === 0 ? (
             <p className="text-[12.5px] text-zinc-500">Nothing stored in this tag yet. After Import finishes, files appear here.</p>
           ) : (
             <div className="space-y-2 max-h-[420px] overflow-y-auto">
@@ -279,7 +306,16 @@ export default function ImportPage() {
         </Panel>
         <Panel className="min-h-[180px] p-4">
           <p className="text-[13.5px] text-zinc-200 mb-4">Processing</p>
-          {jobs.length === 0 ? (
+          {jobsStatus === 'loading' ? (
+            <Skeleton className="h-16 w-full" />
+          ) : jobsStatus === 'error' && jobs.length === 0 ? (
+            <div>
+              <p className="text-[12.5px] text-red-300">{jobsError}</p>
+              <button type="button" onClick={() => refresh()} className="mt-2 text-[12.5px] text-blue-300">
+                Retry
+              </button>
+            </div>
+          ) : jobs.length === 0 ? (
             <div className="flex flex-col items-center justify-center text-center py-10">
               <Zap size={18} className="text-zinc-600 mb-2" />
               <p className="text-[14px] text-zinc-200">Nothing in flight</p>
