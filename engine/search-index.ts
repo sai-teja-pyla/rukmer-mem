@@ -1,6 +1,7 @@
 import { getState, sanitizeMeta, tokenize, type TemporalKind } from './core.js';
 import { isRetired } from './governance.js';
 import { isUsefulFact } from './quality.js';
+import { relevanceScore } from './relevance.js';
 import { queryTimeIntent, timeMultiplier } from './temporal.js';
 
 export type MetaFilter = { all?: Record<string, string>; any?: Record<string, string> };
@@ -383,10 +384,6 @@ export function rankTagged(
   if (kwMap.size) lists.push([...kwMap].map(([id, score]) => ({ id, score })));
   if (entMap.size) lists.push([...entMap].map(([id, score]) => ({ id, score })));
   const fused = rrf(lists);
-  const vecMax = Math.max(0, ...vecMap.values());
-  const kwMax = Math.max(0, ...kwMap.values());
-  const needle = query.trim().toLowerCase();
-  const semanticFloor = opts.strict <= 0 ? 0.05 : Math.max(0.12, opts.strict * 0.55);
   const ranked = fused
     .map((row) => {
       const rec = records.get(row.id);
@@ -396,23 +393,25 @@ export function rankTagged(
       if (!matchMeta(rec.metadata, opts.filter)) return null;
       if (rec.kind === 'fact' && !rec.isLatest && intent !== 'past') return null;
       const vectorScore = vecMap.get(row.id) || 0;
-      const kw = kwMap.get(row.id) || 0;
-      const phrase = needle.length >= 3 && `${rec.title}\n${rec.text}`.toLowerCase().includes(needle);
-      const vn = vecMax ? vectorScore / vecMax : 0;
-      const kn = kwMax ? kw / kwMax : 0;
-      let score =
-        retrieval === 'semantic'
-          ? vectorScore + (phrase ? 0.02 : 0)
-          : row.score + vn * 0.22 + kn * 0.08 + (vectorScore > 0 && kw > 0 ? 0.06 : 0) + (phrase ? 0.15 : 0);
-      score *= timeMultiplier(intent, rec.temporal, rec.isLatest);
-      if (retrieval === 'semantic') {
-        if (vectorScore < semanticFloor) return null;
-      } else if (!(vectorScore >= semanticFloor || score > 0.012)) return null;
-      return { ...rec, score, vectorScore };
+      const relevance = relevanceScore(query, {
+        id: rec.id,
+        text: rec.text,
+        title: rec.title,
+        vectorScore,
+        subject: rec.subject,
+        predicate: rec.predicate,
+        object: rec.object,
+      });
+      if (opts.strict > 0 && relevance < opts.strict) return null;
+      return { ...rec, score: Number(relevance.toFixed(4)), vectorScore };
     })
     .filter((r): r is Rec & { score: number; vectorScore: number } => !!r)
-    .sort((a, b) => b.score - a.score)
-    .slice(0, Math.max(opts.topK * 2, 12));
+    .sort(
+      (a, b) =>
+        b.score * timeMultiplier(intent, b.temporal, b.isLatest) - a.score * timeMultiplier(intent, a.temporal, a.isLatest) ||
+        b.score - a.score
+    )
+    .slice(0, Math.max(opts.topK * 3, opts.topK));
 
   const relatedIds = new Set<string>();
   for (const row of ranked) {

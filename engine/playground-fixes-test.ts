@@ -24,6 +24,7 @@ const { MCP_INSTRUCTIONS, CHATGPT_OPENAPI } = await import('./mcp.js');
 const { homeTag } = await import('./tenancy.js');
 const { commitImportantMemory, ingestDocument, searchMemory } = await import('./pipeline.js');
 const { buildMemoryInjection } = await import('./inject.js');
+const { upsertFacts } = await import('./facts.js');
 
 const failures: string[] = [];
 function check(name: string, ok: boolean, detail = '') {
@@ -41,6 +42,26 @@ check('relevant memory stays in', picked.some((hit) => /example\.com/i.test(hit.
 check('duplicate memories collapse', picked.filter((hit) => /publishing notes/i.test(hit.text)).length === 1);
 const capped = selectMemories(query, Array.from({ length: 6 }, (_, i) => ({ ...siteA, id: `s${i}`, text: `example.com note ${i} is for publishing.` })), { strictness: 0.4, topK: 2 });
 check('memories retrieved caps the list', capped.length === 2);
+const likeHits = selectMemories(
+  'what city do I like?',
+  [
+    { id: 'likely', title: 'rollout', text: 'The rollout is likely on Tuesday', score: 0.9 },
+    { id: 'likes', title: 'coffee', text: 'Nori likes coffee in the morning', score: 0.9 },
+    { id: 'lisbon', title: 'Lisbon', text: 'User likes the city of Lisbon', score: 0.2 },
+  ],
+  { strictness: 0.4, topK: 10 }
+);
+check('like does not match likely or likes', likeHits.length === 1 && likeHits[0].id === 'lisbon');
+check('kept score is at least strictness', likeHits.every((hit) => Number(hit.score) >= 0.4));
+const spoDupes = selectMemories(
+  'Lisbon',
+  [
+    { id: 'a', text: 'lives in Lisbon', subject: 'User', predicate: 'lives_in', object: 'Lisbon', score: 0.8 },
+    { id: 'b', text: 'User lives in Lisbon', subject: 'User', predicate: 'lives in', object: 'Lisbon', score: 0.7 },
+  ],
+  { strictness: 0.4, topK: 8 }
+);
+check('same subject predicate object collapses', spoDupes.length === 1);
 
 const openaiMessage = missingKeyMessage('openai');
 check('openai key message names OpenAI', openaiMessage.includes('OpenAI') && openaiMessage.includes('Settings') && !/\bopenai\b/.test(openaiMessage));
@@ -78,6 +99,53 @@ check('search keeps the site and drops the raw note', found.matches.some((hit) =
 const injected = await buildMemoryInjection(query, tag, { topK: 8, strictness: 0.4, actorId: 'usera' });
 check('prompt omits the unrelated note', !/ChatGPT connected/i.test(injected.injection) && /homepage/i.test(injected.injection));
 check('prompt stays within the cap', injected.retrieved.matches.length <= 8);
+
+const cityTag = homeTag('cityuser');
+const strictness = 0.4;
+const topK = 10;
+upsertFacts(cityTag, [{ subject: 'User', predicate: 'lives_in', object: 'Lisbon' }], 'likes the city of Lisbon');
+upsertFacts(cityTag, [{ subject: 'User', predicate: 'prefers', object: 'coffee' }], 'prefers coffee in the morning');
+upsertFacts(cityTag, [{ subject: 'User', predicate: 'works_at', object: 'Rukmer' }], 'works at Rukmer on weekdays');
+upsertFacts(cityTag, [{ subject: 'User', predicate: 'from', object: 'Portugal' }], 'likes the city of Lisbon');
+
+function sameIds(a: { id: string }[], b: { id: string }[]) {
+  const left = a.map((hit) => hit.id).sort();
+  const right = b.map((hit) => hit.id).sort();
+  return left.length === right.length && left.every((id, i) => id === right[i]);
+}
+function uniqueTexts(rows: { text?: string }[]) {
+  const texts = rows.map((row) => String(row.text || '').replace(/\s+/g, ' ').trim().toLowerCase());
+  return new Set(texts).size === texts.length;
+}
+
+const bake = 'How do I bake sourdough bread?';
+const bakeSearch = await searchMemory(bake, { containerTag: cityTag, actorId: 'cityuser', topK, strictness });
+const bakeInjected = await buildMemoryInjection(bake, cityTag, { topK, strictness, actorId: 'cityuser' });
+check('unrelated question injects nothing', bakeInjected.retrieved.matches.length === 0, String(bakeInjected.retrieved.matches.length));
+check('unrelated question search is empty', bakeSearch.matches.length === 0);
+check('chat and search match for sourdough', sameIds(bakeInjected.retrieved.matches, bakeSearch.matches));
+
+const cityQuery = 'what city do I like?';
+const citySearch = await searchMemory(cityQuery, { containerTag: cityTag, actorId: 'cityuser', topK, strictness });
+const cityInjected = await buildMemoryInjection(cityQuery, cityTag, { topK, strictness, actorId: 'cityuser' });
+const cityRows = cityInjected.retrieved.matches;
+check('city question returns memories', cityRows.length > 0);
+check(
+  'city question is only Lisbon',
+  cityRows.every((hit) => /lisbon/i.test(`${hit.title} ${hit.text}`) && !/coffee|rukmer/i.test(`${hit.title} ${hit.text}`))
+);
+check(
+  'city scores meet strictness',
+  cityRows.every((hit) => Number(hit.score) >= strictness),
+  cityRows.map((hit) => hit.score).join(',')
+);
+check('chat and search match for city', sameIds(cityRows, citySearch.matches));
+
+const lisbonSearch = await searchMemory('Lisbon', { containerTag: cityTag, actorId: 'cityuser', topK, strictness });
+const lisbonInjected = await buildMemoryInjection('Lisbon', cityTag, { topK, strictness, actorId: 'cityuser' });
+check('chat and search match for Lisbon', sameIds(lisbonInjected.retrieved.matches, lisbonSearch.matches));
+check('injected texts are unique', uniqueTexts(cityRows) && uniqueTexts(lisbonInjected.retrieved.matches));
+check('Lisbon search drops the duplicate text', uniqueTexts(lisbonSearch.matches));
 
 if (failures.length) {
   console.error(`\n${failures.length} playground fix check(s) failed`);

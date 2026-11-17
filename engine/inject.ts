@@ -1,5 +1,5 @@
 import { buildProfile, bucketFor } from './memory.js';
-import { selectMemories, type MemoryHit } from './relevance.js';
+import { isProfileQuestion, relevanceScore, selectMemories, type MemoryHit } from './relevance.js';
 import type { SearchOpts } from './pipeline.js';
 
 export type ChatMessage = { role: string; content?: string; text?: string; parts?: { text?: string }[] };
@@ -24,23 +24,32 @@ export async function buildMemoryInjection(query: string, containerTag: string, 
   if (!tag) throw new Error('containerTag required');
   const topK = opts.topK ?? 6;
   const strictness = opts.strictness ?? 0.4;
-  const retrieved = await searchMemory(query || 'profile preferences work history', {
+  const asked = String(query || '').trim();
+  const aboutUser = isProfileQuestion(asked);
+  const retrieved = await searchMemory(asked, {
     ...opts,
     containerTag: tag,
-    topK: Math.max(topK, 8),
+    topK,
     strictness,
-    includeRelated: true,
+    includeRelated: opts.includeRelated !== false,
   });
   const profile = buildProfile(tag, opts.actorId);
-  const profileHits: MemoryHit[] = [...profile.static, ...profile.dynamic].map((fact) => ({
-    id: fact.id,
-    title: fact.subject,
-    text: `${fact.subject} ${fact.predicate.replace(/_/g, ' ')} ${fact.object}`,
-    score: 0.01,
-    source: 'profile',
-    docId: bucketFor(fact.predicate),
-  }));
-  const chosen = selectMemories(query, [...retrieved.matches, ...profileHits], { strictness, topK });
+  const profileHits: MemoryHit[] = [...profile.static, ...profile.dynamic].flatMap((fact) => {
+    const hit: MemoryHit = {
+      id: fact.id,
+      title: `${fact.subject} ${fact.predicate.replace(/_/g, ' ')} ${fact.object}`,
+      text: fact.evidence || `${fact.subject} ${fact.predicate.replace(/_/g, ' ')} ${fact.object}`,
+      subject: fact.subject,
+      predicate: fact.predicate,
+      object: fact.object,
+      source: 'profile',
+      docId: bucketFor(fact.predicate),
+      vectorScore: 0,
+    };
+    if (aboutUser || (strictness <= 0 ? true : relevanceScore(asked, hit) >= strictness)) return [hit];
+    return [];
+  });
+  const chosen = selectMemories(asked, [...retrieved.matches, ...profileHits], { strictness, topK, aboutUser });
   retrieved.matches = chosen.map((hit) => ({
     ...((retrieved.matches.find((match) => match.id === hit.id) || {}) as (typeof retrieved.matches)[number]),
     id: hit.id,

@@ -492,6 +492,9 @@ export async function searchMemory(query: string, opts: SearchOpts = {}) {
     createdAt: r.createdAt,
     temporal: r.temporal,
     occurredAt: r.occurredAt,
+    subject: r.subject,
+    predicate: r.predicate,
+    object: r.object,
   }));
   const matches = selectMemories(qRaw || q, rankedMatches, { strictness: strict, topK });
   if (opts.actorId) {
