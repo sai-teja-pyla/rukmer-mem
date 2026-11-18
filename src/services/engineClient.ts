@@ -93,8 +93,16 @@ export const engine = {
     req('/v4/teams/bootstrap', { method: 'POST', body: JSON.stringify({ orgName, displayName }) }),
   createTeamSpace: (orgId: string, slug: string, name?: string) =>
     req('/v4/teams/spaces', { method: 'POST', body: JSON.stringify({ orgId, slug, name }) }),
-  createInvite: (teamId: string, role = 'member', publicKey = '') =>
-    req(`/v4/teams/${encodeURIComponent(teamId)}/invites`, { method: 'POST', body: JSON.stringify({ role, publicKey }) }),
+  createInvite: (teamId: string, role = 'member', options?: { email?: string; multiUse?: boolean; publicKey?: string }) =>
+    req(`/v4/teams/${encodeURIComponent(teamId)}/invites`, { method: 'POST', body: JSON.stringify({ role, ...options }) }),
+  previewInvite: (token: string) => req('/v4/teams/invites/preview', { method: 'POST', body: JSON.stringify({ token }) }),
+  inboxInvites: () => req('/v4/teams/invites/inbox'),
+  declineInvite: (id: string) => req(`/v4/teams/invites/${encodeURIComponent(id)}/decline`, { method: 'POST', body: '{}' }),
+  resendInvite: (id: string) => req(`/v4/teams/invites/${encodeURIComponent(id)}/resend`, { method: 'POST', body: '{}' }),
+  setTeamApproval: (teamId: string, requireApproval: boolean) =>
+    req(`/v4/teams/${encodeURIComponent(teamId)}/approval`, { method: 'POST', body: JSON.stringify({ requireApproval }) }),
+  approveMember: (teamId: string, uid: string) =>
+    req(`/v4/teams/${encodeURIComponent(teamId)}/members/${encodeURIComponent(uid)}/approve`, { method: 'POST', body: '{}' }),
   acceptInvite: (body: { token?: string; code?: string; id?: string; publicKey?: string; email?: string; displayName?: string }) =>
     req('/v4/teams/invites/accept', { method: 'POST', body: JSON.stringify(body) }),
   readInvite: (id: string) => req(`/v4/teams/invites/${encodeURIComponent(id)}`),

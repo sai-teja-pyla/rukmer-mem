@@ -131,8 +131,8 @@ function AppRoutes() {
           }
         />
         <Route path="/connect/oauth" element={user ? <OAuthConsentPage /> : <Navigate to={`/login?next=${encodeURIComponent(window.location.pathname + window.location.search)}`} replace />} />
-        <Route path="/join/:token" element={user ? <JoinTeamPage /> : <ToLogin />} />
-        <Route path="/signup" element={!user ? <SignupPage /> : <Navigate to="/overview" replace />} />
+        <Route path="/join/:token" element={<JoinTeamPage />} />
+        <Route path="/signup" element={!user ? <SignupPage /> : <Navigate to={safeNext(new URLSearchParams(window.location.search).get('next'))} replace />} />
         <Route path="/privacy" element={<PrivacyPage />} />
         <Route path="/terms" element={<TermsPage />} />
         <Route path="/loi" element={<LoiPage />} />

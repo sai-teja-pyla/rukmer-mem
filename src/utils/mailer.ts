@@ -1,14 +1,38 @@
-import { Resend } from 'resend';
 import dotenv from 'dotenv';
 import { LOI_BLOCKS, LOI_TITLE, LOI_VERSION } from '../legal/loi.js';
 
 dotenv.config();
 
-const resend = new Resend(process.env.RESEND_API_KEY);
+type ResendClient = { emails: { send: (body: Record<string, unknown>) => Promise<unknown> } };
+let resendClient: ResendClient | null = null;
+
+async function resend() {
+  if (!process.env.RESEND_API_KEY) throw new Error('RESEND_API_KEY is not set');
+  if (!resendClient) {
+    const { Resend } = await import('resend');
+    resendClient = new Resend(process.env.RESEND_API_KEY) as ResendClient;
+  }
+  return resendClient;
+}
+
+export type TeamInviteMail = {
+  to: string;
+  teamName: string;
+  inviterName: string;
+  inviteUrl: string;
+  subject: string;
+  html: string;
+};
+
+let teamInviteTransport: ((input: TeamInviteMail) => Promise<{ success: boolean }>) | null = null;
+
+export function setTeamInviteMailerForTests(fn: ((input: TeamInviteMail) => Promise<{ success: boolean }>) | null) {
+  teamInviteTransport = fn;
+}
 
 export const sendWelcomeEmail = async (userEmail, userName) => {
   try {
-    const data = await resend.emails.send({
+    const data = await (await resend()).emails.send({
       // Once you verify rukmer.com in Resend, change this to teja@rukmer.com
       from: 'Rukmer AI <support@rukmer.com>', 
       to: userEmail,
@@ -53,6 +77,31 @@ function letterText() {
   return `${LOI_TITLE}\nVersion ${LOI_VERSION}\n\n${body}\n\nRukmer Inc.\n25 N New Jersey St\nIndianapolis, IN 46204\n\nCustomer\nAccepted electronically upon account creation.`;
 }
 
+export async function sendTeamInviteEmail(input: { to: string; teamName: string; inviterName: string; inviteUrl: string }) {
+  const subject = `${input.inviterName || 'A teammate'} invited you to join ${input.teamName || 'a team'} on Rukmer`;
+  const html = `
+    <div style="font-family: sans-serif; line-height: 1.6; color: #333;">
+      <p>${subject}.</p>
+      <p><a href="${input.inviteUrl}">Accept invite</a></p>
+      <p style="font-size: 0.85em; color: #666;">This link expires in 7 days and works once for ${input.to}.</p>
+    </div>
+  `;
+  const message = { ...input, subject, html };
+  if (teamInviteTransport) return teamInviteTransport(message);
+  try {
+    const data = await (await resend()).emails.send({
+      from: 'Rukmer AI <support@rukmer.com>',
+      to: input.to,
+      subject,
+      html,
+    });
+    return { success: true, data };
+  } catch (error) {
+    console.error('Team invite email failed:', (error as Error)?.message || error);
+    return { success: false, error };
+  }
+}
+
 /** Sends the founders a stored copy of the letter the customer just accepted. */
 export const sendLoiCopy = async (input: {
   name: string;
@@ -73,7 +122,7 @@ export const sendLoiCopy = async (input: {
     letterText(),
   ].join('\n');
   try {
-    const data = await resend.emails.send({
+    const data = await (await resend()).emails.send({
       from: 'Rukmer AI <support@rukmer.com>',
       to: LOI_COPY_TO,
       subject: `LOI accepted — ${input.email || input.uid} — ${LOI_VERSION}`,

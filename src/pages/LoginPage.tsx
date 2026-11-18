@@ -12,7 +12,7 @@ import {
 
 export default function LoginPage() {
   const navigate = useNavigate();
-  const [email, setEmail] = useState('');
+  const [email, setEmail] = useState(() => new URLSearchParams(window.location.search).get('email') || '');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
@@ -121,7 +121,7 @@ export default function LoginPage() {
 
         <p>
           &gt; new here?{' '}
-          <Link to="/signup" className="underline underline-offset-4">create account</Link>
+          <Link to={`/signup${window.location.search}`} className="underline underline-offset-4">create account</Link>
         </p>
       </form>
     </TerminalAuth>

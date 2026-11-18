@@ -80,7 +80,7 @@ export function scopeFromTag(tag: string): 'user' | 'session' | 'agent' | 'org' 
 export function activeTeamMember(actor: string, teamId: string) {
   if (!actor || !teamId) return undefined;
   const state = getState();
-  const member = state.teamMembers.find((row) => row.teamId === teamId && row.uid === actor && row.status !== 'removed');
+  const member = state.teamMembers.find((row) => row.teamId === teamId && row.uid === actor && row.status !== 'removed' && row.status !== 'pending');
   if (!member) return undefined;
   const team = state.teams.find((row) => row.id === teamId && !row.archivedAt);
   if (!team) return undefined;

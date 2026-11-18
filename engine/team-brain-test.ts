@@ -3,6 +3,7 @@
  * Run: npm run team-brain
  */
 import express from 'express';
+import { setTeamInviteMailerForTests, type TeamInviteMail } from '../src/utils/mailer.js';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
@@ -10,6 +11,11 @@ import path from 'path';
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rukmer-team-'));
 process.env.MEMORY_DATA_DIR = dir;
 process.env.RUKMER_LOCAL_EXTRACT = '1';
+const sentMails: TeamInviteMail[] = [];
+setTeamInviteMailerForTests(async (input) => {
+  sentMails.push(input);
+  return { success: true };
+});
 delete process.env.K_SERVICE;
 delete process.env.NODE_ENV;
 
@@ -38,10 +44,12 @@ const server = await new Promise<import('http').Server>((resolve) => {
 });
 const port = (server.address() as { port: number }).port;
 
-async function hit(method: string, urlPath: string, user: string, body?: unknown) {
+async function hit(method: string, urlPath: string, user: string, body?: unknown, email = '') {
+  const headers: Record<string, string> = { 'content-type': 'application/json', 'x-rukmer-user': user };
+  if (email) headers['x-rukmer-email'] = email;
   const res = await fetch(`http://127.0.0.1:${port}${urlPath}`, {
     method,
-    headers: { 'content-type': 'application/json', 'x-rukmer-user': user },
+    headers,
     body: body === undefined ? undefined : JSON.stringify(body),
   });
   const text = await res.text();
@@ -85,29 +93,36 @@ const teamId = boot.body.team?.id as string;
 const orgId = boot.body.org?.id as string;
 check('tj bootstraps a general team', boot.status === 200 && !!teamId && String(orgId).startsWith('org_'));
 
-const invited = await hit('POST', `/v4/teams/${teamId}/invites`, 'tj', { role: 'member', publicKey: 'tj-key' });
-check('invite returns a link and code', invited.status === 200 && String(invited.body.inviteUrl || '').includes('/join/') && !!invited.body.code);
-const bare = await hit('POST', `/v4/teams/${teamId}/invites`, 'tj', { role: 'member' });
-const bareAccept = await hit('POST', '/v4/teams/invites/accept', 'keyless', { token: bare.body.token, displayName: 'Keyless' });
-const bareConfirm = await hit('POST', `/v4/teams/invites/${bareAccept.body.id}/confirm`, 'keyless', { match: true });
-const bareInviter = await hit('POST', `/v4/teams/invites/${bareAccept.body.id}/confirm`, 'tj', { match: true });
-check('accept without both keys yields no sas', bareAccept.status === 200 && !bareAccept.body.sas);
-check('confirm with empty sas is rejected', bareConfirm.status === 400 && bareInviter.status === 400);
-const accepted = await hit('POST', '/v4/teams/invites/accept', 'suren', { token: invited.body.token, publicKey: 'suren-key', displayName: 'Suren' });
-check('suren accepts the invite', accepted.status === 200 && !!accepted.body.sas && accepted.body.inviterName === 'TJ');
-const tjInvite = await hit('GET', `/v4/teams/invites/${accepted.body.id}`, 'tj');
-const surenInvite = await hit('GET', `/v4/teams/invites/${accepted.body.id}`, 'suren');
+const invited = await hit('POST', `/v4/teams/${teamId}/invites`, 'tj', { email: 'suren@example.com' });
+const life = Date.parse(invited.body.expiresAt) - Date.now();
+const mailed = sentMails.find((mail) => mail.to === 'suren@example.com');
 check(
-  'accept yields the same sas on both sides',
-  !!tjInvite.body.sas && tjInvite.body.sas === accepted.body.sas && surenInvite.body.sas === accepted.body.sas && tjInvite.body.sasDigits === surenInvite.body.sasDigits
+  'email invite is pending, single-use, and the mailer got the accept link',
+  invited.status === 200 &&
+    String(invited.body.token || '').length >= 32 &&
+    life > 6 * 86400000 &&
+    life < 8 * 86400000 &&
+    !!mailed &&
+    mailed.subject.includes('invited you to join') &&
+    mailed.subject.includes('on Rukmer') &&
+    mailed.html.includes('Accept invite') &&
+    mailed.inviteUrl.includes(`/join/${invited.body.token}`)
 );
-const surenYes = await hit('POST', `/v4/teams/invites/${accepted.body.id}/confirm`, 'suren', { match: true });
-const tjYes = await hit('POST', `/v4/teams/invites/${accepted.body.id}/confirm`, 'tj', { match: true });
-check('both confirm the emoji code', surenYes.body.status === 'confirmed' || tjYes.body.status === 'confirmed');
+const pendingList = await hit('GET', '/v4/teams', 'tj');
+const pendingInvite = (pendingList.body.teams || []).flatMap((row: { invites?: { email?: string; status?: string }[] }) => row.invites || []).find((row: { email?: string }) => row.email === 'suren@example.com');
+check('email invite shows as pending', pendingInvite?.status === 'pending');
+const wrong = await hit('POST', '/v4/teams/invites/accept', 'other', { token: invited.body.token, displayName: 'Other' }, 'other@example.com');
+check('wrong email is rejected', wrong.status === 403 && String(wrong.body.error || '').includes('switch account'));
+const accepted = await hit('POST', '/v4/teams/invites/accept', 'suren', { token: invited.body.token, displayName: 'Suren' }, 'suren@example.com');
+check('matching email joins in one call', accepted.status === 200 && accepted.body.joined === true && accepted.body.status === 'active');
 const roster = await hit('GET', '/v4/teams', 'tj');
-const surenMember = (roster.body.teams || []).flatMap((row: { members?: { uid: string; displayName?: string }[] }) => row.members || []).find((member: { uid: string }) => member.uid === 'suren');
-const keylessMember = (roster.body.teams || []).flatMap((row: { members?: { uid: string }[] }) => row.members || []).find((member: { uid: string }) => member.uid === 'keyless');
-check('confirmed invite adds the invitee by display name', surenMember?.displayName === 'Suren' && !keylessMember);
+const surenMember = (roster.body.teams || []).flatMap((row: { members?: { uid: string; displayName?: string; email?: string }[] }) => row.members || []).find((member: { uid: string }) => member.uid === 'suren');
+check('joined member keeps the display name and email', surenMember?.displayName === 'Suren' && surenMember?.email === 'suren@example.com');
+const bannerMail = await hit('POST', `/v4/teams/${teamId}/invites`, 'tj', { email: 'banner@example.com' });
+const inbox = await hit('GET', '/v4/teams/invites/inbox', 'banner', undefined, 'banner@example.com');
+const bannerInvite = (inbox.body.invites || []).find((row: { email?: string }) => row.email === 'banner@example.com');
+const bannerAccept = await hit('POST', '/v4/teams/invites/accept', 'banner', { id: bannerInvite?.id, displayName: 'Banner' }, 'banner@example.com');
+check('banner invite accept joins without the raw token', bannerMail.status === 200 && bannerAccept.status === 200 && bannerAccept.body.joined === true);
 const surenBoot = await hit('POST', '/v4/teams/bootstrap', 'suren', { orgName: 'Rukmer', displayName: 'Suren' });
 check('a member bootstrap reuses the team they joined', surenBoot.status === 200 && surenBoot.body.team?.id === teamId && surenBoot.body.org?.id === orgId);
 
@@ -231,25 +246,28 @@ const removed = await hit('POST', `/v4/teams/${teamId}/members/suren/remove`, 't
 const afterRemove = await blobFor('suren');
 check('remove cuts team access on the next read', removed.status === 200 && !afterRemove.includes('lisbon-orchid-9') && !afterRemove.includes('cedar-team-12'));
 
-const again = await hit('POST', `/v4/teams/${teamId}/invites`, 'tj', { role: 'member', publicKey: 'tj-key-2' });
-const againAccept = await hit('POST', '/v4/teams/invites/accept', 'suren', { token: again.body.token, publicKey: 'suren-key-2' });
-await hit('POST', `/v4/teams/invites/${againAccept.body.id}/confirm`, 'suren', { match: true });
-await hit('POST', `/v4/teams/invites/${againAccept.body.id}/confirm`, 'tj', { match: true });
+const again = await hit('POST', `/v4/teams/${teamId}/invites`, 'tj', { email: 'suren@example.com' });
+const againAccept = await hit('POST', '/v4/teams/invites/accept', 'suren', { token: again.body.token, displayName: 'Suren' }, 'suren@example.com');
 const rejoined = await hit('POST', '/v4/search', 'suren', { query: 'cedar-team-12', scope: 'team', teamId });
-check('re-invite restores team search', rejoined.status === 200 && has(rejoined.body, 'cedar-team-12'));
+check('re-invite restores team search', againAccept.status === 200 && againAccept.body.joined === true && rejoined.status === 200 && has(rejoined.body, 'cedar-team-12'));
 
-const expired = await hit('POST', `/v4/teams/${teamId}/invites`, 'tj', { publicKey: 'tj-key-3' });
+const expired = await hit('POST', `/v4/teams/${teamId}/invites`, 'tj', { email: 'outsider@example.com' });
 const expiredRow = getState().teamInvites.find((row) => row.id === expired.body.id);
 if (expiredRow) expiredRow.expiresAt = new Date(Date.now() - 1000).toISOString();
-const expiredAccept = await hit('POST', '/v4/teams/invites/accept', 'outsider', { token: expired.body.token, publicKey: 'x' });
+const expiredAccept = await hit('POST', '/v4/teams/invites/accept', 'outsider', { token: expired.body.token }, 'outsider@example.com');
 check('expired invite is rejected', expiredAccept.status >= 400);
+const revokedLink = await hit('POST', `/v4/teams/${teamId}/invites`, 'tj', { email: 'revoked@example.com' });
+await hit('DELETE', `/v4/teams/invites/${revokedLink.body.id}`, 'tj');
+const revokedAccept = await hit('POST', '/v4/teams/invites/accept', 'outsider', { token: revokedLink.body.token }, 'revoked@example.com');
+check('revoked invite is rejected', revokedAccept.status >= 400);
 
-const reused = await hit('POST', '/v4/teams/invites/accept', 'outsider', { token: invited.body.token, publicKey: 'x' });
+const reused = await hit('POST', '/v4/teams/invites/accept', 'outsider', { token: invited.body.token }, 'suren@example.com');
 check('reused invite is rejected', reused.status >= 400);
-const selfInvite = await hit('POST', '/v4/teams/invites/accept', 'tj', { token: again.body.token, publicKey: 'x' });
-check('self-invite is rejected', selfInvite.status >= 400);
+const ownLink = await hit('POST', `/v4/teams/${teamId}/invites`, 'tj', { email: 'tj@example.com' });
+const selfInvite = await hit('POST', '/v4/teams/invites/accept', 'tj', { token: ownLink.body.token }, 'tj@example.com');
+check('self-invite is rejected', selfInvite.status === 400);
 
-const lockedInvite = await hit('POST', `/v4/teams/${teamId}/invites`, 'tj', { publicKey: 'tj-lock' });
+const lockedInvite = await hit('POST', `/v4/teams/${teamId}/invites`, 'tj', { email: 'locked@example.com' });
 let lockedStatus = 0;
 for (let i = 0; i < 6; i += 1) {
   const bad = await hit('POST', '/v4/teams/invites/accept', 'outsider', { id: lockedInvite.body.id, code: 'WRONGCODE', publicKey: 'x' });
@@ -257,10 +275,17 @@ for (let i = 0; i < 6; i += 1) {
 }
 check('five bad codes lock the invite', lockedStatus === 429);
 
-const mismatch = await hit('POST', `/v4/teams/${teamId}/invites`, 'tj', { publicKey: 'tj-mis' });
-const mismatchAccept = await hit('POST', '/v4/teams/invites/accept', 'outsider', { token: mismatch.body.token, publicKey: 'out-key' });
-const mismatchConfirm = await hit('POST', `/v4/teams/invites/${mismatchAccept.body.id}/confirm`, 'outsider', { match: false });
-check('emoji mismatch revokes the invite', mismatchConfirm.body.status === 'revoked');
+const approvalOn = await hit('POST', `/v4/teams/${teamId}/approval`, 'tj', { requireApproval: true });
+const heldLink = await hit('POST', `/v4/teams/${teamId}/invites`, 'tj', { email: 'held@example.com' });
+const held = await hit('POST', '/v4/teams/invites/accept', 'held', { token: heldLink.body.token, displayName: 'Held' }, 'held@example.com');
+const heldSearch = await hit('POST', '/v4/search', 'held', { query: 'cedar-team-12', scope: 'team', teamId });
+const approved = await hit('POST', `/v4/teams/${teamId}/members/held/approve`, 'tj');
+const heldAfter = await hit('POST', '/v4/search', 'held', { query: 'cedar-team-12', scope: 'team', teamId });
+check(
+  'require-approval holds a member until the owner approves',
+  approvalOn.status === 200 && held.status === 200 && held.body.status === 'pending' && heldSearch.status === 403 && approved.status === 200 && heldAfter.status === 200 && has(heldAfter.body, 'cedar-team-12')
+);
+await hit('POST', `/v4/teams/${teamId}/approval`, 'tj', { requireApproval: false });
 
 const memberInvite = await hit('POST', `/v4/teams/${teamId}/invites`, 'suren', { publicKey: 'nope' });
 check('member cannot invite', memberInvite.status === 403);
@@ -268,7 +293,7 @@ const ownerLeave = await hit('POST', `/v4/teams/${teamId}/leave`, 'tj');
 check('last owner cannot leave', ownerLeave.status === 400);
 
 const founders = await hit('POST', '/v4/teams/spaces', 'tj', { orgId, slug: 'founders', name: 'Founders' });
-const foundersInvite = await hit('POST', `/v4/teams/${founders.body.team?.id}/invites`, 'tj', { role: 'member', publicKey: 'tj-f' });
+const foundersInvite = await hit('POST', `/v4/teams/${founders.body.team?.id}/invites`, 'tj', { role: 'member', email: 'member@example.com' });
 check('founders space rejects a member invite', founders.status === 200 && foundersInvite.status === 403);
 const surenSpaces = readTagsFor('suren', { scope: 'all' });
 check('founders space is invisible to a member', !surenSpaces.some((tag) => tag === founders.body.tag));
@@ -278,6 +303,14 @@ const spoofTeam = await hit('POST', '/v4/search', 'suren', { query: 'secret', sc
 check('spoofed private tag returns no foreign rows', spoof.status < 500 && !JSON.stringify(spoof.body.matches || []).includes('sourdough-violet-42'));
 check('spoofed team id is rejected', spoofTeam.status === 403);
 
+let limited = 0;
+for (let i = 0; i < 25; i += 1) {
+  const row = await hit('POST', `/v4/teams/${teamId}/invites`, 'tj', { email: `rate${i}@example.com` });
+  limited = row.status;
+  if (limited === 429) break;
+}
+check('team invite rate limit is 20 an hour', limited === 429);
+
 check(
   'existing org_rukmer is unchanged',
   JSON.stringify(getState().orgs.find((org) => org.id === 'org_rukmer')) === legacyOrg &&
@@ -286,17 +319,11 @@ check(
 
 const React = (await import('react')).default;
 const { renderToStaticMarkup } = await import('react-dom/server');
-const { TeamInviteConfirm } = await import('../src/components/TeamInviteConfirm.js');
-const waitingOpen = renderToStaticMarkup(React.createElement(TeamInviteConfirm, { phase: 'waiting-open' }));
-const waitingKeys = renderToStaticMarkup(React.createElement(TeamInviteConfirm, { phase: 'waiting-keys' }));
-const confirmUi = renderToStaticMarkup(React.createElement(TeamInviteConfirm, { phase: 'confirm', sas: '🦊🚀🌵🎈🍋🔔', sasDigits: '123456' }));
-const waitingInviter = renderToStaticMarkup(React.createElement(TeamInviteConfirm, { phase: 'waiting-inviter', inviterName: 'TJ' }));
-const liveUi = renderToStaticMarkup(React.createElement(TeamInviteConfirm, { phase: 'live' }));
-check('inviter waits until the link is opened', waitingOpen.includes('Waiting for teammate to open the link') && !waitingOpen.includes('They match'));
-check('invitee waits for both keys before matching', waitingKeys.includes('Waiting for both keys') && !waitingKeys.includes('They match'));
-check('both sides can match the emoji code', confirmUi.includes('🦊🚀🌵🎈🍋🔔') && confirmUi.includes('123456') && confirmUi.includes('They match') && confirmUi.includes('match'));
-check('invitee waits for the inviter by name', waitingInviter.includes('Waiting for TJ to confirm'));
-check('a confirmed invite says the team brain is live', liveUi.includes('Team brain is live') && !liveUi.includes('They match'));
+const { JoinTeamCard } = await import('../src/components/JoinTeamCard.js');
+const joinUi = renderToStaticMarkup(React.createElement(JoinTeamCard, { teamName: 'General', inviterName: 'TJ', state: 'ready' }));
+const wrongUi = renderToStaticMarkup(React.createElement(JoinTeamCard, { teamName: 'General', inviterName: 'TJ', state: 'wrong', wrongEmail: 'a@example.com' }));
+check('join page offers one Accept button', joinUi.includes('Join General') && joinUi.includes('Accept') && !joinUi.includes('They match') && !joinUi.includes('Waiting for both keys'));
+check('wrong account tells the person to switch', wrongUi.includes('This invite was sent to a@example.com') && wrongUi.includes('switch account') && !wrongUi.includes('>Accept<'));
 
 server.close();
 if (failures.length) {

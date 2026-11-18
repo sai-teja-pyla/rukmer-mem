@@ -109,6 +109,8 @@ export default function ConsoleLayout({ user, restoring = false }: ConsoleLayout
   const location = useLocation();
   const [query, setQuery] = useState('');
   const [memoryScope, setMemoryScope] = useState<MemoryScope>('all');
+  const [toast, setToast] = useState('');
+  const [inbox, setInbox] = useState<{ id: string; teamName: string }[]>([]);
   const [memories, setMemories] = useState<MemoryHit[]>([]);
   const [memoryLoading, setMemoryLoading] = useState(false);
   const searchRequest = useRef(0);
@@ -124,7 +126,28 @@ export default function ConsoleLayout({ user, restoring = false }: ConsoleLayout
   useEffect(() => {
     setNavOpen(false);
     setMenuOpen(false);
+    const joined = sessionStorage.getItem('rukmer.joinedTeam');
+    if (joined) {
+      setToast(`You joined ${joined}`);
+      sessionStorage.removeItem('rukmer.joinedTeam');
+    }
   }, [location.pathname]);
+
+  useEffect(() => {
+    if (!user.uid) return;
+    let stop = false;
+    engine
+      .inboxInvites()
+      .then((out) => {
+        if (!stop) setInbox(out.invites || []);
+      })
+      .catch(() => {
+        if (!stop) setInbox([]);
+      });
+    return () => {
+      stop = true;
+    };
+  }, [user.uid, location.pathname]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -459,6 +482,38 @@ export default function ConsoleLayout({ user, restoring = false }: ConsoleLayout
             {appearance === 'light' ? <Moon size={16} /> : <Sun size={16} />}
           </button>
         </header>
+        {toast ? (
+          <p role="status" className="shrink-0 px-4 py-2 text-[13px] bg-[#12301f] text-[#b7f7d1] border-b border-white/[0.06]">
+            {toast}
+          </p>
+        ) : null}
+        {inbox.map((invite) => (
+          <div key={invite.id} className="shrink-0 px-4 py-2 text-[13px] bg-[#1a2433] text-zinc-100 border-b border-white/[0.06] flex flex-wrap items-center gap-2">
+            <span>You&apos;re invited to {invite.teamName}</span>
+            <button
+              type="button"
+              className="h-7 px-2 rounded-md bg-[#2563eb] text-white"
+              onClick={() =>
+                void engine
+                  .acceptInvite({ id: invite.id, displayName })
+                  .then(() => {
+                    setToast(`You joined ${invite.teamName}`);
+                    setInbox((rows) => rows.filter((row) => row.id !== invite.id));
+                  })
+                  .catch(() => undefined)
+              }
+            >
+              Accept
+            </button>
+            <button
+              type="button"
+              className="h-7 px-2 rounded-md border border-white/[0.12]"
+              onClick={() => void engine.declineInvite(invite.id).then(() => setInbox((rows) => rows.filter((row) => row.id !== invite.id)))}
+            >
+              Decline
+            </button>
+          </div>
+        ))}
         <main
           className={`flex-1 min-h-0 min-w-0 bg-[#0f0f11] ${
             isImmersive ? 'overflow-hidden p-0' : 'overflow-y-auto overflow-x-hidden p-3 sm:p-4 md:p-5'

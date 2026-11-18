@@ -175,13 +175,14 @@ export interface TeamRec {
   archivedAt?: string | null;
   createdBy: string;
   createdAt: string;
+  requireApproval?: boolean;
 }
 
 export interface TeamMemberRec {
   teamId: string;
   uid: string;
   role: 'owner' | 'admin' | 'member';
-  status?: 'active' | 'removed';
+  status?: 'active' | 'removed' | 'pending';
   joinedAt?: string;
   removedAt?: string;
   displayName?: string;
@@ -199,6 +200,7 @@ export interface TeamInviteRec {
   role: 'owner' | 'admin' | 'member';
   expiresAt: string;
   maxUses: number;
+  uses?: number;
   status: 'pending' | 'accepted' | 'confirmed' | 'expired' | 'revoked';
   inviteeUid?: string;
   inviteeEmail?: string;

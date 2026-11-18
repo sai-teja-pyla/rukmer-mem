@@ -1,98 +1,134 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { useParams } from 'react-router-dom';
+import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
+import { onAuthStateChanged, type User } from 'firebase/auth';
 import { engine } from '../services/engineClient';
 import { auth } from '../firebase';
 import { useUserSettings } from '../hooks/useUserSettings';
 import { browserKey, saveTeamKey } from '../services/teamKeys';
 import { inviteePhase } from '../services/teamInviteFlow';
 import { TeamInviteConfirm } from '../components/TeamInviteConfirm';
+import { JoinTeamCard } from '../components/JoinTeamCard';
+
+function sameEmail(left: string, right: string) {
+  return left.trim().toLowerCase() === right.trim().toLowerCase() && !!left.trim();
+}
 
 export default function JoinTeamPage() {
   const { token = '' } = useParams();
-  const { settings, loading } = useUserSettings();
+  const [search] = useSearchParams();
+  const navigate = useNavigate();
+  const { settings } = useUserSettings();
+  const [user, setUser] = useState<User | null | undefined>(undefined);
+  const [preview, setPreview] = useState<any>(null);
   const [info, setInfo] = useState<any>(null);
   const [error, setError] = useState('');
-  const [done, setDone] = useState('');
-  const started = useRef(false);
+  const [state, setState] = useState<'loading' | 'ready' | 'joined' | 'pending' | 'wrong' | 'sas'>('loading');
+  const autoStarted = useRef(false);
+
+  useEffect(() => onAuthStateChanged(auth, setUser), []);
 
   useEffect(() => {
-    if (!token || loading || started.current) return;
-    started.current = true;
+    if (!token) return;
     let stop = false;
-    const run = async () => {
-      try {
-        const displayName = settings?.displayName || auth.currentUser?.displayName || '';
-        const keys = await browserKey();
-        const accepted = await engine.acceptInvite({ token, publicKey: keys.publicKey, displayName });
-        await saveTeamKey(accepted.id, keys.privateKey);
-        if (!stop) setInfo(accepted);
-      } catch (err: any) {
+    engine
+      .previewInvite(token)
+      .then((row) => {
+        if (stop) return;
+        setPreview(row);
+      })
+      .catch((err) => {
         if (!stop) setError(err.message || 'This invite is not valid');
-      }
-    };
-    void run();
+      });
     return () => {
       stop = true;
     };
-  }, [token, loading, settings?.displayName]);
+  }, [token]);
+
+  const join = async () => {
+    setError('');
+    try {
+      const displayName = settings?.displayName || user?.displayName || '';
+      const sas = preview?.sasRequired ? await browserKey() : null;
+      const accepted = await engine.acceptInvite({ token, publicKey: sas?.publicKey || '', displayName });
+      if (sas && accepted.id) await saveTeamKey(accepted.id, sas.privateKey);
+      setInfo(accepted);
+      if (accepted.sasRequired && !accepted.joined) {
+        setState('sas');
+        return;
+      }
+      if (accepted.status === 'pending') {
+        setState('pending');
+        return;
+      }
+      sessionStorage.setItem('rukmer.joinedTeam', String(accepted.teamName || preview?.teamName || 'the team'));
+      navigate('/overview');
+    } catch (err: any) {
+      setError(err.message || 'Could not join the team');
+    }
+  };
 
   useEffect(() => {
-    if (!info?.id || done) return;
-    const tick = () => {
-      engine
-        .readInvite(info.id)
-        .then((row) => {
-          setInfo((current: any) => ({ ...current, ...row }));
-          if (row.status === 'confirmed') setDone('live');
-          if (row.status === 'revoked') setDone('Invite revoked');
-        })
-        .catch(() => undefined);
-    };
-    tick();
-    const timer = window.setInterval(tick, 2000);
-    return () => window.clearInterval(timer);
-  }, [info?.id, done]);
+    if (!preview || user === undefined) return;
+    const invited = String(preview.email || '');
+    if (!user) {
+      const next = `/join/${token}?auto=1`;
+      navigate(`/login?next=${encodeURIComponent(next)}&email=${encodeURIComponent(invited)}`, { replace: true });
+      return;
+    }
+    const mine = String(user.email || '').toLowerCase();
+    if (invited && !sameEmail(mine, invited)) {
+      setState('wrong');
+      return;
+    }
+    if (search.get('auto') === '1' && !autoStarted.current) {
+      autoStarted.current = true;
+      void join();
+      return;
+    }
+    setState((current) => (current === 'loading' ? 'ready' : current));
+  }, [preview, user, token, search]);
 
   const confirm = async (match: boolean) => {
     if (!info?.id) return;
     try {
       const out = await engine.confirmInvite(info.id, match);
       if (!match || out.status === 'revoked') {
-        setDone('Invite revoked');
+        setError('Invite revoked');
         return;
       }
       setInfo((current: any) => ({ ...current, ...out, inviteeConfirmed: true, status: out.status }));
-      if (out.status === 'confirmed') setDone('live');
+      if (out.status === 'confirmed') {
+        sessionStorage.setItem('rukmer.joinedTeam', String(preview?.teamName || 'the team'));
+        navigate('/overview');
+      }
     } catch (err: any) {
       setError(err.message || 'Could not confirm');
     }
   };
 
-  const phase = done === 'live' ? 'live' : done === 'Invite revoked' ? 'revoked' : info ? inviteePhase(info) : 'waiting-keys';
-
   return (
     <div className="min-h-screen bg-[#0a0a0b] text-zinc-100 flex items-center justify-center px-6">
       <div className="max-w-md w-full rounded-2xl border border-white/[0.08] bg-[#141416] p-6">
-        <h1 className="text-[22px] font-semibold">Join {info?.teamName || 'the team'}</h1>
-        {error ? <p className="mt-3 text-[13px] text-red-300">{error}</p> : null}
-        {info || done ? (
-          <>
-            {phase === 'confirm' || phase === 'waiting-keys' ? (
-              <p className="mt-3 text-[13px] text-zinc-400">{info?.inviterName || 'Your teammate'} invited you. Confirm the same code on both screens.</p>
-            ) : null}
-            <div className="mt-4">
-              <TeamInviteConfirm
-                phase={phase}
-                sas={info?.sas}
-                sasDigits={info?.sasDigits}
-                inviterName={info?.inviterName}
-                onMatch={() => void confirm(true)}
-                onMismatch={() => void confirm(false)}
-              />
-            </div>
-          </>
-        ) : !error ? (
-          <p className="mt-4 text-[13px] text-zinc-400">Opening the invite…</p>
+        {error ? <p className="mb-3 text-[13px] text-red-300">{error}</p> : null}
+        {state === 'loading' && !error ? <p className="text-[13px] text-zinc-400">Opening the invite…</p> : null}
+        {preview && (state === 'ready' || state === 'pending' || state === 'wrong') ? (
+          <JoinTeamCard
+            teamName={preview.teamName || 'the team'}
+            inviterName={preview.inviterName || 'A teammate'}
+            state={state}
+            wrongEmail={preview.email}
+            onJoin={() => void join()}
+          />
+        ) : null}
+        {state === 'sas' && info ? (
+          <TeamInviteConfirm
+            phase={inviteePhase(info)}
+            sas={info.sas}
+            sasDigits={info.sasDigits}
+            inviterName={info.inviterName}
+            onMatch={() => void confirm(true)}
+            onMismatch={() => void confirm(false)}
+          />
         ) : null}
       </div>
     </div>

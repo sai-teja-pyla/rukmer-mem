@@ -3,7 +3,7 @@ import { findKey, touchKey } from './keys.js';
 import { sanitizeUid } from './tenancy.js';
 import { mcpUnauthorized } from './oauth.js';
 
-export type MemoryUser = { uid: string; via: 'firebase' | 'apikey' | 'dev' };
+export type MemoryUser = { uid: string; via: 'firebase' | 'apikey' | 'dev'; email?: string };
 
 declare global {
   namespace Express {
@@ -43,7 +43,7 @@ function isLoopback(req: Request) {
   return ip === '127.0.0.1' || ip === '::1' || ip === '::ffff:127.0.0.1';
 }
 
-type TokenCheck = { status: 'ok'; uid: string } | { status: 'invalid' } | { status: 'unavailable' };
+type TokenCheck = { status: 'ok'; uid: string; email?: string } | { status: 'invalid' } | { status: 'unavailable' };
 
 async function verifyWithAdmin(token: string): Promise<TokenCheck> {
   try {
@@ -58,7 +58,7 @@ async function verifyWithAdmin(token: string): Promise<TokenCheck> {
     }
     const decoded = await admin.auth().verifyIdToken(token);
     const uid = sanitizeUid(decoded.uid);
-    return uid ? { status: 'ok', uid } : { status: 'invalid' };
+    return uid ? { status: 'ok', uid, email: String(decoded.email || '').trim().toLowerCase() } : { status: 'invalid' };
   } catch {
     return { status: 'invalid' };
   }
@@ -75,9 +75,9 @@ async function verifyWithIdentityToolkit(token: string): Promise<TokenCheck> {
       signal: AbortSignal.timeout(8000),
     });
     if (!res.ok) return res.status >= 500 ? { status: 'unavailable' } : { status: 'invalid' };
-    const data = (await res.json()) as { users?: { localId?: string }[] };
+    const data = (await res.json()) as { users?: { localId?: string; email?: string }[] };
     const uid = sanitizeUid(String(data.users?.[0]?.localId || ''));
-    return uid ? { status: 'ok', uid } : { status: 'invalid' };
+    return uid ? { status: 'ok', uid, email: String(data.users?.[0]?.email || '').trim().toLowerCase() } : { status: 'invalid' };
   } catch {
     return { status: 'unavailable' };
   }
@@ -116,14 +116,14 @@ export async function resolveIdentity(req: Request): Promise<MemoryUser> {
   }
   if (token && token.split('.').length === 3) {
     const verified = await verifyFirebase(token);
-    if (verified.status === 'ok') return { uid: verified.uid, via: 'firebase' };
+    if (verified.status === 'ok') return { uid: verified.uid, via: 'firebase', email: verified.email || '' };
     if (verified.status === 'invalid') throw Object.assign(new Error('Invalid Firebase token'), { status: 401 });
   }
   const prod = process.env.NODE_ENV === 'production' || !!process.env.K_SERVICE;
   const devHeaderOff = prod || process.env.MEMORY_REQUIRE_AUTH === '1';
   if (!devHeaderOff && isLoopback(req) && !token) {
     const dev = sanitizeUid(String(req.headers['x-rukmer-user'] || ''));
-    if (dev) return { uid: dev, via: 'dev' };
+    if (dev) return { uid: dev, via: 'dev', email: String(req.headers['x-rukmer-email'] || '').trim().toLowerCase() };
   }
   throw Object.assign(new Error('Sign in required for memory'), { status: 401 });
 }
@@ -137,6 +137,7 @@ export function isPublicMemoryPath(method: string, path: string) {
   if (path.includes('/.well-known/')) return true;
   if (path === '/oauth/authorize' || path === '/oauth/register' || path === '/oauth/token') return true;
   if (method === 'POST' && path === '/v4/connectors/browser/claim') return true;
+  if (method === 'POST' && path === '/v4/teams/invites/preview') return true;
   return false;
 }
 

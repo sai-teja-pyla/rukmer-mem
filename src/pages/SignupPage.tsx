@@ -12,10 +12,11 @@ import { doc, setDoc, getDoc, serverTimestamp } from 'firebase/firestore';
 import TerminalAuth, { signUpLines } from '../components/TerminalAuth';
 import LoiAccept from '../components/LoiAccept';
 import { emailLoiCopy, loiAcceptanceRecord } from '../legal/acceptance';
+import { safeNext } from '../services/safeNext';
 
 export default function SignupPage() {
   const navigate = useNavigate();
-  const [formData, setFormData] = useState({ name: '', email: '', password: '' });
+  const [formData, setFormData] = useState({ name: '', email: new URLSearchParams(window.location.search).get('email') || '', password: '' });
   const [error, setError] = useState('');
   const [accepted, setAccepted] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -54,7 +55,7 @@ export default function SignupPage() {
 
       sessionStorage.setItem('rukmer.loiAccepted', '1');
       await emailLoiCopy(user);
-      navigate('/dashboard'); 
+      navigate(safeNext(new URLSearchParams(window.location.search).get('next'))); 
     } catch (err) {
       console.error("Signup Error:", err);
       if (err.code === 'auth/email-already-in-use') {
@@ -98,7 +99,7 @@ export default function SignupPage() {
       }
 
       sessionStorage.setItem('rukmer.loiAccepted', '1');
-      navigate('/dashboard');
+      navigate(safeNext(new URLSearchParams(window.location.search).get('next')));
     } catch (err) {
       console.error("Google Error:", err);
       setError("Google sign-in failed.");
@@ -163,7 +164,7 @@ export default function SignupPage() {
         </button>
         <p>
           &gt; already have an account?{' '}
-          <Link to="/login" className="underline underline-offset-4">sign in</Link>
+          <Link to={`/login${window.location.search}`} className="underline underline-offset-4">sign in</Link>
         </p>
       </form>
     </TerminalAuth>
