@@ -351,6 +351,30 @@ let state: EngineState = empty();
 let gcsTimer: ReturnType<typeof setTimeout> | null = null;
 let gcsGeneration = 0;
 let gcsMergeAt = 0;
+let storeSource: 'gcs' | 'local' | 'memory' | 'error' = 'memory';
+let storeProblem = '';
+let storeReader: null | (() => Promise<string | null>) = null;
+
+export function setMemoryStoreReaderForTests(reader: (() => Promise<string | null>) | null) {
+  storeReader = reader;
+}
+
+export function memoryStoreSource() {
+  return storeSource;
+}
+
+export function memoryStoreProblem() {
+  return storeProblem;
+}
+
+export function noteMemoryStoreProblem(message: string) {
+  storeProblem = message;
+  storeSource = 'error';
+}
+
+function isMissingStore(err: unknown) {
+  return Number((err as { code?: number }).code || 0) === 404;
+}
 
 function gcsTarget() {
   const bucket = process.env.MEMORY_GCS_BUCKET || (process.env.K_SERVICE ? 'rukmer-saas-data' : '');
@@ -365,15 +389,25 @@ function gcsFile() {
 }
 
 async function pullGcs() {
-  const file = await gcsFile();
-  if (!file) return;
   try {
+    if (storeReader) {
+      const raw = await storeReader();
+      if (raw == null) return false;
+      state = { ...empty(), ...decodeState(raw) };
+      return true;
+    }
+    const file = await gcsFile();
+    if (!file) return false;
     const [buf] = await file.download();
     const [meta] = await file.getMetadata();
     gcsGeneration = Number(meta.generation || 0);
     state = { ...empty(), ...decodeState(buf.toString('utf8')) };
-  } catch {
-    /* first run or no object yet */
+    return true;
+  } catch (err) {
+    if (isMissingStore(err)) return false;
+    noteMemoryStoreProblem("Couldn't read the memory store");
+    console.error('memory store read failed', (err as Error).message || err);
+    throw Object.assign(new Error("Couldn't read the memory store"), { status: 503, expose: true });
   }
 }
 
@@ -483,15 +517,19 @@ function shapeState() {
 }
 
 export async function loadState() {
+  let hadLocal = false;
   try {
     if (fs.existsSync(DATA_FILE)) {
       state = { ...empty(), ...decodeState(fs.readFileSync(DATA_FILE, 'utf8')) };
+      hadLocal = true;
     }
   } catch {
     state = empty();
   }
-  await pullGcs();
+  const fromGcs = await pullGcs();
   shapeState();
+  storeProblem = '';
+  storeSource = fromGcs ? 'gcs' : hadLocal ? 'local' : 'memory';
 }
 
 function writeLocal() {

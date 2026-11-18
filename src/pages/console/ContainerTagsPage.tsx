@@ -1,55 +1,21 @@
-import React, { useEffect, useState } from 'react';
-import { Link } from 'react-router-dom';
-import { Search, Tag, Download } from 'lucide-react';
-import { PageHeader, DocLink, Panel, EmptyState, TableHead, PrimaryButton, Skeleton, LoadError } from '../../components/console/ui';
+import React, { useState } from 'react';
+import { Search } from 'lucide-react';
+import { PageHeader, DocLink, Panel, EmptyState, TableHead } from '../../components/console/ui';
 import { engine } from '../../services/engineClient';
-
-const SOURCE_LABEL: Record<string, string> = { browser: 'Browser', gmail: 'Gmail', canvas: 'Canvas', x: 'X' };
-
-function SourceMarks({ sites }: { sites: string[] }) {
-  if (!sites.length) return null;
-  return (
-    <>
-      {sites.map((site) => (
-        <span key={site} className="inline-flex items-center gap-1 rounded-full border border-white/[0.08] px-1.5 py-0.5 text-[10px] text-zinc-300" title={SOURCE_LABEL[site] || site}>
-          <i className="h-1.5 w-1.5 rounded-full bg-[#2563eb]" aria-hidden />
-          {SOURCE_LABEL[site] || site}
-        </span>
-      ))}
-    </>
-  );
-}
+import { useMemoryResource } from '../../hooks/useMemoryResource';
+import { ContainerTagsStatus, TagRows, resourceView, type TagRow } from './memoryStates';
 
 export default function ContainerTagsPage() {
   const [q, setQ] = useState('');
   const [kind, setKind] = useState<'all' | 'documents' | 'memories'>('all');
-  const [tags, setTags] = useState<any[] | null>(null);
-  const [error, setError] = useState('');
-  const [loading, setLoading] = useState(true);
-  const [loaded, setLoaded] = useState(false);
+  const resource = useMemoryResource(() => engine.tags() as Promise<{ tags?: TagRow[] }>);
+  const tags = resource.data?.tags || [];
+  const view = resourceView(resource.phase, tags.length);
 
-  const load = () => {
-    setLoading(true);
-    setError('');
-    engine
-      .tags()
-      .then((d) => {
-        setTags(d.tags || []);
-        setError('');
-        setLoaded(true);
-      })
-      .catch((e) => setError(e?.message || 'Could not load container tags'))
-      .finally(() => setLoading(false));
-  };
-
-  useEffect(() => {
-    load();
-  }, []);
-
-  const filtered = (tags || []).filter((t) => {
-    if (!t.tag.toLowerCase().includes(q.toLowerCase())) return false;
-    if (kind === 'documents') return Number(t.documents) > 0;
-    if (kind === 'memories') return Number(t.memories) > 0;
+  const filtered = tags.filter((row) => {
+    if (!row.tag.toLowerCase().includes(q.toLowerCase())) return false;
+    if (kind === 'documents') return Number(row.documents) > 0;
+    if (kind === 'memories') return Number(row.memories) > 0;
     return true;
   });
 
@@ -81,39 +47,12 @@ export default function ContainerTagsPage() {
       </div>
       <Panel>
         <TableHead cols={['CONTAINER TAG', 'DOCUMENTS', 'MEMORIES', 'ACTIVITY']} />
-        {loading && !loaded ? (
-          <div className="px-4 py-4 space-y-3" aria-busy="true">
-            <Skeleton className="h-8 w-full" />
-            <Skeleton className="h-8 w-full" />
-            <Skeleton className="h-8 w-4/5" />
-          </div>
-        ) : error && !loaded ? (
-          <LoadError message={error} onRetry={load} />
-        ) : loaded && filtered.length === 0 ? (
-          <EmptyState
-            icon={<Tag size={18} />}
-            title={(tags || []).length === 0 ? 'No container tags yet' : 'No tags match'}
-            body={(tags || []).length === 0 ? 'Tags are created the first time you ingest with a containerTag.' : 'Try a different search or filter.'}
-            action={
-              <Link to="/import">
-                <PrimaryButton><Download size={14} /> Import data</PrimaryButton>
-              </Link>
-            }
-          />
+        {view === 'ready' && filtered.length > 0 ? (
+          <TagRows tags={filtered} />
+        ) : view === 'ready' ? (
+          <EmptyState icon={<Search size={18} />} title="No tags match" body="Try a different search or filter." />
         ) : (
-          <div className="overflow-x-auto">
-            {filtered.map((t) => (
-              <div key={t.tag} className="grid grid-cols-4 min-w-[560px] px-4 py-3 text-[13px] text-zinc-300 border-t border-white/[0.06]">
-                <span className="text-zinc-100 inline-flex items-center gap-1.5 flex-wrap">
-                  {t.tag}
-                  <SourceMarks sites={t.sites || []} />
-                </span>
-                <span>{t.documents}</span>
-                <span>{t.memories}</span>
-                <span className="text-zinc-500">{t.activity ? new Date(t.activity).toLocaleString() : '—'}</span>
-              </div>
-            ))}
-          </div>
+          <ContainerTagsStatus phase={view} onRetry={resource.retry} />
         )}
       </Panel>
     </div>

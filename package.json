@@ -14,6 +14,8 @@
     "security-fixes": "tsx engine/security-fixes-test.ts",
     "playground-fixes": "tsx engine/playground-fixes-test.ts",
     "team-brain": "tsx engine/team-brain-test.ts",
+    "graph-routes": "tsx engine/graph-routes-test.ts",
+    "memory-load": "tsx src/pages/console/memory-load.test.tsx",
     "extension-tests": "tsx extension/src/lib/extension.test.ts",
     "server": "nodemon --exec tsx server.ts",
     "dev": "vite",

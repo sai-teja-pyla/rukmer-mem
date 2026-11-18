@@ -1,9 +1,11 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Link, useOutletContext } from 'react-router-dom';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { useOutletContext } from 'react-router-dom';
 import { Brain, Calendar, ChevronDown, Eye, X } from 'lucide-react';
 import { engine } from '../../services/engineClient';
 import { countMemories } from '../../services/memoryCount';
 import { homeTag as makeHomeTag } from '../../services/tenancy';
+import { useMemoryResource } from '../../hooks/useMemoryResource';
+import { GraphCountLabel, GraphStatus, graphDataText, graphView, nodeLabel } from './memoryStates';
 import type { UserProfile } from '../../types';
 
 function sourceMark(node: { source?: string; site?: string; browser?: string }) {
@@ -71,6 +73,8 @@ type GraphEdge = {
 
 type GraphData = { nodes: GraphNode[]; edges: GraphEdge[]; tags: string[] };
 
+const EMPTY_GRAPH: GraphData = { nodes: [], edges: [], tags: [] };
+
 const VIEW_W = 1000;
 const VIEW_H = 640;
 const HUB = { x: 390, y: 318 };
@@ -113,14 +117,6 @@ function memoryCopy(node: GraphNode) {
   const facts = node.facts || [];
   if (facts.length === 1) return factLine(facts[0]);
   return node.label || '';
-}
-
-function shortLabel(label: string) {
-  const text = String(label || '').replace(/\s+/g, ' ').trim();
-  if (text.length <= 16) return text;
-  const slice = text.slice(0, 15);
-  const cut = slice.lastIndexOf(' ');
-  return `${(cut > 6 ? slice.slice(0, cut) : slice).trim()}…`;
 }
 
 function versionOf(node: GraphNode) {
@@ -278,52 +274,31 @@ function Legend() {
 export default function MemoryGraphPage() {
   const ctx = useOutletContext<{ user: UserProfile; homeTag: string }>();
   const homeTag = ctx?.homeTag || (ctx?.user?.uid ? makeHomeTag(ctx.user.uid) : '');
-  const [graph, setGraph] = useState<GraphData>({ nodes: [], edges: [], tags: [] });
-  const [tagRows, setTagRows] = useState<{ tag: string; memories: number }[]>([]);
+  const resource = useMemoryResource(
+    async () => {
+      const [data, tags] = await Promise.all([engine.graph(), engine.tags()]);
+      return {
+        graph: { nodes: data.nodes || [], edges: data.edges || [], tags: data.tags || [] } as GraphData,
+        tags: (tags.tags || []) as { tag: string; memories: number }[],
+      };
+    },
+    { enabled: !!homeTag, refreshMs: 8000 }
+  );
+  const graph = resource.data?.graph || EMPTY_GRAPH;
+  const tagRows = resource.data?.tags || [];
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [space, setSpace] = useState('all');
   const [menuOpen, setMenuOpen] = useState(false);
-  const [error, setError] = useState('');
-  const [loading, setLoading] = useState(true);
-  const [ready, setReady] = useState(false);
   const [view, setView] = useState({ x: 0, y: 0, k: 1 });
   const dismissed = useRef(false);
   const drag = useRef<{ px: number; py: number; x: number; y: number } | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
 
-  const readyRef = useRef(false);
-  const load = useCallback(() => {
-    if (!homeTag) return;
-    Promise.all([engine.graph(), engine.tags()])
-      .then(([data, tags]) => {
-        setGraph({ nodes: data.nodes || [], edges: data.edges || [], tags: data.tags || [] });
-        setTagRows(tags.tags || []);
-        readyRef.current = true;
-        setReady(true);
-        setError('');
-      })
-      .catch((e) => {
-        if (!readyRef.current) setError(e.message || 'Could not load graph');
-      })
-      .finally(() => setLoading(false));
-  }, [homeTag]);
-
-  const retry = () => {
-    setError('');
-    setLoading(true);
-    load();
-  };
-
   useEffect(() => {
-    load();
-    const t = setInterval(load, 8000);
-    const onFocus = () => load();
+    const onFocus = () => resource.reload();
     window.addEventListener('focus', onFocus);
-    return () => {
-      clearInterval(t);
-      window.removeEventListener('focus', onFocus);
-    };
-  }, [load]);
+    return () => window.removeEventListener('focus', onFocus);
+  }, [resource.reload]);
 
   useEffect(() => {
     if (!menuOpen) return;
@@ -376,6 +351,7 @@ export default function MemoryGraphPage() {
   const memoryCount = countMemories(tagRows, space);
   const spaceLabel = space === 'all' ? 'All Spaces' : space;
   const hasPlot = orbit.length > 0 || !!hub;
+  const loadPhase = graphView(resource.phase, memoryCount, hasPlot);
 
   const chooseSpace = (id: string) => {
     setSpace(id);
@@ -403,6 +379,7 @@ export default function MemoryGraphPage() {
 
       <svg
         className="absolute inset-0 w-full h-full z-[1] cursor-grab active:cursor-grabbing"
+        aria-label={loadPhase === 'ready' ? graphDataText(visible) : undefined}
         viewBox={`0 0 ${VIEW_W} ${VIEW_H}`}
         preserveAspectRatio="xMidYMid meet"
         style={{ touchAction: 'none', overflow: 'visible' }}
@@ -448,7 +425,7 @@ export default function MemoryGraphPage() {
                 />
                 {active ? (
                   <text x={midX} y={midY - 4} textAnchor="middle" fontSize="8" fill="var(--graph-text)">
-                    {shortLabel(String(edge.label || '').replace(/_/g, ' '))}
+                    {nodeLabel(String(edge.label || '').replace(/_/g, ' '))}
                   </text>
                 ) : null}
               </g>
@@ -508,7 +485,7 @@ export default function MemoryGraphPage() {
                   </g>
                 ) : null}
                 <text x={x} y={y + 32} textAnchor="middle" fontSize="9" fill="var(--graph-text)" style={{ pointerEvents: 'none' }}>
-                  {shortLabel(node.label)}
+                  {nodeLabel(node.label)}
                 </text>
               </g>
             );
@@ -519,35 +496,11 @@ export default function MemoryGraphPage() {
         </g>
       </svg>
 
-      {!hasPlot && (loading || !!error || ready) && (
+      {loadPhase !== 'ready' ? (
         <div className="absolute inset-0 z-[2] flex items-center justify-center pointer-events-none">
-          <div className="pointer-events-auto text-center max-w-sm px-6 -translate-y-6 md:-translate-x-10">
-            {loading ? (
-              <div className="space-y-3 w-56 mx-auto" aria-busy="true">
-                <div className="mx-auto h-16 w-16 rounded-full border animate-pulse" style={{ borderColor: 'var(--graph-border)' }} />
-                <div className="h-3 rounded-md animate-pulse" style={{ background: 'var(--graph-hover)' }} />
-                <div className="h-3 w-2/3 mx-auto rounded-md animate-pulse" style={{ background: 'var(--graph-hover)' }} />
-              </div>
-            ) : error ? (
-              <>
-                <p className="text-[15px]">Memory graph is offline</p>
-                <p className="text-[13px] graph-muted mt-1">{error}</p>
-                <button type="button" onClick={retry} className="inline-block mt-3 text-[13px]" style={{ color: 'var(--graph-memory)' }}>
-                  Retry
-                </button>
-              </>
-            ) : (
-              <>
-                <p className="text-[15px]">Nothing to plot yet</p>
-                <p className="text-[13px] graph-muted mt-1">Chat in Playground or import documents. Memories show up here around the space.</p>
-                <Link to="/import" className="inline-block mt-3 text-[13px]" style={{ color: 'var(--graph-memory)' }}>
-                  Import documents
-                </Link>
-              </>
-            )}
-          </div>
+          <GraphStatus phase={loadPhase} onRetry={resource.retry} />
         </div>
-      )}
+      ) : null}
 
       <div ref={menuRef} className="absolute top-3 left-3 z-20">
         <button
@@ -560,9 +513,7 @@ export default function MemoryGraphPage() {
           </span>
           <span className="flex-1 min-w-0">
             <span className="block text-[13.5px] font-medium truncate">{spaceLabel}</span>
-            <span className="block text-[11.5px] graph-muted">
-              {ready ? `${memoryCount} total memories` : '—'}
-            </span>
+            <GraphCountLabel phase={loadPhase} count={memoryCount} />
           </span>
           <ChevronDown size={16} className={`graph-muted shrink-0 transition-transform ${menuOpen ? 'rotate-180' : ''}`} />
         </button>

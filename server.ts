@@ -21,7 +21,7 @@ import { sendWelcomeEmail } from './src/utils/mailer.js';
 import fs from 'fs';
 import admin from 'firebase-admin'; // 🚨 The Security Bouncer
 import { learnWorkspaceData, queryWorkspaceData, clearNamespace, fetchTeamsMessages } from './ingestionService.js';
-import { beginMemoryBoot, bootMemoryEngine, mountMemoryEngine } from './engine/routes.js';
+import { bootMemoryEngine, memoryErrorMiddleware, mountMemoryEngine } from './engine/routes.js';
 import { debugRoutesEnabled, isProduction, securityMiddleware, slackSignatureOk } from './engine/security.js';
 import { claimedUserMismatch } from './engine/actorGuard.js';
 import { consumeOauthState, firestoreOauthStore, issueOauthState, oauthStateSecret } from './engine/oauthLink.js';
@@ -1915,15 +1915,18 @@ app.get('/{*any}', (req: any, res: any): void => {
     res.sendFile(path.join(__dirname, 'dist', 'index.html'));
 });
 
-// --- 7. Start Server ---
-beginMemoryBoot();
-app.listen(PORT, '0.0.0.0', async () => {
-    try {
-      const mem = await bootMemoryEngine();
-      console.log(`🧠 Memory engine mounted docs=${mem.documents} chunks=${mem.chunks} llm=${mem.llm}`);
-    } catch (err: any) {
-      console.error('Memory engine boot failed', err?.message || err);
-    }
+app.use(memoryErrorMiddleware);
+
+// Load the memory store before accepting traffic. Cloud Run sends queued
+// requests as soon as the port opens; answering during boot returned 503.
+void (async () => {
+  try {
+    const mem = await bootMemoryEngine();
+    console.log(`🧠 Memory engine mounted docs=${mem.documents} chunks=${mem.chunks} llm=${mem.llm}`);
+  } catch (err: any) {
+    console.error('Memory engine boot failed', err?.message || err);
+  }
+  app.listen(PORT, '0.0.0.0', () => {
     console.log(`🚀 Rukmer Backend on port ${PORT}`);
     pool.query("SELECT 1")
         .then(async () => {
@@ -1965,4 +1968,5 @@ app.listen(PORT, '0.0.0.0', async () => {
             }
         })
         .catch((err: any) => console.error("❌ DB Error:", err?.message || err));
-});
+  });
+})();

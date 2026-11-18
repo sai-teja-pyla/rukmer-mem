@@ -1,11 +1,8 @@
 import { onAuthStateChanged, type User } from 'firebase/auth';
 import { auth } from '../firebase';
+import { requestJson } from './engineRetry';
 
 const base = '';
-
-function wait(ms: number) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
 
 let firstAuthUser: Promise<User | null> | null = null;
 
@@ -36,35 +33,16 @@ async function authHeaders(forceToken = false) {
   return headers;
 }
 
-async function req(path: string, init?: RequestInit, state: { warming?: number; refreshed?: boolean } = {}): Promise<any> {
-  const warming = state.warming || 0;
-  const headers = { ...(await authHeaders(!!state.refreshed)), ...((init?.headers as Record<string, string>) || {}) };
-  const res = await fetch(`${base}${path}`, {
-    ...init,
-    headers,
+async function req(path: string, init?: RequestInit): Promise<any> {
+  let refreshed = false;
+  return requestJson(`${base}${path}`, init, {
+    headers: () => authHeaders(refreshed),
+    unauthorized: async () => {
+      if (refreshed) return false;
+      refreshed = true;
+      return true;
+    },
   });
-  const raw = await res.text();
-  let data: any = {};
-  try {
-    data = raw ? JSON.parse(raw) : {};
-  } catch {
-    throw new Error(res.ok ? 'Memory engine returned a non-JSON response' : `Memory engine ${res.status}`);
-  }
-  if (!res.ok && res.status === 503 && data.error === 'warming_up' && warming < 3) {
-    const retryAfter = Number(res.headers.get('Retry-After'));
-    const baseWait = Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter * 1000 : 2000;
-    await wait(Math.min(baseWait * (warming + 1), 8000));
-    return req(path, init, { ...state, warming: warming + 1 });
-  }
-  if (!res.ok && res.status === 401 && !state.refreshed) {
-    await wait(400);
-    return req(path, init, { ...state, refreshed: true });
-  }
-  if (!res.ok) {
-    const message = data.error === 'warming_up' ? 'Memory is still warming up. Try again.' : data.error || `Memory engine ${res.status}`;
-    throw new Error(message);
-  }
-  return data;
 }
 
 export const engine = {

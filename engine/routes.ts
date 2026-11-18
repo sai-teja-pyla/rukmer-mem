@@ -1,6 +1,6 @@
-import type { Express, Request } from 'express';
+import type { Express, NextFunction, Request, Response } from 'express';
 import crypto from 'crypto';
-import { encryptionAtRest, encryptionWarning, getState, loadState, persistNow, readBlob, saveState, sha, shortestPath, uid } from './core.js';
+import { encryptionAtRest, encryptionWarning, getState, loadState, memoryStoreProblem, memoryStoreSource, noteMemoryStoreProblem, persistNow, readBlob, saveState, sha, shortestPath, uid } from './core.js';
 import {
   chatWithMemory,
   forgetById,
@@ -25,7 +25,7 @@ import {
   flushConsolidation,
 } from './pipeline.js';
 import { upsertFacts } from './facts.js';
-import { extractGraph } from './llm.js';
+import { extractGraph, hasLlm } from './llm.js';
 import { isUsefulFact, pruneJunkMemory } from './quality.js';
 import { buildMemoryInjection } from './inject.js';
 import { completeChat, providerStatus, routeAnthropic, routeGemini, routeGrok, routeOpenAI } from './router.js';
@@ -78,10 +78,40 @@ function emailClaim(token: string) {
   }
 }
 
-function fail(res: { status: (code: number) => { json: (body: unknown) => void } }, e: { status?: number; message?: string }) {
+function fail(
+  res: { set: (name: string, value: string) => void; status: (code: number) => { json: (body: unknown) => void } },
+  e: { status?: number; message?: string; expose?: boolean }
+) {
+  res.set('Cache-Control', 'private, no-store');
+  const status = e?.status && e.status >= 400 && e.status < 600 ? e.status : 500;
+  if (status >= 500) console.error('request failed', e?.message || 'unknown');
+  if (e?.expose && e.message) {
+    res.status(status).json({ error: String(e.message).slice(0, 300) });
+    return;
+  }
   const err = publicError(e);
-  if (err.status >= 500) console.error('request failed', e?.message || 'unknown');
   res.status(err.status).json(err.body);
+}
+
+function privateNoStore(res: { set: (name: string, value: string) => void }) {
+  res.set('Cache-Control', 'private, no-store');
+}
+
+export function memoryErrorMiddleware(err: { status?: number; message?: string; expose?: boolean }, _req: Request, res: Response, next: NextFunction) {
+  if (res.headersSent) return next(err);
+  const status = Number(err?.status) || 500;
+  const message = err?.expose
+    ? String(err.message || 'Memory request failed')
+    : status >= 500
+      ? 'Memory request failed'
+      : String(err?.message || 'Request failed');
+  console.error('request failed', err?.message || message);
+  privateNoStore(res);
+  res.status(status >= 400 && status < 600 ? status : 500).json({ error: message.slice(0, 300) });
+}
+
+function storeIsReady() {
+  return memoryEngineReady() && !memoryStoreProblem();
 }
 
 function memoryScope(req: Request) {
@@ -158,18 +188,20 @@ export async function bootMemoryEngine() {
     return snapshot;
   } catch (err) {
     engineReady = false;
+    if (!memoryStoreProblem()) {
+      const message = err instanceof Error && err.message ? err.message : 'Memory store failed to load';
+      noteMemoryStoreProblem(message);
+    }
     throw err;
   }
 }
 
 export function mountMemoryEngine(app: Express) {
   app.use((req, res, next) => {
-    if (memoryEngineReady() || !engineRoute(req.path)) return next();
+    if (storeIsReady() || !engineRoute(req.path) || req.path === '/health') return next();
+    privateNoStore(res);
     res.set('Retry-After', '2');
-    if (req.path === '/health') {
-      return res.status(503).json({ ok: false, ready: false, error: 'warming_up', engine: 'rukmer-open-core' });
-    }
-    return res.status(503).json({ error: 'warming_up' });
+    res.status(503).json({ error: memoryStoreProblem() || 'Memory store is still loading', ready: false });
   });
   app.use(memoryAuth);
   app.use(rejectIdentityOverride);
@@ -203,11 +235,19 @@ export function mountMemoryEngine(app: Express) {
   });
 
   app.get('/health', (_req, res) => {
-    res.json({
-      ok: true,
-      ready: true,
+    const problem = memoryStoreProblem();
+    const ready = storeIsReady();
+    privateNoStore(res);
+    if (!ready) res.set('Retry-After', '2');
+    res.status(ready ? 200 : 503).json({
+      ok: ready,
+      ready,
+      error: ready ? null : problem || 'Memory store is still loading',
       engine: 'rukmer-open-core',
       isolation: 'per-user',
+      store: memoryStoreSource(),
+      storeError: problem || null,
+      dependencies: { memoryStore: ready ? 'ok' : problem ? 'error' : 'loading' },
       encryptionAtRest: encryptionAtRest(),
       encryptionWarning: encryptionWarning(),
       rateLimiting: true,
@@ -215,7 +255,7 @@ export function mountMemoryEngine(app: Express) {
       debugMode: debugRoutesEnabled(),
       training: false,
       providers: providerStatus(),
-      llm: stats().llm,
+      llm: hasLlm(),
     });
   });
 
@@ -376,6 +416,7 @@ export function mountMemoryEngine(app: Express) {
 
   app.get('/v3/tags', (req, res) => {
     try {
+      privateNoStore(res);
       res.json({ tags: listTags(uidOf(req)), homeTag: homeTag(uidOf(req)) });
     } catch (e: any) {
       fail(res, e);
@@ -686,6 +727,7 @@ export function mountMemoryEngine(app: Express) {
 
   app.get('/v4/graph', (req, res) => {
     try {
+      privateNoStore(res);
       const uid = uidOf(req);
       const requested = String(req.query.containerTag || '').trim();
       res.json(graphPayload(requested ? tagOf(req) : undefined, uid));
@@ -986,4 +1028,6 @@ export function mountMemoryEngine(app: Express) {
       fail(res, e);
     }
   });
+
+  app.use(memoryErrorMiddleware);
 }
