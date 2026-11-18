@@ -35,6 +35,7 @@ import { WHATS_NEW } from '../../content/whatsNew';
 import { engine } from '../../services/engineClient';
 import { homeTag as makeHomeTag } from '../../services/tenancy';
 import { Skeleton } from './ui';
+import { ScopeFilter, type MemoryScope } from './ScopeFilter';
 
 interface ConsoleLayoutProps {
   user: UserProfile;
@@ -107,7 +108,7 @@ export default function ConsoleLayout({ user, restoring = false }: ConsoleLayout
   const navigate = useNavigate();
   const location = useLocation();
   const [query, setQuery] = useState('');
-  const [memoryScope, setMemoryScope] = useState<'all' | 'private' | 'team'>('all');
+  const [memoryScope, setMemoryScope] = useState<MemoryScope>('all');
   const [memories, setMemories] = useState<MemoryHit[]>([]);
   const [memoryLoading, setMemoryLoading] = useState(false);
   const searchRequest = useRef(0);
@@ -256,17 +257,8 @@ export default function ConsoleLayout({ user, restoring = false }: ConsoleLayout
           <X size={16} />
         </button>
       </div>
-      <div className="px-3 pb-1 flex gap-1">
-        {(['all', 'private', 'team'] as const).map((scope) => (
-          <button
-            key={scope}
-            type="button"
-            onClick={() => setMemoryScope(scope)}
-            className={`h-6 px-2 rounded-md text-[11px] ${memoryScope === scope ? 'bg-white/[0.08] text-zinc-100' : 'text-zinc-500'}`}
-          >
-            {scope === 'all' ? 'All' : scope === 'private' ? 'Mine' : 'Team'}
-          </button>
-        ))}
+      <div className="px-3 pb-1">
+        <ScopeFilter value={memoryScope} onChange={setMemoryScope} />
       </div>
 
       <nav className="flex-1 overflow-y-auto px-2 pb-1">
@@ -476,7 +468,7 @@ export default function ConsoleLayout({ user, restoring = false }: ConsoleLayout
             <PageSkeleton />
           ) : (
             <Suspense fallback={<PageSkeleton />}>
-              <Outlet context={{ user, displayName, homeTag: user.uid ? `u_${user.uid}` : '' }} />
+              <Outlet context={{ user, displayName, homeTag: user.uid ? `u_${user.uid}` : '', memoryScope, setMemoryScope }} />
             </Suspense>
           )}
         </main>

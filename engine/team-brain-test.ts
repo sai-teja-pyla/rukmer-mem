@@ -58,6 +58,28 @@ function has(blob: unknown, marker: string) {
   return JSON.stringify(blob).includes(marker);
 }
 
+getState().orgs.push({ id: 'org_rukmer', name: 'Rukmer', createdBy: 'founder', createdAt: '2020-01-01T00:00:00.000Z' });
+getState().orgMembers.push({ orgId: 'org_rukmer', uid: 'founder', role: 'owner', status: 'active', joinedAt: '2020-01-01T00:00:00.000Z' });
+const legacyOrg = JSON.stringify(getState().orgs.find((org) => org.id === 'org_rukmer'));
+const legacyMembers = JSON.stringify(getState().orgMembers.filter((member) => member.orgId === 'org_rukmer'));
+
+const ada = await hit('POST', '/v4/teams/bootstrap', 'ada', { orgName: 'Rukmer', displayName: 'Ada' });
+const nori = await hit('POST', '/v4/teams/bootstrap', 'nori', { orgName: 'Rukmer', displayName: 'Nori' });
+check(
+  'two users with the same name get their own org and team',
+  ada.status === 200 &&
+    nori.status === 200 &&
+    ada.body.org?.id !== nori.body.org?.id &&
+    ada.body.team?.id !== nori.body.team?.id &&
+    String(ada.body.org?.id).startsWith('org_') &&
+    ada.body.org?.id !== 'org_rukmer' &&
+    nori.body.org?.id !== 'org_rukmer' &&
+    ada.body.org?.name === 'Rukmer' &&
+    nori.body.org?.name === 'Rukmer'
+);
+const adaAgain = await hit('POST', '/v4/teams/bootstrap', 'ada', { orgName: 'Something else', displayName: 'Ada' });
+check('bootstrap twice returns the same team', adaAgain.status === 200 && adaAgain.body.team?.id === ada.body.team?.id && adaAgain.body.org?.id === ada.body.org?.id);
+
 const boot = await hit('POST', '/v4/teams/bootstrap', 'tj', { orgName: 'Rukmer', displayName: 'TJ' });
 const teamId = boot.body.team?.id as string;
 const orgId = boot.body.org?.id as string;
@@ -70,6 +92,8 @@ check('suren accepts the invite', accepted.status === 200 && !!accepted.body.sas
 const surenYes = await hit('POST', `/v4/teams/invites/${accepted.body.id}/confirm`, 'suren', { match: true });
 const tjYes = await hit('POST', `/v4/teams/invites/${accepted.body.id}/confirm`, 'tj', { match: true });
 check('both confirm the emoji code', surenYes.body.status === 'confirmed' || tjYes.body.status === 'confirmed');
+const surenBoot = await hit('POST', '/v4/teams/bootstrap', 'suren', { orgName: 'Rukmer', displayName: 'Suren' });
+check('a member bootstrap reuses the team they joined', surenBoot.status === 200 && surenBoot.body.team?.id === teamId && surenBoot.body.org?.id === orgId);
 
 async function save(user: string, text: string, scope: 'private' | 'team') {
   return hit('POST', '/v3/documents', user, {
@@ -237,6 +261,12 @@ const spoof = await hit('POST', '/v4/search', 'suren', { query: 'sourdough-viole
 const spoofTeam = await hit('POST', '/v4/search', 'suren', { query: 'secret', scope: 'team', teamId: 'team_not_mine' });
 check('spoofed private tag returns no foreign rows', spoof.status < 500 && !JSON.stringify(spoof.body.matches || []).includes('sourdough-violet-42'));
 check('spoofed team id is rejected', spoofTeam.status === 403);
+
+check(
+  'existing org_rukmer is unchanged',
+  JSON.stringify(getState().orgs.find((org) => org.id === 'org_rukmer')) === legacyOrg &&
+    JSON.stringify(getState().orgMembers.filter((member) => member.orgId === 'org_rukmer')) === legacyMembers
+);
 
 server.close();
 if (failures.length) {

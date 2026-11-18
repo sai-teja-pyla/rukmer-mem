@@ -877,17 +877,25 @@ function summarizeTag(tag: string, uid?: string) {
   };
 }
 
-export function listTags(uid?: string) {
+export function listTags(uid?: string, scope: 'all' | 'private' | 'team' = 'all') {
   const state = getState();
-  const allowed = uid ? new Set(readableSpaces(uid).map((space) => space.tag)) : undefined;
+  const spaces = uid ? readableSpaces(uid) : [];
+  const scoped = spaces.filter((space) => scope === 'all' || (scope === 'private' ? space.kind === 'private' : space.kind === 'team'));
+  const allowed = new Set(scoped.map((space) => space.tag));
+  const visible = (tag: string) => {
+    if (!uid) return true;
+    if (scope === 'private') return ownsTag(uid, tag);
+    if (scope === 'team') return allowed.has(tag);
+    return ownsTag(uid, tag) || allowed.has(tag);
+  };
   const tags = [
     ...new Set([
-      ...(allowed ? [...allowed] : []),
+      ...allowed,
       ...state.documents.map((d) => d.containerTag),
     ]),
-  ].filter((tag) => !uid || ownsTag(uid, tag) || !!allowed?.has(tag));
+  ].filter(visible);
   const rows = tags.map((tag) => summarizeTag(tag, uid));
-  if (uid) {
+  if (uid && scope !== 'team') {
     const home = homeTag(uid);
     if (!rows.some((r) => r.tag === home)) rows.unshift({ tag: home, documents: 0, memories: 0, activity: undefined, browserItems: 0, sites: [] });
   }
@@ -955,14 +963,18 @@ function addedAt(facts: { recordedAt?: string; updatedAt?: string; validFrom?: s
   return basis.sort().at(-1);
 }
 
-export function graphPayload(containerTag?: string | null, uid?: string) {
+export function graphPayload(containerTag?: string | null, uid?: string, scope: 'all' | 'private' | 'team' = 'all') {
   const state = getState();
   const tags = new Set<string>();
+  const spaceOk = (kind: string) => scope === 'all' || (scope === 'private' ? kind === 'private' : kind === 'team');
+  const kindOf = (tag: string) => (tag.startsWith('tm_') ? 'team' : tag.startsWith('org_') ? 'org' : 'private');
   if (containerTag) {
-    if (!uid || canAccessTag(uid, containerTag)) tags.add(containerTag);
+    if ((!uid || canAccessTag(uid, containerTag)) && spaceOk(kindOf(containerTag))) tags.add(containerTag);
   } else if (uid) {
-    for (const space of readableSpaces(uid)) tags.add(space.tag);
-    for (const d of state.documents) if (ownsTag(uid, d.containerTag)) tags.add(d.containerTag);
+    for (const space of readableSpaces(uid)) if (spaceOk(space.kind)) tags.add(space.tag);
+    if (scope !== 'team') {
+      for (const d of state.documents) if (ownsTag(uid, d.containerTag)) tags.add(d.containerTag);
+    }
   }
   if (!tags.size) return { nodes: [], edges: [], pathExample: null, tags: [] as string[] };
   const inScope = (tag: string) => tags.has(tag);

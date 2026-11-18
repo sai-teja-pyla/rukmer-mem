@@ -1,13 +1,13 @@
 import { getState, saveState, uid as newId } from './core.js';
 import { audit } from './governance.js';
-import { agentTag, canAccessTag, homeTag, orgTag, scopeFromTag, sessionTag, slugPart } from './tenancy.js';
+import { agentTag, canAccessTag, homeTag, orgTag, scopeFromTag, sessionTag } from './tenancy.js';
 
 export function createOrg(uid: string, name: string) {
   const label = String(name || '').trim().slice(0, 80);
   if (!label) throw Object.assign(new Error('Org name required'), { status: 400 });
-  const id = orgTag(slugPart(label) || newId('org').replace(/^org_/, '').slice(0, 12));
   const state = getState();
-  if (state.orgs.some((o) => o.id === id)) throw Object.assign(new Error('Org already exists'), { status: 409 });
+  let id = newId('org');
+  while (state.orgs.some((org) => org.id === id)) id = newId('org');
   const rec = { id, name: label, createdBy: uid, createdAt: new Date().toISOString() };
   state.orgs.push(rec);
   state.orgMembers.push({ orgId: id, uid, role: 'owner', status: 'active', joinedAt: rec.createdAt });

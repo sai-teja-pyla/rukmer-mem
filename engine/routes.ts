@@ -417,7 +417,8 @@ export function mountMemoryEngine(app: Express) {
   app.get('/v3/tags', (req, res) => {
     try {
       privateNoStore(res);
-      res.json({ tags: listTags(uidOf(req)), homeTag: homeTag(uidOf(req)) });
+      const scope = String(req.query.scope || 'all');
+      res.json({ tags: listTags(uidOf(req), scope === 'private' || scope === 'team' ? scope : 'all'), homeTag: homeTag(uidOf(req)) });
     } catch (e: any) {
       fail(res, e);
     }
@@ -730,7 +731,8 @@ export function mountMemoryEngine(app: Express) {
       privateNoStore(res);
       const uid = uidOf(req);
       const requested = String(req.query.containerTag || '').trim();
-      res.json(graphPayload(requested ? tagOf(req) : undefined, uid));
+      const scope = String(req.query.scope || 'all');
+      res.json(graphPayload(requested ? tagOf(req) : undefined, uid, scope === 'private' || scope === 'team' ? scope : 'all'));
     } catch (e: any) {
       fail(res, e);
     }

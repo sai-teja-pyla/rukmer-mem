@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useOutletContext, useSearchParams } from 'react-router-dom';
+import { ScopeFilter, type MemoryScope } from '../../components/console/ScopeFilter';
 import {
   MessageSquare,
   Search,
@@ -201,7 +202,12 @@ function CircleCheck({ on, onClick, label }: { on: boolean; onClick: () => void;
 }
 
 export default function PlaygroundPage() {
-  const { user, homeTag } = useOutletContext<{ user: UserProfile; homeTag: string }>();
+  const { user, homeTag, memoryScope = 'all', setMemoryScope } = useOutletContext<{
+    user: UserProfile;
+    homeTag: string;
+    memoryScope?: MemoryScope;
+    setMemoryScope?: (scope: MemoryScope) => void;
+  }>();
   const [searchParams] = useSearchParams();
   const mine = homeTag || makeHomeTag(user.uid);
   const [mode, setMode] = useState<Mode>('chat');
@@ -371,6 +377,7 @@ export default function PlaygroundPage() {
       model: model.id,
       provider: model.provider,
       containerTag: tag || mine,
+      scope: memoryScope,
       sources: source,
       useProfile,
       memoriesRetrieved: retrieved,
@@ -383,7 +390,7 @@ export default function PlaygroundPage() {
       compareWithoutMemory: compare,
       prompt: input || null,
     }),
-    [mode, memoryMode, model, tag, source, useProfile, retrieved, strictness, rerank, retrieval, rewrite, aggregate, include, compare, input]
+    [mode, memoryMode, model, tag, memoryScope, source, useProfile, retrieved, strictness, rerank, retrieval, rewrite, aggregate, include, compare, input]
   );
 
   const requestPreview = useMemo(() => {
@@ -457,6 +464,7 @@ export default function PlaygroundPage() {
       query: value,
       prompt: value,
       containerTag: tag || mine,
+      scope: memoryScope,
       sources: source,
       memoriesRetrieved: retrieved,
       matchStrictness: strictness,
@@ -498,6 +506,7 @@ export default function PlaygroundPage() {
             model: model.id,
             messages: history,
             containerTag: tag || mine,
+            scope: memoryScope,
             memoriesRetrieved: retrieved,
             matchStrictness: strictness,
             retrieval,
@@ -511,6 +520,7 @@ export default function PlaygroundPage() {
             'x-container-tag': tag || mine,
             'x-rukmer-memory': compare ? 'off' : 'on',
             'x-rukmer-mode': memoryMode,
+            'x-rukmer-scope': memoryScope,
           }
         );
         const content = String(out.choices?.[0]?.message?.content || '').trim();
@@ -923,6 +933,10 @@ export default function PlaygroundPage() {
 
           <div className="flex-1 min-h-0 overflow-y-auto px-4 pb-3">
             <p className="text-[10px] tracking-[0.14em] text-zinc-500 mb-2">MEMORY</p>
+            <div className="mb-3">
+              <p className="text-[12px] text-zinc-400 mb-1">Scope</p>
+              <ScopeFilter value={memoryScope} onChange={(scope) => setMemoryScope?.(scope)} />
+            </div>
             <div className="grid grid-cols-2 rounded-lg border border-white/[0.08] bg-[#0c0c0e] p-0.5 mb-3">
               <button
                 onClick={() => setMemoryMode('agentic')}

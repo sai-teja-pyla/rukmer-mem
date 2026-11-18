@@ -6,6 +6,7 @@ import { countMemories } from '../../services/memoryCount';
 import { homeTag as makeHomeTag } from '../../services/tenancy';
 import { useMemoryResource } from '../../hooks/useMemoryResource';
 import { GraphCountLabel, GraphStatus, graphDataText, graphView, nodeLabel } from './memoryStates';
+import { ScopeFilter, type MemoryScope } from '../../components/console/ScopeFilter';
 import type { UserProfile } from '../../types';
 
 function sourceMark(node: { source?: string; site?: string; browser?: string }) {
@@ -272,17 +273,18 @@ function Legend() {
 }
 
 export default function MemoryGraphPage() {
-  const ctx = useOutletContext<{ user: UserProfile; homeTag: string }>();
+  const ctx = useOutletContext<{ user: UserProfile; homeTag: string; memoryScope?: MemoryScope; setMemoryScope?: (scope: MemoryScope) => void }>();
   const homeTag = ctx?.homeTag || (ctx?.user?.uid ? makeHomeTag(ctx.user.uid) : '');
+  const memoryScope = ctx?.memoryScope || 'all';
   const resource = useMemoryResource(
     async () => {
-      const [data, tags] = await Promise.all([engine.graph(), engine.tags()]);
+      const [data, tags] = await Promise.all([engine.graph(undefined, memoryScope), engine.tags(memoryScope)]);
       return {
         graph: { nodes: data.nodes || [], edges: data.edges || [], tags: data.tags || [] } as GraphData,
         tags: (tags.tags || []) as { tag: string; memories: number }[],
       };
     },
-    { enabled: !!homeTag, refreshMs: 8000 }
+    { enabled: !!homeTag, refreshMs: 8000, reloadKey: memoryScope }
   );
   const graph = resource.data?.graph || EMPTY_GRAPH;
   const tagRows = resource.data?.tags || [];
@@ -502,7 +504,8 @@ export default function MemoryGraphPage() {
         </div>
       ) : null}
 
-      <div ref={menuRef} className="absolute top-3 left-3 z-20">
+      <div ref={menuRef} className="absolute top-3 left-3 z-20 flex flex-col items-start gap-2">
+        <ScopeFilter className="graph-panel rounded-xl px-1 py-0.5" value={memoryScope} onChange={(scope) => ctx?.setMemoryScope?.(scope)} />
         <button
           type="button"
           onClick={() => setMenuOpen((v) => !v)}

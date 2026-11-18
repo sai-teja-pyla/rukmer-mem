@@ -174,6 +174,8 @@ export function TeamSettingsPage() {
   const [invite, setInvite] = useState<any>(null);
   const [error, setError] = useState('');
   const [teamId, setTeamId] = useState('');
+  const [teamName, setTeamName] = useState('');
+  const suggested = `${displayName || 'My'}'s team`;
   const load = () => {
     engine
       .teams()
@@ -193,7 +195,7 @@ export function TeamSettingsPage() {
   const start = async () => {
     setError('');
     try {
-      await engine.bootstrapTeam('Rukmer', displayName);
+      await engine.bootstrapTeam(teamName.trim() || suggested, displayName);
       load();
     } catch (err: any) {
       setError(err.message || 'Could not create the team brain');
@@ -227,6 +229,16 @@ export function TeamSettingsPage() {
       {!team ? (
         <Panel className="p-4">
           <p className="text-[13px] text-zinc-300 mb-3">Start a shared team brain. Personal memories stay private until you choose team.</p>
+          <label className="block text-[12px] text-zinc-500 mb-1" htmlFor="team-brain-name">
+            Team name
+          </label>
+          <input
+            id="team-brain-name"
+            value={teamName}
+            onChange={(e) => setTeamName(e.target.value)}
+            placeholder={suggested}
+            className="h-8 w-full max-w-sm px-2.5 mb-3 rounded-lg border border-white/[0.08] bg-[#0c0c0e] text-[13px] text-zinc-100 outline-none placeholder:text-zinc-600"
+          />
           <button type="button" onClick={() => void start()} className="h-8 px-3 rounded-lg bg-[#2563eb] text-[12.5px] text-white">
             Create team brain
           </button>

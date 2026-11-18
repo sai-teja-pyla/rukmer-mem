@@ -2,9 +2,10 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 
 export type MemoryPhase = 'loading' | 'error' | 'ready';
 
-export function useMemoryResource<T>(loader: () => Promise<T>, opts?: { enabled?: boolean; refreshMs?: number }) {
+export function useMemoryResource<T>(loader: () => Promise<T>, opts?: { enabled?: boolean; refreshMs?: number; reloadKey?: string }) {
   const enabled = opts?.enabled !== false;
   const refreshMs = opts?.refreshMs ?? 0;
+  const reloadKey = opts?.reloadKey ?? '';
   const [data, setData] = useState<T | null>(null);
   const [error, setError] = useState('');
   const [phase, setPhase] = useState<MemoryPhase>('loading');
@@ -54,7 +55,7 @@ export function useMemoryResource<T>(loader: () => Promise<T>, opts?: { enabled?
       if (hasData.current) load();
     }, refreshMs);
     return () => clearInterval(timer);
-  }, [enabled, load, refreshMs]);
+  }, [enabled, load, refreshMs, reloadKey]);
 
   return { data, error, phase, retry, reload: load };
 }

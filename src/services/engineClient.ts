@@ -53,7 +53,7 @@ export const engine = {
   listDocs: (containerTag?: string) =>
     req('/v3/documents/list', { method: 'POST', body: JSON.stringify({ containerTag }) }),
   getDoc: (id: string) => req(`/v3/documents/${encodeURIComponent(id)}`),
-  tags: () => req('/v3/tags'),
+  tags: (scope?: 'all' | 'private' | 'team') => req(`/v3/tags${scope && scope !== 'all' ? `?scope=${encodeURIComponent(scope)}` : ''}`),
   search: (body: any) => req('/v4/search', { method: 'POST', body: JSON.stringify(body) }),
   chat: (body: any) => req('/v4/chat', { method: 'POST', body: JSON.stringify(body) }),
   remember: (body: any) => req('/v4/remember', { method: 'POST', body: JSON.stringify(body) }),
@@ -61,7 +61,13 @@ export const engine = {
   protocol: () => req('/v4/protocol'),
   tools: () => req('/v4/tools'),
   runTool: (name: string, args: any) => req('/v4/tools/execute', { method: 'POST', body: JSON.stringify({ name, arguments: args }) }),
-  graph: (containerTag?: string) => req(`/v4/graph${containerTag ? `?containerTag=${encodeURIComponent(containerTag)}` : ''}`),
+  graph: (containerTag?: string, scope?: 'all' | 'private' | 'team') => {
+    const params = new URLSearchParams();
+    if (containerTag) params.set('containerTag', containerTag);
+    if (scope && scope !== 'all') params.set('scope', scope);
+    const query = params.toString();
+    return req(`/v4/graph${query ? `?${query}` : ''}`);
+  },
   stats: () => req('/v3/stats'),
   insights: () => req('/v3/insights'),
   jobs: () => req('/v3/jobs'),

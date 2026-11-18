@@ -1,14 +1,18 @@
 import React, { useState } from 'react';
+import { useOutletContext } from 'react-router-dom';
 import { Search } from 'lucide-react';
 import { PageHeader, DocLink, Panel, EmptyState, TableHead } from '../../components/console/ui';
 import { engine } from '../../services/engineClient';
 import { useMemoryResource } from '../../hooks/useMemoryResource';
+import { ScopeFilter, type MemoryScope } from '../../components/console/ScopeFilter';
 import { ContainerTagsStatus, TagRows, resourceView, type TagRow } from './memoryStates';
 
 export default function ContainerTagsPage() {
+  const ctx = useOutletContext<{ memoryScope?: MemoryScope; setMemoryScope?: (scope: MemoryScope) => void }>();
+  const memoryScope = ctx?.memoryScope || 'all';
   const [q, setQ] = useState('');
   const [kind, setKind] = useState<'all' | 'documents' | 'memories'>('all');
-  const resource = useMemoryResource(() => engine.tags() as Promise<{ tags?: TagRow[] }>);
+  const resource = useMemoryResource(() => engine.tags(memoryScope) as Promise<{ tags?: TagRow[] }>, { reloadKey: memoryScope });
   const tags = resource.data?.tags || [];
   const view = resourceView(resource.phase, tags.length);
 
@@ -34,6 +38,7 @@ export default function ContainerTagsPage() {
           <Search size={13} className="text-zinc-500" />
           <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search tags..." className="bg-transparent text-[13px] outline-none w-full placeholder:text-zinc-600" />
         </div>
+        <ScopeFilter value={memoryScope} onChange={(scope) => ctx?.setMemoryScope?.(scope)} />
         {(['all', 'documents', 'memories'] as const).map((id) => (
           <button
             key={id}
@@ -49,8 +54,12 @@ export default function ContainerTagsPage() {
         <TableHead cols={['CONTAINER TAG', 'DOCUMENTS', 'MEMORIES', 'ACTIVITY']} />
         {view === 'ready' && filtered.length > 0 ? (
           <TagRows tags={filtered} />
-        ) : view === 'ready' ? (
-          <EmptyState icon={<Search size={18} />} title="No tags match" body="Try a different search or filter." />
+        ) : view === 'ready' || (view === 'empty' && memoryScope !== 'all') ? (
+          <EmptyState
+            icon={<Search size={18} />}
+            title={memoryScope === 'team' ? 'No team tags' : memoryScope === 'private' ? 'No private tags' : 'No tags match'}
+            body={memoryScope === 'all' ? 'Try a different search or filter.' : 'This scope has no container tags.'}
+          />
         ) : (
           <ContainerTagsStatus phase={view} onRetry={resource.retry} />
         )}

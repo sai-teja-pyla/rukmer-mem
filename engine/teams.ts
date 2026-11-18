@@ -84,15 +84,25 @@ export function listMyTeams(actor: string) {
 export function bootstrapTeam(actor: string, orgName: string, displayName?: string) {
   const state = getState();
   const name = String(displayName || actor).slice(0, 80);
-  let org = state.orgs.find((row) => state.orgMembers.some((member) => member.orgId === row.id && member.uid === actor && member.role === 'owner' && member.status !== 'removed'));
-  if (!org) {
-    org = createOrg(actor, orgName || 'Rukmer');
-  }
-  let team = state.teams.find((row) => row.orgId === org!.id && row.kind === 'general' && !row.archivedAt);
+  const label = String(orgName || `${name}'s team`).trim().slice(0, 80) || `${name}'s team`;
+  const orgMembership = (orgId: string) =>
+    state.orgMembers.find((member) => member.orgId === orgId && member.uid === actor && member.status !== 'removed');
+  const joined = state.teams.find((row) => !row.archivedAt && isTeamMember(actor, row.id));
+  const joinedOrg = joined ? state.orgs.find((row) => row.id === (joined.orgId || joined.tenantId)) : undefined;
+  let org =
+    state.orgs.find((row) => orgMembership(row.id)?.role === 'owner') ||
+    state.orgs.find((row) => !!orgMembership(row.id)) ||
+    joinedOrg;
+  if (!org) org = createOrg(actor, label);
+  let team =
+    state.teams.find((row) => (row.orgId === org!.id || row.tenantId === org!.id) && !row.archivedAt && isTeamMember(actor, row.id)) ||
+    (orgMembership(org.id)?.role === 'owner'
+      ? state.teams.find((row) => row.orgId === org!.id && row.kind === 'general' && !row.archivedAt)
+      : undefined);
   if (!team) {
     team = {
       id: uid('team'),
-      name: 'General',
+      name: label,
       tenantId: org.id,
       orgId: org.id,
       kind: 'general',
@@ -104,10 +114,12 @@ export function bootstrapTeam(actor: string, orgName: string, displayName?: stri
   }
   const existing = state.teamMembers.find((row) => row.teamId === team!.id && row.uid === actor);
   if (!existing) {
-    state.teamMembers.push({ teamId: team.id, uid: actor, role: 'owner', status: 'active', joinedAt: team.createdAt, displayName: name });
+    const orgRole = orgMembership(org.id)?.role;
+    const role = orgRole === 'owner' || orgRole === 'admin' ? orgRole : 'member';
+    state.teamMembers.push({ teamId: team.id, uid: actor, role, status: 'active', joinedAt: new Date().toISOString(), displayName: name });
   } else {
     existing.status = 'active';
-    existing.role = existing.role || 'owner';
+    if (!existing.role) existing.role = 'member';
     if (name) existing.displayName = name;
   }
   const orgMember = state.orgMembers.find((row) => row.orgId === org!.id && row.uid === actor);
@@ -355,7 +367,7 @@ function uidOf(req: { memoryUser?: { uid?: string } }) {
 export function mountTeamRoutes(app: Express) {
   app.post('/v4/teams/bootstrap', (req, res) => {
     try {
-      res.json(bootstrapTeam(uidOf(req), String(req.body?.orgName || 'Rukmer'), req.body?.displayName));
+      res.json(bootstrapTeam(uidOf(req), String(req.body?.orgName || ''), req.body?.displayName));
     } catch (e: any) {
       res.status(e.status || 500).json({ error: e.message || 'Could not create the team' });
     }
