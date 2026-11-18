@@ -58,7 +58,7 @@ function memberView(teamId: string) {
     .teamMembers.filter((row) => row.teamId === teamId && row.status !== 'removed')
     .map((row) => ({
       uid: row.uid,
-      displayName: row.displayName || row.uid,
+      displayName: row.displayName && row.displayName !== row.uid ? row.displayName : '',
       email: row.email || '',
       role: row.role,
       joinedAt: row.joinedAt,
@@ -76,7 +76,14 @@ export function listMyTeams(actor: string) {
       members: memberView(team.id),
       invites: state.teamInvites
         .filter((invite) => invite.teamId === team.id && (invite.status === 'pending' || invite.status === 'accepted'))
-        .map((invite) => ({ id: invite.id, role: invite.role, status: invite.status, expiresAt: invite.expiresAt, sas: invite.sas || '' })),
+        .map((invite) => ({
+          id: invite.id,
+          role: invite.role,
+          status: invite.status,
+          expiresAt: invite.expiresAt,
+          sas: invite.sas || '',
+          sasDigits: invite.sasDigits || '',
+        })),
     })),
   };
 }
@@ -212,7 +219,7 @@ function noteBadCode(inviteId: string) {
   badCodes.set(inviteId, row);
 }
 
-export function acceptInvite(actor: string, tokenOrCode: string, publicKey: string, email = '', inviteId = '') {
+export function acceptInvite(actor: string, tokenOrCode: string, publicKey: string, email = '', inviteId = '', displayName = '') {
   const state = getState();
   const invite = (inviteId ? state.teamInvites.find((row) => row.id === inviteId) : undefined) || inviteByHash(tokenOrCode);
   if (!invite || !freshInvite(invite)) throw Object.assign(new Error('Invite is not valid'), { status: 400 });
@@ -228,7 +235,8 @@ export function acceptInvite(actor: string, tokenOrCode: string, publicKey: stri
   if (invite.inviteeUid && invite.inviteeUid !== actor) throw Object.assign(new Error('Invite is not valid'), { status: 400 });
   invite.inviteeUid = actor;
   invite.inviteeEmail = email || invite.inviteeEmail;
-  invite.inviteeKey = publicKey || invite.inviteeKey || actor;
+  if (displayName) invite.inviteeName = String(displayName).slice(0, 80);
+  if (publicKey) invite.inviteeKey = publicKey;
   invite.status = 'accepted';
   const team = state.teams.find((row) => row.id === invite.teamId);
   const inviter = state.teamMembers.find((row) => row.teamId === invite.teamId && row.uid === invite.createdBy);
@@ -238,7 +246,17 @@ export function acceptInvite(actor: string, tokenOrCode: string, publicKey: stri
     invite.sasDigits = sas.sasDigits;
   }
   saveState();
-  return { id: invite.id, sas: invite.sas || '', sasDigits: invite.sasDigits || '', teamName: team?.name || 'Team', inviterName: inviter?.displayName || invite.createdBy };
+  const inviterName = inviter?.displayName && inviter.displayName !== inviter.uid ? inviter.displayName : '';
+  return {
+    id: invite.id,
+    sas: invite.sas || '',
+    sasDigits: invite.sasDigits || '',
+    teamName: team?.name || 'Team',
+    inviterName,
+    status: invite.status,
+    inviteeConfirmed: !!invite.inviteeConfirmedAt,
+    inviterConfirmed: !!invite.inviterConfirmedAt,
+  };
 }
 
 export function readInvite(actor: string, id: string) {
@@ -246,7 +264,20 @@ export function readInvite(actor: string, id: string) {
   if (!invite) throw Object.assign(new Error('Invite not found'), { status: 404 });
   if (invite.createdBy !== actor && invite.inviteeUid !== actor) throw Object.assign(new Error('Invite not found'), { status: 404 });
   freshInvite(invite);
-  return { id: invite.id, status: invite.status, sas: invite.sas || '', sasDigits: invite.sasDigits || '', teamId: invite.teamId };
+  const team = getState().teams.find((row) => row.id === invite.teamId);
+  const inviter = getState().teamMembers.find((row) => row.teamId === invite.teamId && row.uid === invite.createdBy);
+  const inviterName = inviter?.displayName && inviter.displayName !== inviter.uid ? inviter.displayName : '';
+  return {
+    id: invite.id,
+    status: invite.status,
+    sas: invite.sas || '',
+    sasDigits: invite.sasDigits || '',
+    teamId: invite.teamId,
+    teamName: team?.name || '',
+    inviterName,
+    inviterConfirmed: !!invite.inviterConfirmedAt,
+    inviteeConfirmed: !!invite.inviteeConfirmedAt,
+  };
 }
 
 export function confirmInvite(actor: string, id: string, match: boolean, publicKey = '') {
@@ -260,13 +291,7 @@ export function confirmInvite(actor: string, id: string, match: boolean, publicK
     saveState();
     return { status: 'revoked' };
   }
-  if (actor === invite.createdBy && publicKey) invite.inviterKey = publicKey;
-  if (actor === invite.inviteeUid && publicKey) invite.inviteeKey = publicKey;
-  if (invite.inviterKey && invite.inviteeKey && !invite.sas) {
-    const sas = sasFor(invite.id, invite.inviterKey, invite.inviteeKey);
-    invite.sas = sas.sas;
-    invite.sasDigits = sas.sasDigits;
-  }
+  if (!invite.sas) throw Object.assign(new Error('Both keys are required before you can confirm'), { status: 400 });
   const now = new Date().toISOString();
   if (actor === invite.createdBy) invite.inviterConfirmedAt = now;
   if (actor === invite.inviteeUid) invite.inviteeConfirmedAt = now;
@@ -285,7 +310,7 @@ export function confirmInvite(actor: string, id: string, match: boolean, publicK
         role: invite.role,
         status: 'active',
         joinedAt: now,
-        displayName: invite.inviteeUid,
+        displayName: invite.inviteeName || '',
         email: invite.inviteeEmail,
       });
     }
@@ -397,7 +422,16 @@ export function mountTeamRoutes(app: Express) {
   app.post('/v4/teams/invites/accept', (req, res) => {
     try {
       const token = String(req.body?.token || req.body?.code || '');
-      res.json(acceptInvite(uidOf(req), token, String(req.body?.publicKey || ''), String(req.body?.email || ''), String(req.body?.id || '')));
+      res.json(
+        acceptInvite(
+          uidOf(req),
+          token,
+          String(req.body?.publicKey || ''),
+          String(req.body?.email || ''),
+          String(req.body?.id || ''),
+          String(req.body?.displayName || '')
+        )
+      );
     } catch (e: any) {
       res.status(e.status || 500).json({ error: e.message || 'Could not accept the invite' });
     }

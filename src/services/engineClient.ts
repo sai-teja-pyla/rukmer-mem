@@ -95,7 +95,7 @@ export const engine = {
     req('/v4/teams/spaces', { method: 'POST', body: JSON.stringify({ orgId, slug, name }) }),
   createInvite: (teamId: string, role = 'member', publicKey = '') =>
     req(`/v4/teams/${encodeURIComponent(teamId)}/invites`, { method: 'POST', body: JSON.stringify({ role, publicKey }) }),
-  acceptInvite: (body: { token?: string; code?: string; id?: string; publicKey?: string; email?: string }) =>
+  acceptInvite: (body: { token?: string; code?: string; id?: string; publicKey?: string; email?: string; displayName?: string }) =>
     req('/v4/teams/invites/accept', { method: 'POST', body: JSON.stringify(body) }),
   readInvite: (id: string) => req(`/v4/teams/invites/${encodeURIComponent(id)}`),
   confirmInvite: (id: string, match: boolean, publicKey = '') =>

@@ -87,11 +87,27 @@ check('tj bootstraps a general team', boot.status === 200 && !!teamId && String(
 
 const invited = await hit('POST', `/v4/teams/${teamId}/invites`, 'tj', { role: 'member', publicKey: 'tj-key' });
 check('invite returns a link and code', invited.status === 200 && String(invited.body.inviteUrl || '').includes('/join/') && !!invited.body.code);
-const accepted = await hit('POST', '/v4/teams/invites/accept', 'suren', { token: invited.body.token, publicKey: 'suren-key' });
-check('suren accepts the invite', accepted.status === 200 && !!accepted.body.sas);
+const bare = await hit('POST', `/v4/teams/${teamId}/invites`, 'tj', { role: 'member' });
+const bareAccept = await hit('POST', '/v4/teams/invites/accept', 'keyless', { token: bare.body.token, displayName: 'Keyless' });
+const bareConfirm = await hit('POST', `/v4/teams/invites/${bareAccept.body.id}/confirm`, 'keyless', { match: true });
+const bareInviter = await hit('POST', `/v4/teams/invites/${bareAccept.body.id}/confirm`, 'tj', { match: true });
+check('accept without both keys yields no sas', bareAccept.status === 200 && !bareAccept.body.sas);
+check('confirm with empty sas is rejected', bareConfirm.status === 400 && bareInviter.status === 400);
+const accepted = await hit('POST', '/v4/teams/invites/accept', 'suren', { token: invited.body.token, publicKey: 'suren-key', displayName: 'Suren' });
+check('suren accepts the invite', accepted.status === 200 && !!accepted.body.sas && accepted.body.inviterName === 'TJ');
+const tjInvite = await hit('GET', `/v4/teams/invites/${accepted.body.id}`, 'tj');
+const surenInvite = await hit('GET', `/v4/teams/invites/${accepted.body.id}`, 'suren');
+check(
+  'accept yields the same sas on both sides',
+  !!tjInvite.body.sas && tjInvite.body.sas === accepted.body.sas && surenInvite.body.sas === accepted.body.sas && tjInvite.body.sasDigits === surenInvite.body.sasDigits
+);
 const surenYes = await hit('POST', `/v4/teams/invites/${accepted.body.id}/confirm`, 'suren', { match: true });
 const tjYes = await hit('POST', `/v4/teams/invites/${accepted.body.id}/confirm`, 'tj', { match: true });
 check('both confirm the emoji code', surenYes.body.status === 'confirmed' || tjYes.body.status === 'confirmed');
+const roster = await hit('GET', '/v4/teams', 'tj');
+const surenMember = (roster.body.teams || []).flatMap((row: { members?: { uid: string; displayName?: string }[] }) => row.members || []).find((member: { uid: string }) => member.uid === 'suren');
+const keylessMember = (roster.body.teams || []).flatMap((row: { members?: { uid: string }[] }) => row.members || []).find((member: { uid: string }) => member.uid === 'keyless');
+check('confirmed invite adds the invitee by display name', surenMember?.displayName === 'Suren' && !keylessMember);
 const surenBoot = await hit('POST', '/v4/teams/bootstrap', 'suren', { orgName: 'Rukmer', displayName: 'Suren' });
 check('a member bootstrap reuses the team they joined', surenBoot.status === 200 && surenBoot.body.team?.id === teamId && surenBoot.body.org?.id === orgId);
 
@@ -267,6 +283,20 @@ check(
   JSON.stringify(getState().orgs.find((org) => org.id === 'org_rukmer')) === legacyOrg &&
     JSON.stringify(getState().orgMembers.filter((member) => member.orgId === 'org_rukmer')) === legacyMembers
 );
+
+const React = (await import('react')).default;
+const { renderToStaticMarkup } = await import('react-dom/server');
+const { TeamInviteConfirm } = await import('../src/components/TeamInviteConfirm.js');
+const waitingOpen = renderToStaticMarkup(React.createElement(TeamInviteConfirm, { phase: 'waiting-open' }));
+const waitingKeys = renderToStaticMarkup(React.createElement(TeamInviteConfirm, { phase: 'waiting-keys' }));
+const confirmUi = renderToStaticMarkup(React.createElement(TeamInviteConfirm, { phase: 'confirm', sas: '🦊🚀🌵🎈🍋🔔', sasDigits: '123456' }));
+const waitingInviter = renderToStaticMarkup(React.createElement(TeamInviteConfirm, { phase: 'waiting-inviter', inviterName: 'TJ' }));
+const liveUi = renderToStaticMarkup(React.createElement(TeamInviteConfirm, { phase: 'live' }));
+check('inviter waits until the link is opened', waitingOpen.includes('Waiting for teammate to open the link') && !waitingOpen.includes('They match'));
+check('invitee waits for both keys before matching', waitingKeys.includes('Waiting for both keys') && !waitingKeys.includes('They match'));
+check('both sides can match the emoji code', confirmUi.includes('🦊🚀🌵🎈🍋🔔') && confirmUi.includes('123456') && confirmUi.includes('They match') && confirmUi.includes('match'));
+check('invitee waits for the inviter by name', waitingInviter.includes('Waiting for TJ to confirm'));
+check('a confirmed invite says the team brain is live', liveUi.includes('Team brain is live') && !liveUi.includes('They match'));
 
 server.close();
 if (failures.length) {

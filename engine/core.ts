@@ -202,6 +202,7 @@ export interface TeamInviteRec {
   status: 'pending' | 'accepted' | 'confirmed' | 'expired' | 'revoked';
   inviteeUid?: string;
   inviteeEmail?: string;
+  inviteeName?: string;
   inviterKey?: string;
   inviteeKey?: string;
   sas?: string;

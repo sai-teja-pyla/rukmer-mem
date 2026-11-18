@@ -5,6 +5,9 @@ import { PageHeader, DocLink, Panel, Row, Toggle, PrimaryButton, GhostButton, Co
 import type { UserProfile } from '../../types';
 import { loadProviderKeys, saveProviderKeys, type ProviderKeys } from '../../services/providerKeys';
 import { engine } from '../../services/engineClient';
+import { browserKey, saveTeamKey } from '../../services/teamKeys';
+import { inviterPhase } from '../../services/teamInviteFlow';
+import { TeamInviteConfirm } from '../../components/TeamInviteConfirm';
 import { auth } from '../../firebase';
 import { signOut } from 'firebase/auth';
 import { useUserSettings } from '../../hooks/useUserSettings';
@@ -168,6 +171,58 @@ export function GeneralSettingsPage() {
   );
 }
 
+function InviteRow({
+  invite,
+  onChange,
+  onError,
+}: {
+  invite: { id: string; status: string; sas?: string; sasDigits?: string };
+  onChange: () => void;
+  onError: (message: string) => void;
+}) {
+  const [row, setRow] = useState(invite);
+  useEffect(() => {
+    let stop = false;
+    const tick = () => {
+      engine
+        .readInvite(invite.id)
+        .then((next) => {
+          if (!stop) setRow((current) => ({ ...current, ...next }));
+        })
+        .catch(() => undefined);
+    };
+    tick();
+    const timer = window.setInterval(tick, 2000);
+    return () => {
+      stop = true;
+      window.clearInterval(timer);
+    };
+  }, [invite.id]);
+  const phase = inviterPhase(row);
+  const confirm = async (match: boolean) => {
+    try {
+      await engine.confirmInvite(invite.id, match);
+      onChange();
+    } catch (err: any) {
+      onError(err.message || 'Could not confirm');
+    }
+  };
+  return (
+    <div className="px-4 py-3 border-t border-white/[0.06]">
+      <TeamInviteConfirm
+        phase={phase}
+        sas={row.sas}
+        sasDigits={row.sasDigits}
+        onMatch={() => void confirm(true)}
+        onMismatch={() => void confirm(false)}
+      />
+      <button type="button" onClick={() => void engine.revokeInvite(invite.id).then(onChange).catch((err) => onError(err.message))} className="mt-2 text-[12px] text-zinc-400">
+        Revoke
+      </button>
+    </div>
+  );
+}
+
 export function TeamSettingsPage() {
   const { user, displayName } = useOutletContext<Ctx>();
   const [data, setData] = useState<any>({ teams: [] });
@@ -205,7 +260,9 @@ export function TeamSettingsPage() {
     if (!team) return;
     setError('');
     try {
-      const created = await engine.createInvite(team.id, 'member');
+      const keys = await browserKey();
+      const created = await engine.createInvite(team.id, 'member', keys.publicKey);
+      await saveTeamKey(created.id, keys.privateKey);
       setInvite(created);
       load();
     } catch (err: any) {
@@ -260,12 +317,12 @@ export function TeamSettingsPage() {
           {(team.members || []).map((member: { uid: string; displayName?: string; email?: string; role: string; joinedAt?: string; lastActiveAt?: string }) => (
             <div key={member.uid} className="grid grid-cols-[2fr_1fr_1fr_1fr] px-4 py-3.5 text-[13px] items-center border-t border-white/[0.06]">
               <div>
-                <p className="text-zinc-100">{member.displayName || member.uid}</p>
+                <p className="text-zinc-100">{member.displayName || member.email || 'Teammate'}</p>
                 <p className="text-[12px] text-zinc-500">{member.email || member.lastActiveAt || '—'}</p>
               </div>
               {canAdmin && member.uid !== user.uid ? (
                 <select
-                  aria-label={`Role for ${member.displayName || member.uid}`}
+                  aria-label={`Role for ${member.displayName || member.email || 'teammate'}`}
                   value={member.role}
                   onChange={(e) => void engine.setTeammateRole(team.id, member.uid, e.target.value).then(load)}
                   className="bg-transparent text-zinc-300"
@@ -281,13 +338,8 @@ export function TeamSettingsPage() {
               <span className="text-zinc-400">{member.joinedAt ? new Date(member.joinedAt).toLocaleDateString() : '—'}</span>
             </div>
           ))}
-          {(team.invites || []).map((row: { id: string; status: string; sas?: string }) => (
-            <div key={row.id} className="px-4 py-2 text-[12px] text-zinc-400 border-t border-white/[0.06] flex justify-between">
-              <span>Pending invite · {row.status} {row.sas || ''}</span>
-              <button type="button" onClick={() => void engine.revokeInvite(row.id).then(load)} className="text-zinc-300">
-                Revoke
-              </button>
-            </div>
+          {(team.invites || []).map((row: { id: string; status: string; sas?: string; sasDigits?: string }) => (
+            <InviteRow key={row.id} invite={row} onChange={load} onError={(message) => setError(message)} />
           ))}
         </Panel>
       )}
