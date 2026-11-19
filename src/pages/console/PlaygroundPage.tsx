@@ -365,7 +365,7 @@ export default function PlaygroundPage() {
       })
       .catch(() => {});
     engine
-      .health()
+      .security()
       .then((d) => setServerProviders(d.providers || {}))
       .catch(() => {});
   }, []);

@@ -11,6 +11,7 @@
     "pressure": "tsx engine/pressure-test.ts",
     "governance": "tsx engine/governance-test.ts",
     "security": "tsx engine/security-test.ts",
+    "storage-privacy": "tsx engine/storage-privacy-test.ts",
     "security-fixes": "tsx engine/security-fixes-test.ts",
     "playground-fixes": "tsx engine/playground-fixes-test.ts",
     "team-brain": "tsx engine/team-brain-test.ts",

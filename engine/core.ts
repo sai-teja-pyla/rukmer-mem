@@ -306,33 +306,66 @@ function empty(): EngineState {
   };
 }
 
-function dataKey() {
-  const raw = process.env.MEMORY_DATA_KEY || '';
+const HEX_KEY = /^[0-9a-fA-F]{64}$/;
+
+function productionRuntime() {
+  return process.env.NODE_ENV === 'production' || !!process.env.K_SERVICE;
+}
+
+/** 64 hex is the key. Local dev may still hash a passphrase. Production never does. */
+function keyMaterial(name: 'MEMORY_DATA_KEY' | 'MEMORY_DATA_KEY_PREVIOUS') {
+  const raw = (process.env[name] || '').trim();
   if (!raw) return null;
-  if (/^[0-9a-fA-F]{64}$/.test(raw)) return Buffer.from(raw, 'hex');
+  if (HEX_KEY.test(raw)) return Buffer.from(raw, 'hex');
+  if (productionRuntime()) return null;
   return crypto.createHash('sha256').update(raw).digest();
 }
 
-export function encryptionAtRest() {
-  return !!dataKey();
+function keyId(key: Buffer) {
+  return crypto.createHash('sha256').update(key).digest('hex').slice(0, 8);
 }
 
-/** Null when MEMORY_DATA_KEY is set. Encryption stays optional; the warning is the signal that the store is plaintext. */
+export function encryptionAtRest() {
+  return !!keyMaterial('MEMORY_DATA_KEY');
+}
+
+/** Null when a usable data key is set. The text stays off the public health body. */
 export function encryptionWarning() {
   if (encryptionAtRest()) return null;
-  return 'MEMORY_DATA_KEY is not set. The memory store is plaintext JSON on disk and in Cloud Storage. Set MEMORY_DATA_KEY (64 hex characters, or a passphrase) to encrypt it with AES-256-GCM.';
+  const raw = (process.env.MEMORY_DATA_KEY || '').trim();
+  if (raw) return 'MEMORY_DATA_KEY must be 64 hex characters.';
+  return 'MEMORY_DATA_KEY is not set.';
 }
 
-/** Whole-store AES-256-GCM. In memory the state stays plaintext so search can run. */
+type StoreEnvelope = { enc?: string; kid?: string; iv?: string; tag?: string; data?: string };
+
+function decryptEnvelope(parsed: StoreEnvelope, key: Buffer): Partial<EngineState> {
+  const decipher = crypto.createDecipheriv('aes-256-gcm', key, Buffer.from(String(parsed.iv || ''), 'base64'));
+  decipher.setAuthTag(Buffer.from(String(parsed.tag || ''), 'base64'));
+  const plain = Buffer.concat([decipher.update(Buffer.from(String(parsed.data || ''), 'base64')), decipher.final()]);
+  return JSON.parse(plain.toString('utf8'));
+}
+
+function envelopeOpens(parsed: StoreEnvelope, key: Buffer) {
+  try {
+    decryptEnvelope(parsed, key);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Whole-store AES-256-GCM under the current key. In memory the state stays plaintext so search can run. */
 export function encodeState(value: unknown) {
   const json = JSON.stringify(value);
-  const key = dataKey();
+  const key = keyMaterial('MEMORY_DATA_KEY');
   if (!key) return json;
   const iv = crypto.randomBytes(12);
   const cipher = crypto.createCipheriv('aes-256-gcm', key, iv);
   const data = Buffer.concat([cipher.update(json, 'utf8'), cipher.final()]);
   return JSON.stringify({
     enc: 'v1',
+    kid: keyId(key),
     iv: iv.toString('base64'),
     tag: cipher.getAuthTag().toString('base64'),
     data: data.toString('base64'),
@@ -340,14 +373,60 @@ export function encodeState(value: unknown) {
 }
 
 export function decodeState(raw: string): Partial<EngineState> {
-  const parsed = JSON.parse(raw);
-  if (!parsed || parsed.enc !== 'v1') return parsed;
-  const key = dataKey();
-  if (!key) throw new Error('MEMORY_DATA_KEY required to read the encrypted store');
-  const decipher = crypto.createDecipheriv('aes-256-gcm', key, Buffer.from(parsed.iv, 'base64'));
-  decipher.setAuthTag(Buffer.from(parsed.tag, 'base64'));
-  const plain = Buffer.concat([decipher.update(Buffer.from(parsed.data, 'base64')), decipher.final()]);
-  return JSON.parse(plain.toString('utf8'));
+  const parsed = JSON.parse(raw) as StoreEnvelope;
+  if (!parsed || parsed.enc !== 'v1') return parsed as Partial<EngineState>;
+  const keys = [];
+  const currentKey = keyMaterial('MEMORY_DATA_KEY');
+  const previousKey = keyMaterial('MEMORY_DATA_KEY_PREVIOUS');
+  if (currentKey) keys.push(currentKey);
+  if (previousKey) keys.push(previousKey);
+  if (!keys.length) throw new Error('MEMORY_DATA_KEY required to read the encrypted store');
+  let last: unknown;
+  for (const key of keys) {
+    try {
+      return decryptEnvelope(parsed, key);
+    } catch (err) {
+      last = err;
+    }
+  }
+  throw last instanceof Error ? last : new Error('MEMORY_DATA_KEY required to read the encrypted store');
+}
+
+let storeNeedsRewrite = false;
+
+function noteRawStore(raw: string) {
+  let parsed: StoreEnvelope | null = null;
+  try {
+    parsed = JSON.parse(raw) as StoreEnvelope;
+  } catch {
+    return;
+  }
+  if (!parsed || typeof parsed !== 'object' || parsed.enc !== 'v1') {
+    storeNeedsRewrite = true;
+    return;
+  }
+  const current = keyMaterial('MEMORY_DATA_KEY');
+  if (current && envelopeOpens(parsed, current)) return;
+  const previous = keyMaterial('MEMORY_DATA_KEY_PREVIOUS');
+  if (previous && envelopeOpens(parsed, previous)) storeNeedsRewrite = true;
+}
+
+export function loadedStoreNeedsReencrypt() {
+  return storeNeedsRewrite;
+}
+
+/** Production boot refuses a missing bucket or a key that is not 64 hex characters. */
+export function assertProductionSecrets() {
+  if (!productionRuntime()) return;
+  const raw = (process.env.MEMORY_DATA_KEY || '').trim();
+  if (!HEX_KEY.test(raw)) {
+    throw Object.assign(new Error('MEMORY_DATA_KEY must be 64 hex characters'), { status: 503 });
+  }
+  const previous = (process.env.MEMORY_DATA_KEY_PREVIOUS || '').trim();
+  if (previous && !HEX_KEY.test(previous)) {
+    throw Object.assign(new Error('MEMORY_DATA_KEY_PREVIOUS must be 64 hex characters'), { status: 503 });
+  }
+  resolveGcsTarget();
 }
 
 let state: EngineState = empty();
@@ -379,16 +458,118 @@ function isMissingStore(err: unknown) {
   return Number((err as { code?: number }).code || 0) === 404;
 }
 
-function gcsTarget() {
-  const bucket = process.env.MEMORY_GCS_BUCKET || (process.env.K_SERVICE ? 'rukmer-saas-data' : '');
-  const object = process.env.MEMORY_GCS_OBJECT || 'engine/engine.json';
-  return bucket ? { bucket, object } : null;
+export type GcsSaveOptions = {
+  contentType: string;
+  cacheControl: 'private, no-store';
+  metadata: { contentType: string; cacheControl: 'private, no-store' };
+  resumable?: false;
+  preconditionOpts?: { ifGenerationMatch: number };
+};
+
+/** Object metadata the library actually writes. No ACL fields. */
+export function gcsSaveOptions(contentType: string, generation?: number): GcsSaveOptions {
+  const options: GcsSaveOptions = {
+    contentType,
+    cacheControl: 'private, no-store',
+    metadata: { contentType, cacheControl: 'private, no-store' },
+  };
+  if (generation !== undefined) {
+    options.resumable = false;
+    options.preconditionOpts = { ifGenerationMatch: generation };
+  }
+  return options;
+}
+
+type GcsFileHandle = {
+  save: (data: string | Buffer, opts: GcsSaveOptions) => Promise<void>;
+  download: () => Promise<[Buffer]>;
+  getMetadata: () => Promise<[{ generation?: number | string }]>;
+};
+
+type GcsBucketHandle = { file: (name: string) => GcsFileHandle };
+
+let testBucketFactory: ((bucket: string) => GcsBucketHandle) | null = null;
+
+export function setGcsClientForTests(factory: ((bucket: string) => GcsBucketHandle) | null) {
+  testBucketFactory = factory;
+}
+
+async function openBucket(name: string): Promise<GcsBucketHandle> {
+  if (testBucketFactory) return testBucketFactory(name);
+  if (process.env.NODE_ENV === 'test') throw new Error('Refusing to contact Cloud Storage from a test');
+  const { Storage } = await import('@google-cloud/storage');
+  return new Storage().bucket(name) as unknown as GcsBucketHandle;
+}
+
+/** Production requires MEMORY_GCS_BUCKET. There is no built-in bucket name. */
+export function resolveGcsTarget(): { bucket: string; object: string } | null {
+  const bucket = (process.env.MEMORY_GCS_BUCKET || '').trim();
+  const object = (process.env.MEMORY_GCS_OBJECT || 'engine/engine.json').trim() || 'engine/engine.json';
+  if (object.includes('..') || object.startsWith('/') || object.includes('\\')) {
+    throw new Error('MEMORY_GCS_OBJECT is invalid');
+  }
+  if (!bucket) {
+    if (productionRuntime()) throw new Error('MEMORY_GCS_BUCKET is required in production');
+    return null;
+  }
+  return { bucket, object };
 }
 
 function gcsFile() {
-  const target = gcsTarget();
+  const target = resolveGcsTarget();
   if (!target) return null;
-  return import('@google-cloud/storage').then(({ Storage }) => new Storage().bucket(target.bucket).file(target.object));
+  return openBucket(target.bucket).then((bucket) => bucket.file(target.object));
+}
+
+export type StoreProbe = (input: { url: string; method: 'HEAD' | 'GET' }) => Promise<{ status: number }>;
+
+let storeProbe: StoreProbe | null = null;
+
+export function setStoreProbeForTests(probe: StoreProbe | null) {
+  storeProbe = probe;
+}
+
+function anonymousObjectUrl(bucket: string, object: string) {
+  const name = object.split('/').map((part) => encodeURIComponent(part)).join('/');
+  return `https://storage.googleapis.com/${encodeURIComponent(bucket)}/${name}`;
+}
+
+function anonymousListUrl(bucket: string) {
+  return `https://storage.googleapis.com/storage/v1/b/${encodeURIComponent(bucket)}/o?maxResults=1&fields=kind`;
+}
+
+async function defaultStoreProbe(input: { url: string; method: 'HEAD' | 'GET' }) {
+  const res = await fetch(input.url, { method: input.method, redirect: 'manual' });
+  await res.body?.cancel?.();
+  return { status: res.status };
+}
+
+/** Unauthenticated HEAD/list. Status 200 fails production boot. The body is never read. */
+export async function assertStoreNotPublic() {
+  if (!productionRuntime()) return;
+  const target = resolveGcsTarget();
+  if (!target) return;
+  const probe = storeProbe || defaultStoreProbe;
+  let objectStatus = 0;
+  try {
+    objectStatus = (await probe({ url: anonymousObjectUrl(target.bucket, target.object), method: 'HEAD' })).status;
+  } catch {
+    objectStatus = 0;
+  }
+  if (objectStatus === 200) {
+    console.error('CRITICAL memory store object is anonymously readable');
+    throw Object.assign(new Error('Memory store is not private'), { status: 503 });
+  }
+  let listStatus = 0;
+  try {
+    listStatus = (await probe({ url: anonymousListUrl(target.bucket), method: 'GET' })).status;
+  } catch {
+    listStatus = 0;
+  }
+  if (listStatus === 200) {
+    console.error('CRITICAL memory bucket listing is anonymously readable');
+    throw Object.assign(new Error('Memory store is not private'), { status: 503 });
+  }
 }
 
 async function pullGcs() {
@@ -396,6 +577,7 @@ async function pullGcs() {
     if (storeReader) {
       const raw = await storeReader();
       if (raw == null) return false;
+      noteRawStore(raw);
       state = { ...empty(), ...decodeState(raw) };
       return true;
     }
@@ -404,7 +586,9 @@ async function pullGcs() {
     const [buf] = await file.download();
     const [meta] = await file.getMetadata();
     gcsGeneration = Number(meta.generation || 0);
-    state = { ...empty(), ...decodeState(buf.toString('utf8')) };
+    const raw = buf.toString('utf8');
+    noteRawStore(raw);
+    state = { ...empty(), ...decodeState(raw) };
     return true;
   } catch (err) {
     if (isMissingStore(err)) return false;
@@ -438,11 +622,7 @@ async function pushGcs(attempt = 0): Promise<boolean> {
   const file = await gcsFile();
   if (!file) return true;
   try {
-    await file.save(encodeState(state), {
-      contentType: 'application/json',
-      resumable: false,
-      preconditionOpts: { ifGenerationMatch: gcsGeneration },
-    });
+    await file.save(encodeState(state), gcsSaveOptions('application/json', gcsGeneration));
     const [meta] = await file.getMetadata();
     gcsGeneration = Number(meta.generation || 0);
     return true;
@@ -520,14 +700,18 @@ function shapeState() {
 }
 
 export async function loadState() {
+  storeNeedsRewrite = false;
   let hadLocal = false;
   try {
     if (fs.existsSync(DATA_FILE)) {
-      state = { ...empty(), ...decodeState(fs.readFileSync(DATA_FILE, 'utf8')) };
+      const raw = fs.readFileSync(DATA_FILE, 'utf8');
+      noteRawStore(raw);
+      state = { ...empty(), ...decodeState(raw) };
       hadLocal = true;
     }
   } catch {
     state = empty();
+    storeNeedsRewrite = false;
   }
   const fromGcs = await pullGcs();
   shapeState();
@@ -555,6 +739,13 @@ export function saveState() {
   }, 250);
 }
 
+export function discardPendingPersistForTests() {
+  if (gcsTimer) {
+    clearTimeout(gcsTimer);
+    gcsTimer = null;
+  }
+}
+
 export async function persistNow() {
   writeLocal();
   if (gcsTimer) {
@@ -563,6 +754,14 @@ export async function persistNow() {
   }
   const saved = await pushGcs();
   if (!saved && process.env.K_SERVICE) throw new Error('Memory store could not be saved');
+}
+
+/** Rewrite a plaintext store, or one opened with the previous key, under the current key. */
+export async function reencryptLoadedStore() {
+  if (!encryptionAtRest() || !storeNeedsRewrite) return false;
+  await persistNow();
+  storeNeedsRewrite = false;
+  return true;
 }
 
 export function getState() {
@@ -574,11 +773,11 @@ export async function saveBlob(id: string, bytes: Buffer, mime = 'application/oc
   const dir = path.join(DATA_DIR, 'files');
   fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(path.join(dir, id), bytes);
-  const target = gcsTarget();
+  const target = resolveGcsTarget();
   if (!target) return;
   try {
-    const { Storage } = await import('@google-cloud/storage');
-    await new Storage().bucket(target.bucket).file(`engine/files/${id}`).save(bytes, { contentType: mime });
+    const bucket = await openBucket(target.bucket);
+    await bucket.file(`engine/files/${id}`).save(bytes, gcsSaveOptions(mime));
   } catch (err) {
     console.warn('file blob gcs skipped', (err as Error).message);
   }

@@ -128,7 +128,7 @@ export async function resolveIdentity(req: Request): Promise<MemoryUser> {
   throw Object.assign(new Error('Sign in required for memory'), { status: 401 });
 }
 
-const PUBLIC = new Set(['/health', '/v4/protocol', '/v4/security', '/v4/client', '/v4/openai.json', '/v1/models']);
+const PUBLIC = new Set(['/health', '/v4/protocol', '/v4/client', '/v4/openai.json', '/v1/models']);
 
 export function isPublicMemoryPath(method: string, path: string) {
   if (method === 'OPTIONS') return true;

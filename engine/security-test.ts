@@ -59,11 +59,34 @@ async function hit(urlPath: string, init: RequestInit = {}, user = '') {
 }
 
 const health = await hit('/health');
-check('security status is public', health.status === 200 && health.body.rateLimiting === true && health.body.corsMode === 'allowlist');
+const healthText = JSON.stringify(health.body);
+check(
+  'public health is slim',
+  health.status === 200 &&
+    health.body.ok === true &&
+    health.body.ready === true &&
+    health.body.encryptionAtRest === false &&
+    !('store' in health.body) &&
+    !('storeError' in health.body) &&
+    !('providers' in health.body) &&
+    !('encryptionWarning' in health.body) &&
+    !('debugMode' in health.body) &&
+    !healthText.toLowerCase().includes('plaintext')
+);
 check('health sets frame denial', health.headers.get('x-frame-options') === 'DENY');
 check('health sets nosniff', health.headers.get('x-content-type-options') === 'nosniff');
 const open = await hit('/v4/security');
-check('control report is public', open.status === 200 && open.body.identity === 'session' && open.body.debugMode === false);
+check('control report is not public', open.status === 401);
+const authed = await hit('/v4/security', {}, 'usera');
+check(
+  'signed-in control report',
+  authed.status === 200 &&
+    authed.body.identity === 'session' &&
+    authed.body.rateLimiting === true &&
+    authed.body.corsMode === 'allowlist' &&
+    authed.body.debugMode === false &&
+    !JSON.stringify(authed.body).toLowerCase().includes('plaintext')
+);
 
 const evil = await hit('/health', { headers: { Origin: 'https://evil.example' } });
 check('unknown origin is not echoed', !evil.headers.get('access-control-allow-origin'));
@@ -163,6 +186,19 @@ const second = await hit('/v4/search', { method: 'POST', body: JSON.stringify({ 
 const third = await hit('/v4/search', { method: 'POST', body: JSON.stringify({ query: 'amber' }) }, 'usera');
 check('rate limit allows the budget', first.status === 200 && second.status === 200);
 check('rate limit returns 429', third.status === 429 && Number(third.headers.get('retry-after')) > 0);
+
+process.env.MEMORY_DATA_KEY = 'ab'.repeat(32);
+const sealed = await hit('/health');
+check(
+  'health reports encryption once the key is set',
+  sealed.status === 200 &&
+    sealed.body.encryptionAtRest === true &&
+    !('encryptionWarning' in sealed.body) &&
+    !('store' in sealed.body) &&
+    !('providers' in sealed.body) &&
+    !JSON.stringify(sealed.body).toLowerCase().includes('plaintext')
+);
+delete process.env.MEMORY_DATA_KEY;
 
 server.close();
 if (failures.length) {

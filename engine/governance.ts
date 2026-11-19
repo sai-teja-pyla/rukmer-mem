@@ -4,8 +4,8 @@
  * receives the prompt built for the current request.
  *
  * Isolation is enforced here, on the stored rows, before search or export.
- * The engine keeps one JSON document (encrypted at rest when MEMORY_DATA_KEY
- * is set). There is no separate SQL database, so this gate is the row filter:
+ * The engine keeps one JSON document. Production refuses to boot unless
+ * MEMORY_DATA_KEY is 64 hex characters. There is no separate SQL database, so this gate is the row filter:
  * a row without a matching owner, team, or org is invisible to the caller.
  */
 import {

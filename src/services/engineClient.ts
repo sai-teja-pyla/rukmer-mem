@@ -47,6 +47,7 @@ async function req(path: string, init?: RequestInit): Promise<any> {
 
 export const engine = {
   health: () => req('/health'),
+  security: () => req('/v4/security'),
   me: () => req('/v3/me'),
   ingest: (body: any) => req('/v3/documents', { method: 'POST', body: JSON.stringify(body) }),
   ingestBatch: (body: any) => req('/v3/documents/batch', { method: 'POST', body: JSON.stringify(body) }),

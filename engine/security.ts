@@ -4,7 +4,7 @@
  * uid, actorId, and userId are claims, not credentials.
  */
 import crypto from 'crypto';
-import type { NextFunction, Request, Response } from 'express';
+import type { Express, NextFunction, Request, Response } from 'express';
 import { encryptionAtRest, encryptionWarning } from './core.js';
 
 export const ALLOWED_ORIGINS = [
@@ -227,4 +227,154 @@ export function publicError(e: { status?: number; message?: string }) {
   const status = e.status || 500;
   if (isProduction() && status >= 500) return { status, body: { error: 'Internal error' } };
   return { status: status === 500 ? 500 : status, body: { error: e.message || 'Request failed' } };
+}
+
+/** Legacy uploads. The engine store bucket is MEMORY_GCS_BUCKET and is separate. */
+export function legacyUploadBucket() {
+  return (process.env.UPLOAD_GCS_BUCKET || 'rukmer-saas-data').trim() || 'rukmer-saas-data';
+}
+
+function safeUserId(userId: string) {
+  return /^[A-Za-z0-9_-]{1,128}$/.test(userId);
+}
+
+export function userUploadPrefix(userId: string) {
+  if (!safeUserId(userId)) throw Object.assign(new Error('Invalid user'), { status: 400 });
+  return `uploads/${userId}/`;
+}
+
+export function safeUploadFileName(fileName: unknown) {
+  const raw = String(fileName || 'file');
+  const base = raw.split(/[/\\]/).pop() || 'file';
+  const cleaned = base.replace(/[^A-Za-z0-9._-]/g, '_').replace(/^\.+/, '').slice(0, 120);
+  return cleaned || 'file';
+}
+
+export function newUploadObjectPath(userId: string, fileName: unknown) {
+  return `${userUploadPrefix(userId)}${Date.now()}_${safeUploadFileName(fileName)}`;
+}
+
+function decodeObjectPath(raw: string) {
+  let value = raw.trim();
+  for (let i = 0; i < 2; i++) {
+    try {
+      const next = decodeURIComponent(value);
+      if (next === value) break;
+      value = next;
+    } catch {
+      return '';
+    }
+  }
+  return value;
+}
+
+/** Object path under this caller's folder, or empty when it is not theirs. */
+export function ownedUploadObjectPath(userId: string, raw: unknown) {
+  if (!safeUserId(userId)) return '';
+  const value = decodeObjectPath(String(raw || '')).replace(/^\/+/, '');
+  if (!value || value.includes('\0') || value.includes('\\') || value.includes('..') || value.includes('://')) return '';
+  const prefix = `uploads/${userId}/`;
+  if (!value.startsWith(prefix) || value.length <= prefix.length) return '';
+  return value;
+}
+
+export function resumableUploadBody(uploadUrl: string, objectPath: string) {
+  return { uploadUrl, path: objectPath };
+}
+
+export function listedUploadBody(files: { name?: string; path: string; timeCreated?: string | null }[]) {
+  return files.map((file) => ({
+    name: file.name || file.path.split('/').pop() || file.path,
+    path: file.path,
+    timeCreated: file.timeCreated || null,
+  }));
+}
+
+type UploadFile = {
+  getSignedUrl: (cfg: { version: 'v4'; action: 'read' | 'resumable'; expires: number; contentType?: string }) => Promise<[string]>;
+  exists: () => Promise<[boolean]>;
+};
+
+type UploadBucket = {
+  file: (name: string) => UploadFile;
+  getFiles: (query: { prefix: string }) => Promise<[{ name: string; metadata?: { timeCreated?: string } }[]]>;
+};
+
+export function mountUserStorageRoutes(
+  app: Express,
+  deps: {
+    authenticate: (req: Request, res: Response, next: NextFunction) => void | Promise<void>;
+    sessionUid: (req: Request, res: Response, claimed?: unknown) => string | null;
+    bucket: () => UploadBucket;
+  }
+) {
+  app.post('/api/storage/resumable-url', deps.authenticate, async (req, res) => {
+    try {
+      const userId = deps.sessionUid(req, res, req.body?.userId);
+      if (!userId) return;
+      const contentType = String(req.body?.contentType || '').slice(0, 200);
+      if (!contentType || /[\r\n]/.test(contentType)) {
+        res.status(400).json({ error: 'contentType is required' });
+        return;
+      }
+      const objectPath = newUploadObjectPath(userId, req.body?.fileName);
+      const file = deps.bucket().file(objectPath);
+      const [uploadUrl] = await file.getSignedUrl({
+        version: 'v4',
+        action: 'resumable',
+        expires: Date.now() + 60 * 60 * 1000,
+        contentType,
+      });
+      res.set('Cache-Control', 'private, no-store');
+      res.json(resumableUploadBody(uploadUrl, objectPath));
+    } catch {
+      res.status(500).json({ error: 'Failed to generate upload URL' });
+    }
+  });
+
+  app.get('/api/storage/files/url', deps.authenticate, async (req, res) => {
+    try {
+      const userId = deps.sessionUid(req, res, req.query?.userId);
+      if (!userId) return;
+      const objectPath = ownedUploadObjectPath(userId, req.query?.path);
+      if (!objectPath) {
+        res.status(403).json({ error: 'Forbidden' });
+        return;
+      }
+      const file = deps.bucket().file(objectPath);
+      const [exists] = await file.exists();
+      if (!exists) {
+        res.status(404).json({ error: 'Not found' });
+        return;
+      }
+      const expires = Date.now() + 10 * 60 * 1000;
+      const [url] = await file.getSignedUrl({ version: 'v4', action: 'read', expires });
+      res.set('Cache-Control', 'private, no-store');
+      res.json({ url, path: objectPath, expiresIn: 600 });
+    } catch {
+      res.status(500).json({ error: 'Failed to generate read URL' });
+    }
+  });
+
+  app.get('/api/storage/files', deps.authenticate, async (req, res) => {
+    try {
+      const userId = deps.sessionUid(req, res, req.query?.userId);
+      if (!userId) return;
+      const prefix = userUploadPrefix(userId);
+      const [files] = await deps.bucket().getFiles({ prefix });
+      const owned = (files || []).filter((file) => file.name.startsWith(prefix) && !file.name.includes('..'));
+      res.set('Cache-Control', 'private, no-store');
+      res.json(
+        listedUploadBody(
+          owned.map((file) => ({
+            name: file.name.split('/').pop() || file.name,
+            path: file.name,
+            timeCreated: file.metadata?.timeCreated || null,
+          }))
+        )
+      );
+    } catch {
+      res.status(500).json({ error: 'Failed to fetch files' });
+    }
+  });
 }

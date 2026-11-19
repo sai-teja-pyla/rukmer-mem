@@ -1,6 +1,6 @@
 import type { Express, NextFunction, Request, Response } from 'express';
 import crypto from 'crypto';
-import { encryptionAtRest, encryptionWarning, getState, loadState, memoryStoreProblem, memoryStoreSource, noteMemoryStoreProblem, persistNow, readBlob, saveState, sha, shortestPath, uid } from './core.js';
+import { assertProductionSecrets, assertStoreNotPublic, encryptionAtRest, getState, loadState, memoryStoreProblem, memoryStoreSource, noteMemoryStoreProblem, persistNow, readBlob, reencryptLoadedStore, saveState, sha, shortestPath, uid } from './core.js';
 import {
   chatWithMemory,
   forgetById,
@@ -57,7 +57,7 @@ import {
   setRetention,
   startRetentionLoop,
 } from './governance.js';
-import { debugRoutesEnabled, isProduction, publicError, rateLimit, rejectIdentityOverride, sanitizePlain, securityStatus } from './security.js';
+import { isProduction, publicError, rateLimit, rejectIdentityOverride, sanitizePlain, securityStatus } from './security.js';
 import { sendLoiCopy } from '../src/utils/mailer.js';
 import { LOI_VERSION } from '../src/legal/loi.js';
 
@@ -167,7 +167,10 @@ function engineRoute(path: string) {
 export async function bootMemoryEngine() {
   beginMemoryBoot();
   try {
+    assertProductionSecrets();
+    await assertStoreNotPublic();
     await loadState();
+    await reencryptLoadedStore();
     migrateGovernance();
     runExpiry('system');
     startRetentionLoop();
@@ -180,7 +183,6 @@ export async function bootMemoryEngine() {
         upsertFacts(doc.containerTag, graph.triples || [], doc.text.slice(0, 240));
       }
     }
-    if (isProduction() && !encryptionAtRest()) console.warn(encryptionWarning());
     void syncStoredKeys().catch((err) => console.warn('api key sync skipped', (err as Error).message));
     void warmFactEmbeddings().catch(() => undefined);
     const snapshot = stats();
@@ -242,19 +244,13 @@ export function mountMemoryEngine(app: Express) {
     res.status(ready ? 200 : 503).json({
       ok: ready,
       ready,
-      error: ready ? null : problem || 'Memory store is still loading',
+      encryptionAtRest: encryptionAtRest(),
       engine: 'rukmer-open-core',
       isolation: 'per-user',
-      store: memoryStoreSource(),
-      storeError: problem || null,
       dependencies: { memoryStore: ready ? 'ok' : problem ? 'error' : 'loading' },
-      encryptionAtRest: encryptionAtRest(),
-      encryptionWarning: encryptionWarning(),
       rateLimiting: true,
       corsMode: 'allowlist',
-      debugMode: debugRoutesEnabled(),
       training: false,
-      providers: providerStatus(),
       llm: hasLlm(),
     });
   });
@@ -296,8 +292,22 @@ export function mountMemoryEngine(app: Express) {
     }
   });
 
-  app.get('/v4/security', (_req, res) => {
-    res.json(securityStatus());
+  app.get('/v4/security', (req, res) => {
+    try {
+      const actor = uidOf(req);
+      if (!isTenantAdmin(actor, homeTag(actor))) return res.status(403).json({ error: 'Admin required' });
+      privateNoStore(res);
+      res.json({
+        ...securityStatus(),
+        store: memoryStoreSource(),
+        storeError: memoryStoreProblem() || null,
+        ready: storeIsReady(),
+        providers: providerStatus(),
+        llm: hasLlm(),
+      });
+    } catch (e: any) {
+      fail(res, e);
+    }
   });
 
   app.get('/v4/protocol', (_req, res) => {

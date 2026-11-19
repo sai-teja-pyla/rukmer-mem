@@ -540,7 +540,7 @@ await check('gap inventory (recorded, does not hide failures)', async () => {
   gaps.push('Drive/Gmail/Slack OAuth start from Connectors; file ingest after consent is still the existing /api/auth callbacks, not a full memory-graph sync.');
   gaps.push('MCP has no OAuth consent yet; ChatGPT/Claude custom connectors need that for production.');
   gaps.push('No rate limits, quotas, or per-user storage caps on the memory engine.');
-  gaps.push(`Hosted Gemini for Playground: ${health.data.providers?.gemini ? 'yes' : 'no'}; OpenAI/Claude/Grok keys: ${health.data.providers?.openai ? 'openai ' : ''}${health.data.providers?.anthropic ? 'anthropic ' : ''}${health.data.providers?.grok ? 'grok' : 'not on server'}.`);
+  gaps.push(`Public /health reports encryptionAtRest=${health.data.encryptionAtRest === true}. Provider keys are on signed-in GET /v4/security, not the public health body.`);
   return gaps.length + ' gaps listed';
 });
 
