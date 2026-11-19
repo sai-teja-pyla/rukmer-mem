@@ -19,7 +19,19 @@ steps:
   - name: 'gcr.io/cloud-builders/docker'
     args: ['push', 'gcr.io/$PROJECT_ID/rukmer-saas']
 
-  # 3. Deploy to Cloud Run
+  # 3. Deploy to Cloud Run.
+  # The engine store bucket is named only by MEMORY_GCS_BUCKET (no code default).
+  # MEMORY_DATA_KEY comes from Secret Manager, not from --update-env-vars.
+  # --update-secrets mounts MEMORY_DATA_KEY=MEMORY_DATA_KEY:latest without
+  # dropping other secrets. On a service with no other secrets, the same
+  # binding is --set-secrets=MEMORY_DATA_KEY=MEMORY_DATA_KEY:latest.
+  # Grant the Cloud Run runtime service account, and nothing broader:
+  #   roles/storage.objectUser on the engine bucket only
+  #   roles/secretmanager.secretAccessor on MEMORY_DATA_KEY only
+  # Do not grant roles/storage.admin or a project-wide storage role.
+  # Do not mount a service-account key file. Application Default Credentials
+  # are enough. Lock the bucket and create the secret before this deploy.
+  # Those operator steps are in docs/runbook-storage.md and are not run here.
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
     entrypoint: 'gcloud'
     args: [
@@ -32,7 +44,9 @@ steps:
       '--allow-unauthenticated',
       '--add-cloudsql-instances', 'rukmer-saas:us-central1:rukmer-saas-ai',
       '--update-env-vars',
-      'NODE_ENV=production,DB_USER=${_DB_USER},DB_NAME=${_DB_NAME},DB_PASSWORD=${_DB_PASSWORD},INSTANCE_CONNECTION_NAME=rukmer-saas:us-central1:rukmer-saas-ai'
+      'NODE_ENV=production,DB_USER=${_DB_USER},DB_NAME=${_DB_NAME},DB_PASSWORD=${_DB_PASSWORD},INSTANCE_CONNECTION_NAME=rukmer-saas:us-central1:rukmer-saas-ai,MEMORY_GCS_BUCKET=${_MEMORY_GCS_BUCKET}',
+      '--update-secrets',
+      'MEMORY_DATA_KEY=MEMORY_DATA_KEY:latest'
     ]
 
 options:
@@ -52,3 +66,6 @@ substitutions:
     _DB_PASSWORD: ''
     _INSTANCE_CONNECTION_NAME: ''
     _VITE_API_URL: ''
+    # Private bucket the engine store lives in. Change this when the store
+    # moves (for example to rukmer-engine-private). Do not rely on a code default.
+    _MEMORY_GCS_BUCKET: 'rukmer-saas-data'

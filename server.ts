@@ -22,7 +22,7 @@ import fs from 'fs';
 import admin from 'firebase-admin'; // 🚨 The Security Bouncer
 import { learnWorkspaceData, queryWorkspaceData, clearNamespace, fetchTeamsMessages } from './ingestionService.js';
 import { bootMemoryEngine, memoryErrorMiddleware, mountMemoryEngine } from './engine/routes.js';
-import { debugRoutesEnabled, isProduction, securityMiddleware, slackSignatureOk } from './engine/security.js';
+import { debugRoutesEnabled, isProduction, legacyUploadBucket, mountUserStorageRoutes, securityMiddleware, slackSignatureOk } from './engine/security.js';
 import { claimedUserMismatch } from './engine/actorGuard.js';
 import { consumeOauthState, firestoreOauthStore, issueOauthState, oauthStateSecret } from './engine/oauthLink.js';
 import { linesVisibleInChannel, slackAccountForMention } from './engine/channelReply.js';
@@ -1055,50 +1055,10 @@ app.get('/api/history/session/:sessionId', authenticateUser, async (req: any, re
   }
 });
 
-app.post('/api/storage/resumable-url', authenticateUser, async (req: any, res: any): Promise<void> => {
-    try {
-        const userId = sessionUid(req, res, req.body?.userId);
-        if (!userId) return;
-        const { fileName, contentType, userName } = req.body;
-        const bucket = storage.bucket('rukmer-saas-data');
-        const safeName = (userName || 'user').split('@')[0].replace(/[^a-z0-9]/gi, '_').toLowerCase();
-        const folderName = `${safeName}_${userId.substring(0, 5)}`;
-        
-        let rootDir = 'others'; 
-        if (contentType.startsWith('image/')) rootDir = 'images';
-        if (contentType.startsWith('video/')) rootDir = 'videos';
-
-        const filePath = `${rootDir}/${folderName}/${Date.now()}_${fileName}`;
-        const file = bucket.file(filePath);
-        const [url] = await file.getSignedUrl({
-            version: 'v4', action: 'resumable', expires: Date.now() + 60 * 60 * 1000, contentType
-        });
-
-        res.json({ uploadUrl: url, publicUrl: `https://storage.googleapis.com/${bucket.name}/${filePath}` });
-    } catch (error: any) {
-        res.status(500).json({ error: "Failed to generate upload URL: " + (error?.message || error) });
-    }
-});
-
-app.get('/api/storage/files', authenticateUser, async (req: any, res: any): Promise<void> => {
-    try {
-        const userId = sessionUid(req, res, req.query?.userId);
-        if (!userId) return;
-        const bucket = storage.bucket('rukmer-saas-data');
-        const [allFiles] = await bucket.getFiles();
-        const shortId = userId.substring(0, 5);
-        const userFiles = allFiles.filter(f => f.name.includes(shortId) || f.name.includes(userId));
-
-        const fileList = userFiles.map(file => ({
-            name: file.name.split('/').pop(),
-            fullPath: file.name,
-            url: `https://storage.googleapis.com/${bucket.name}/${file.name}`,
-            timeCreated: file.metadata.timeCreated
-        }));
-        res.json(fileList);
-    } catch (error: any) {
-        res.status(500).json({ error: "Failed to fetch files: " + (error?.message || error) });
-    }
+mountUserStorageRoutes(app, {
+    authenticate: authenticateUser,
+    sessionUid,
+    bucket: () => storage.bucket(legacyUploadBucket()) as any,
 });
 
 app.put('/api/chat/rename', authenticateUser, async (req: any, res: any): Promise<void> => {

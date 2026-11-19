@@ -102,7 +102,14 @@ const health = await hit('/health');
 const healthMs = Date.now() - started;
 check('health is ready without the memory text', health.status === 200 && health.body.ok === true && health.body.ready === true && health.body.dependencies?.memoryStore === 'ok');
 check('health stays cheap', healthMs < 1000 && JSON.stringify(health.body).length < 4000 && !JSON.stringify(health.body).includes('jasmine'));
-check('health names the store dependency', health.body.store === 'memory' && health.body.storeError === null && typeof health.body.llm === 'boolean', `store=${health.body.store}`);
+check(
+  'health does not publish the store',
+  !('store' in health.body) &&
+    !('storeError' in health.body) &&
+    !('providers' in health.body) &&
+    typeof health.body.encryptionAtRest === 'boolean' &&
+    typeof health.body.llm === 'boolean'
+);
 
 const tags = await hit('/v3/tags', USER);
 const row = (tags.body.tags || []).find((item: { tag?: string }) => item.tag === tag);
@@ -151,8 +158,11 @@ check(
     !JSON.stringify(brokenTags.body).includes('jasmine') &&
     brokenHealth.status === 503 &&
     brokenHealth.body.ok === false &&
+    brokenHealth.body.ready === false &&
     brokenHealth.body.dependencies?.memoryStore === 'error' &&
-    String(brokenHealth.body.storeError || '').includes('memory store') &&
+    !('store' in brokenHealth.body) &&
+    !('storeError' in brokenHealth.body) &&
+    !JSON.stringify(brokenHealth.body).includes('simulated storage outage') &&
     stillUp.status === 503 &&
     stillUp.type.includes('json')
 );

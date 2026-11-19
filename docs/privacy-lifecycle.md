@@ -67,9 +67,11 @@ Default lifetimes when a tenant has no policy:
 
 ## Encryption
 
-**Warning:** encryption at rest is optional. If `MEMORY_DATA_KEY` is missing, the memory store is plaintext JSON on disk and in Cloud Storage. `GET /health` and `GET /v4/governance` report `encryptionAtRest: false` and set `encryptionWarning` to that fact. Existing stores keep opening without a key.
+Production requires encryption at rest. `MEMORY_DATA_KEY` must be 64 hex characters and is mounted from Secret Manager, not written into a plain environment variable. Boot refuses to start when that key is missing or malformed, when `MEMORY_GCS_BUCKET` is unset, or when the store bucket is still anonymously readable or listable. `GET /health` reports `encryptionAtRest: true` once the key is loaded. The public health body does not describe the store or list providers.
 
-Transit to `app.rukmer.com` is HTTPS. To encrypt the file, set `MEMORY_DATA_KEY` to 64 hex characters or a passphrase. The store is then AES-256-GCM. The process still keeps plaintext in memory so search can run. With the key set, `encryptionWarning` is null.
+The store is AES-256-GCM. `encodeState` always uses the current key and records a short key id (`kid`) on the envelope. `MEMORY_DATA_KEY_PREVIOUS` is decrypt-only: the first successful boot rewrites an unencrypted store, or one opened with the previous key, under the current key. Back the key up offline. If it is lost, the store cannot be read.
+
+Transit to `app.rukmer.com` is HTTPS. The process still keeps the working copy in memory so search can run. Local development may hash a passphrase when the value is not 64 hex characters. Production does not. Operator steps, bucket IAM, and the post-incident checks are in `docs/runbook-storage.md`.
 
 ## Customer controls
 
