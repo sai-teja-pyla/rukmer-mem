@@ -4,27 +4,21 @@ import { getState, persistNow, sha, uid, type OauthClientRec, type OauthCodeRec 
 import { consumeRefresh, findKey, forgetKey, readRefresh, rememberKey, saveRefresh } from './keys.js';
 import { ALLOWED_ORIGINS } from './security.js';
 
-const ALLOWED_REDIRECT = [
+const ALLOWED_REDIRECT_HOSTS = new Set([
   'claude.ai',
   'claude.com',
-  'anthropic.com',
   'chatgpt.com',
   'chat.openai.com',
-  'openai.com',
-  'oaistatic.com',
-  'oaiusercontent.com',
   'platform.openai.com',
   'grok.com',
   'x.ai',
-  'google.com',
-  'googleusercontent.com',
   'gemini.google.com',
   'aistudio.google.com',
   'makersuite.google.com',
   'localhost',
   '127.0.0.1',
   'app.rukmer.com',
-];
+]);
 
 export function publicOrigin(req: Request) {
   const host = String(req.headers['x-forwarded-host'] || req.headers.host || 'app.rukmer.com').split(',')[0].trim();
@@ -35,10 +29,11 @@ export function publicOrigin(req: Request) {
 export function isAllowedOauthRedirect(redirectUri: string) {
   try {
     const u = new URL(redirectUri);
-    if (u.protocol !== 'https:' && u.hostname !== 'localhost' && u.hostname !== '127.0.0.1') return false;
-    if (u.hostname.endsWith('.chromiumapp.org')) return true;
-    if (u.hostname.endsWith('.openai.com') || u.hostname.endsWith('.google.com') || u.hostname.endsWith('.anthropic.com')) return true;
-    return ALLOWED_REDIRECT.some((h) => u.hostname === h || u.hostname.endsWith(`.${h}`));
+    if (u.username || u.password) return false;
+    const host = u.hostname.toLowerCase();
+    if (u.protocol !== 'https:' && host !== 'localhost' && host !== '127.0.0.1') return false;
+    if (host.endsWith('.chromiumapp.org') && host !== 'chromiumapp.org') return true;
+    return ALLOWED_REDIRECT_HOSTS.has(host);
   } catch {
     return false;
   }
@@ -81,7 +76,7 @@ function asMeta(req: Request) {
     registration_endpoint: `${origin}/oauth/register`,
     response_types_supported: ['code'],
     grant_types_supported: ['authorization_code'],
-    code_challenge_methods_supported: ['S256', 'plain'],
+    code_challenge_methods_supported: ['S256'],
     token_endpoint_auth_methods_supported: ['none', 'client_secret_post'],
     scopes_supported: ['memory'],
   };
@@ -183,7 +178,8 @@ export function mountOauth(app: Express) {
     const redirectUri = String(body.redirect_uri || body.redirectUri || '');
     const state = String(body.state || '');
     const challenge = String(body.code_challenge || body.codeChallenge || '');
-    const method = String(body.code_challenge_method || body.codeChallengeMethod || 'S256');
+    const method = String(body.code_challenge_method || body.codeChallengeMethod || 'S256').toUpperCase();
+    if (!challenge || method !== 'S256') return res.status(400).json({ error: 'invalid_request' });
     const client = getState().oauthClients.find((c) => c.id === clientId);
     if (client && !client.redirectUris.includes(redirectUri)) {
       return res.status(400).json({ error: 'invalid_redirect_uri' });
@@ -245,12 +241,9 @@ export function mountOauth(app: Express) {
       return res.status(400).json({ error: 'invalid_grant' });
     }
     const verifier = String(body.code_verifier || '');
-    if (rec.challenge) {
-      const computed = rec.method.toLowerCase() === 'plain' ? verifier : s256(verifier);
-      if (!verifier || computed !== rec.challenge) {
-        await persistNow();
-        return res.status(400).json({ error: 'invalid_grant' });
-      }
+    if (rec.method.toUpperCase() !== 'S256' || !rec.challenge || s256(verifier) !== rec.challenge) {
+      await persistNow();
+      return res.status(400).json({ error: 'invalid_grant' });
     }
     const connector = connectorFromRedirect(rec.redirectUri);
     const issued = await issueConnectorKey(rec.uid, connector, rec.label || '');

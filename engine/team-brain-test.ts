@@ -44,9 +44,10 @@ const server = await new Promise<import('http').Server>((resolve) => {
 });
 const port = (server.address() as { port: number }).port;
 
-async function hit(method: string, urlPath: string, user: string, body?: unknown, email = '') {
+async function hit(method: string, urlPath: string, user: string, body?: unknown, email = '', verified = false) {
   const headers: Record<string, string> = { 'content-type': 'application/json', 'x-rukmer-user': user };
   if (email) headers['x-rukmer-email'] = email;
+  if (verified) headers['x-rukmer-email-verified'] = '1';
   const res = await fetch(`http://127.0.0.1:${port}${urlPath}`, {
     method,
     headers,
@@ -113,15 +114,19 @@ const pendingInvite = (pendingList.body.teams || []).flatMap((row: { invites?: {
 check('email invite shows as pending', pendingInvite?.status === 'pending');
 const wrong = await hit('POST', '/v4/teams/invites/accept', 'other', { token: invited.body.token, displayName: 'Other' }, 'other@example.com');
 check('wrong email is rejected', wrong.status === 403 && String(wrong.body.error || '').includes('switch account'));
-const accepted = await hit('POST', '/v4/teams/invites/accept', 'suren', { token: invited.body.token, displayName: 'Suren' }, 'suren@example.com');
+const accepted = await hit('POST', '/v4/teams/invites/accept', 'suren', { token: invited.body.token, displayName: 'Suren' }, 'suren@example.com', true);
 check('matching email joins in one call', accepted.status === 200 && accepted.body.joined === true && accepted.body.status === 'active');
 const roster = await hit('GET', '/v4/teams', 'tj');
 const surenMember = (roster.body.teams || []).flatMap((row: { members?: { uid: string; displayName?: string; email?: string }[] }) => row.members || []).find((member: { uid: string }) => member.uid === 'suren');
 check('joined member keeps the display name and email', surenMember?.displayName === 'Suren' && surenMember?.email === 'suren@example.com');
 const bannerMail = await hit('POST', `/v4/teams/${teamId}/invites`, 'tj', { email: 'banner@example.com' });
-const inbox = await hit('GET', '/v4/teams/invites/inbox', 'banner', undefined, 'banner@example.com');
+const hidden = await hit('GET', '/v4/teams/invites/inbox', 'banner', undefined, 'banner@example.com');
+check('unverified inbox hides invites', hidden.status === 200 && (hidden.body.invites || []).length === 0);
+const inbox = await hit('GET', '/v4/teams/invites/inbox', 'banner', undefined, 'banner@example.com', true);
 const bannerInvite = (inbox.body.invites || []).find((row: { email?: string }) => row.email === 'banner@example.com');
-const bannerAccept = await hit('POST', '/v4/teams/invites/accept', 'banner', { id: bannerInvite?.id, displayName: 'Banner' }, 'banner@example.com');
+const unverifiedAccept = await hit('POST', '/v4/teams/invites/accept', 'banner', { id: bannerInvite?.id, displayName: 'Banner' }, 'banner@example.com');
+check('unverified email cannot accept an invite', unverifiedAccept.status === 403);
+const bannerAccept = await hit('POST', '/v4/teams/invites/accept', 'banner', { id: bannerInvite?.id, displayName: 'Banner' }, 'banner@example.com', true);
 check('banner invite accept joins without the raw token', bannerMail.status === 200 && bannerAccept.status === 200 && bannerAccept.body.joined === true);
 const surenBoot = await hit('POST', '/v4/teams/bootstrap', 'suren', { orgName: 'Rukmer', displayName: 'Suren' });
 check('a member bootstrap reuses the team they joined', surenBoot.status === 200 && surenBoot.body.team?.id === teamId && surenBoot.body.org?.id === orgId);
@@ -141,6 +146,15 @@ const tjTeam = await save('tj', 'Launch decision: pricing-maple-7', 'team');
 const surenTeam = await save('suren', 'Campaign: lisbon-orchid-9', 'team');
 const surenPrivate = await save('suren', 'Suren private: harbor-quartz-3', 'private');
 check('four memories stored', [tjPrivate, tjTeam, surenTeam, surenPrivate].every((row) => row.status === 200));
+const teamTag = getState().documents.find((doc) => String(doc.text).includes('pricing-maple-7'))?.containerTag || '';
+const liveTeamChunks = () => getState().chunks.filter((chunk) => chunk.containerTag === teamTag && !chunk.forgotten).length;
+const beforeWipe = liveTeamChunks();
+const wipe = await hit('POST', '/v4/memories/forget-matching', 'suren', { query: ' ', containerTag: teamTag });
+const targeted = await hit('POST', '/v4/memories/forget-matching', 'suren', { query: 'pricing-maple-7', containerTag: teamTag });
+check(
+  'member cannot wipe the team brain',
+  wipe.status === 400 && targeted.status === 200 && targeted.body.count === 0 && liveTeamChunks() === beforeWipe && beforeWipe > 0
+);
 
 const teamDoc = getState().documents.find((doc) => String(doc.text).includes('pricing-maple-7'));
 check(
@@ -247,7 +261,7 @@ const afterRemove = await blobFor('suren');
 check('remove cuts team access on the next read', removed.status === 200 && !afterRemove.includes('lisbon-orchid-9') && !afterRemove.includes('cedar-team-12'));
 
 const again = await hit('POST', `/v4/teams/${teamId}/invites`, 'tj', { email: 'suren@example.com' });
-const againAccept = await hit('POST', '/v4/teams/invites/accept', 'suren', { token: again.body.token, displayName: 'Suren' }, 'suren@example.com');
+const againAccept = await hit('POST', '/v4/teams/invites/accept', 'suren', { token: again.body.token, displayName: 'Suren' }, 'suren@example.com', true);
 const rejoined = await hit('POST', '/v4/search', 'suren', { query: 'cedar-team-12', scope: 'team', teamId });
 check('re-invite restores team search', againAccept.status === 200 && againAccept.body.joined === true && rejoined.status === 200 && has(rejoined.body, 'cedar-team-12'));
 
@@ -264,7 +278,7 @@ check('revoked invite is rejected', revokedAccept.status >= 400);
 const reused = await hit('POST', '/v4/teams/invites/accept', 'outsider', { token: invited.body.token }, 'suren@example.com');
 check('reused invite is rejected', reused.status >= 400);
 const ownLink = await hit('POST', `/v4/teams/${teamId}/invites`, 'tj', { email: 'tj@example.com' });
-const selfInvite = await hit('POST', '/v4/teams/invites/accept', 'tj', { token: ownLink.body.token }, 'tj@example.com');
+const selfInvite = await hit('POST', '/v4/teams/invites/accept', 'tj', { token: ownLink.body.token }, 'tj@example.com', true);
 check('self-invite is rejected', selfInvite.status === 400);
 
 const lockedInvite = await hit('POST', `/v4/teams/${teamId}/invites`, 'tj', { email: 'locked@example.com' });
@@ -277,7 +291,7 @@ check('five bad codes lock the invite', lockedStatus === 429);
 
 const approvalOn = await hit('POST', `/v4/teams/${teamId}/approval`, 'tj', { requireApproval: true });
 const heldLink = await hit('POST', `/v4/teams/${teamId}/invites`, 'tj', { email: 'held@example.com' });
-const held = await hit('POST', '/v4/teams/invites/accept', 'held', { token: heldLink.body.token, displayName: 'Held' }, 'held@example.com');
+const held = await hit('POST', '/v4/teams/invites/accept', 'held', { token: heldLink.body.token, displayName: 'Held' }, 'held@example.com', true);
 const heldSearch = await hit('POST', '/v4/search', 'held', { query: 'cedar-team-12', scope: 'team', teamId });
 const approved = await hit('POST', `/v4/teams/${teamId}/members/held/approve`, 'tj');
 const heldAfter = await hit('POST', '/v4/search', 'held', { query: 'cedar-team-12', scope: 'team', teamId });

@@ -340,7 +340,7 @@ export function declineInvite(email: string, id: string) {
   return { status: 'revoked' as const };
 }
 
-export function acceptInvite(actor: string, tokenOrCode: string, publicKey: string, verifiedEmail = '', inviteId = '', displayName = '') {
+export function acceptInvite(actor: string, tokenOrCode: string, publicKey: string, verifiedEmail = '', inviteId = '', displayName = '', emailVerified = false) {
   const state = getState();
   const listed = inviteId ? state.teamInvites.find((row) => row.id === inviteId) : undefined;
   const tokenInvite = tokenOrCode ? inviteByHash(tokenOrCode) : undefined;
@@ -360,6 +360,7 @@ export function acceptInvite(actor: string, tokenOrCode: string, publicKey: stri
   if (!invite.inviteeEmail || !sameEmail(invite.inviteeEmail, verifiedEmail)) {
     throw Object.assign(new Error(`This invite was sent to ${invite.inviteeEmail || 'someone else'} — switch account`), { status: 403 });
   }
+  if (!emailVerified) throw Object.assign(new Error('Verify your email before accepting this invite'), { status: 403 });
   if (invite.createdBy === actor) throw Object.assign(new Error('You cannot accept your own invite'), { status: 400 });
   if (isTeamMember(actor, invite.teamId)) throw Object.assign(new Error('Already a member'), { status: 400 });
   if (invite.maxUses === 1 && invite.inviteeUid && invite.inviteeUid !== actor) throw Object.assign(new Error('Invite is not valid'), { status: 400 });
@@ -588,6 +589,7 @@ export function mountTeamRoutes(app: Express) {
   });
   app.get('/v4/teams/invites/inbox', (req, res) => {
     try {
+      if (!req.memoryUser?.emailVerified) return res.json({ invites: [] });
       res.json({ invites: inboxFor(String(req.memoryUser?.email || '')) });
     } catch (e: any) {
       res.status(e.status || 500).json({ error: e.message || 'Could not list invites' });
@@ -613,6 +615,7 @@ export function mountTeamRoutes(app: Express) {
   });
   app.post('/v4/teams/invites/:id/decline', (req, res) => {
     try {
+      if (!req.memoryUser?.emailVerified) return res.status(403).json({ error: 'Verify your email before using this invite' });
       res.json(declineInvite(String(req.memoryUser?.email || ''), String(req.params.id || '')));
     } catch (e: any) {
       res.status(e.status || 500).json({ error: e.message || 'Could not decline' });
@@ -649,7 +652,8 @@ export function mountTeamRoutes(app: Express) {
           String(req.body?.publicKey || ''),
           String(req.memoryUser?.email || ''),
           String(req.body?.id || ''),
-          String(req.body?.displayName || '')
+          String(req.body?.displayName || ''),
+          req.memoryUser?.emailVerified === true
         )
       );
     } catch (e: any) {

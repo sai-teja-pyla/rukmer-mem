@@ -1,3 +1,5 @@
+import dns from 'dns/promises';
+import net from 'net';
 import {
   bm25Scores,
   chunkCode,
@@ -271,6 +273,57 @@ export async function ingestDocument(input: {
   return { document: doc, chunks: chunks.length, entities: entityCount(), duplicate: false, updated: false, created: true };
 }
 
+const BLOCKED_IMPORT_HOSTS = new Set(['localhost', 'metadata.google.internal', 'metadata']);
+
+function importHost(hostname: string) {
+  return hostname.toLowerCase().replace(/\.$/, '').replace(/^\[|\]$/g, '');
+}
+
+function blockedImport(message = 'That host is not allowed') {
+  return Object.assign(new Error(message), { status: 400 });
+}
+
+export function isBlockedImportAddress(ip: string) {
+  const family = net.isIP(ip);
+  if (!family) return false;
+  if (family === 4) {
+    const parts = ip.split('.').map((part) => Number(part));
+    const [a, b, c] = parts;
+    if ([a, b, c, parts[3]].some((part) => !Number.isInteger(part) || part < 0 || part > 255)) return true;
+    if (a === 0 || a === 10 || a === 127) return true;
+    if (a === 169 && b === 254) return true;
+    if (a === 172 && b >= 16 && b <= 31) return true;
+    if (a === 192 && (b === 168 || (b === 0 && (c === 0 || c === 2)))) return true;
+    if (a === 100 && b >= 64 && b <= 127) return true;
+    if (a === 198 && (b === 18 || b === 19 || (b === 51 && c === 100))) return true;
+    if (a === 203 && b === 0 && c === 113) return true;
+    if (a >= 224) return true;
+    return false;
+  }
+  if (family === 6) {
+    const lower = ip.toLowerCase();
+    if (lower === '::' || lower === '::1') return true;
+    const dotted = lower.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/);
+    if (dotted) return isBlockedImportAddress(dotted[1]);
+    const hex = lower.match(/^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/);
+    if (hex) {
+      const hi = parseInt(hex[1], 16);
+      const lo = parseInt(hex[2], 16);
+      return isBlockedImportAddress(`${(hi >> 8) & 255}.${hi & 255}.${(lo >> 8) & 255}.${lo & 255}`);
+    }
+    if (/^fe[89ab]/.test(lower) || /^f[cd]/.test(lower) || lower.startsWith('ff')) return true;
+    return false;
+  }
+  return true;
+}
+
+type ImportLookup = (host: string) => Promise<{ address: string }[]>;
+let importLookup: ImportLookup = (host) => dns.lookup(host, { all: true, verbatim: true });
+
+export function setImportLookupForTests(fn: ImportLookup | null) {
+  importLookup = fn || ((host) => dns.lookup(host, { all: true, verbatim: true }));
+}
+
 export function assertPublicHttpUrl(raw: string) {
   let url: URL;
   try {
@@ -278,25 +331,53 @@ export function assertPublicHttpUrl(raw: string) {
   } catch {
     throw Object.assign(new Error('Invalid URL'), { status: 400 });
   }
+  if (url.username || url.password) throw blockedImport();
   if (url.protocol !== 'https:' && url.protocol !== 'http:') {
     throw Object.assign(new Error('Only http(s) URLs can be imported'), { status: 400 });
   }
-  const host = url.hostname.toLowerCase().replace(/^\[|\]$/g, '');
-  const blocked =
-    host === 'localhost' ||
+  const host = importHost(url.hostname);
+  if (
+    !host ||
+    BLOCKED_IMPORT_HOSTS.has(host) ||
     host.endsWith('.local') ||
+    host.endsWith('.localhost') ||
     host.endsWith('.internal') ||
-    host === '0.0.0.0' ||
-    host === '::1' ||
-    host === 'metadata.google.internal' ||
-    /^(127\.|10\.|192\.168\.|169\.254\.|172\.(1[6-9]|2\d|3[0-1])\.|0\.|::1$)/.test(host);
-  if (blocked) throw Object.assign(new Error('That host is not allowed'), { status: 400 });
+    isBlockedImportAddress(host)
+  ) {
+    throw blockedImport();
+  }
   return url.toString();
 }
 
+export async function assertResolvedPublicUrl(raw: string) {
+  const safe = assertPublicHttpUrl(raw);
+  const host = importHost(new URL(safe).hostname);
+  if (net.isIP(host)) return safe;
+  let records: { address: string }[] = [];
+  try {
+    records = await importLookup(host);
+  } catch {
+    throw blockedImport();
+  }
+  if (!records.length || records.some((row) => isBlockedImportAddress(row.address))) throw blockedImport();
+  return safe;
+}
+
+export async function fetchPublicUrl(raw: string, init: RequestInit = {}) {
+  let current = await assertResolvedPublicUrl(raw);
+  for (let hop = 0; hop < 3; hop++) {
+    const res = await fetch(current, { ...init, redirect: 'manual' });
+    if (res.status < 300 || res.status >= 400) return res;
+    const location = res.headers.get('location');
+    if (!location) throw blockedImport();
+    current = await assertResolvedPublicUrl(new URL(location, current).toString());
+  }
+  throw blockedImport();
+}
+
 export async function ingestUrl(url: string, containerTag: string, task?: 'memory' | 'rag') {
-  const safe = assertPublicHttpUrl(url);
-  const res = await fetch(safe, { headers: { 'User-Agent': 'RukmerMemory/1.0' } });
+  const safe = await assertResolvedPublicUrl(url);
+  const res = await fetchPublicUrl(safe, { headers: { 'User-Agent': 'RukmerMemory/1.0' } });
   if (!res.ok) throw new Error(`Fetch failed ${res.status}`);
   const ctype = res.headers.get('content-type') || '';
   if (looksLikePdf(url, ctype)) {
@@ -1164,14 +1245,17 @@ export function forgetTenant(actor: string, tenantId: string, dryRun = false) {
   return out;
 }
 
-export function forgetMatching(query: string, containerTag?: string | null, dryRun = false) {
+export function forgetMatching(query: string, containerTag?: string | null, dryRun = false, actor = '') {
+  const q = query.trim().toLowerCase();
+  if (!q) throw Object.assign(new Error('query required'), { status: 400 });
+  if (!actor) throw Object.assign(new Error('Sign in required'), { status: 401 });
   if (!containerTag) return { count: 0, ids: [] as string[], dryRun };
-  const q = query.toLowerCase();
-  const chunks = scopedChunks(containerTag, false).filter((c) => c.text.toLowerCase().includes(q));
+  const chunks = scopedChunks(containerTag, false).filter((c) => c.text.toLowerCase().includes(q) && canErase(actor, c));
   const facts = getState().triples.filter(
     (t) =>
       t.containerTag === containerTag &&
       t.isLatest !== false &&
+      canErase(actor, t) &&
       `${t.subject} ${t.predicate} ${t.object} ${t.evidence}`.toLowerCase().includes(q)
   );
   if (!dryRun) {

@@ -759,7 +759,7 @@ export function mountMemoryEngine(app: Express) {
 
   app.post('/v4/memories/forget-matching', (req, res) => {
     try {
-      res.json(forgetMatching(String(req.body?.query || ''), tagOf(req), !!req.body?.dryRun));
+      res.json(forgetMatching(String(req.body?.query || ''), tagOf(req), !!req.body?.dryRun, uidOf(req)));
     } catch (e: any) {
       fail(res, e);
     }

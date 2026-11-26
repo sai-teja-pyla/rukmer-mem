@@ -200,6 +200,20 @@ check(
 );
 delete process.env.MEMORY_DATA_KEY;
 
+const { isAllowedOauthRedirect } = await import('./oauth.js');
+check('connector host is allowed', isAllowedOauthRedirect('https://chatgpt.com/backend-api/callback') && isAllowedOauthRedirect('https://gemini.google.com/callback'));
+check('broad google host is rejected', !isAllowedOauthRedirect('https://sites.google.com/callback') && !isAllowedOauthRedirect('https://evil.google.com/cb'));
+const challenge = crypto.createHash('sha256').update('verifier-value').digest('base64url');
+const missingPkce = await hit('/oauth/code', { method: 'POST', body: JSON.stringify({ redirect_uri: 'https://chatgpt.com/callback', state: 's' }) }, 'usera');
+check('oauth code requires pkce', missingPkce.status === 400);
+const issued = await hit(
+  '/oauth/code',
+  { method: 'POST', body: JSON.stringify({ redirect_uri: 'https://chatgpt.com/callback', state: 's', code_challenge: challenge, code_challenge_method: 'S256' }) },
+  'usera'
+);
+const bare = await hit('/oauth/token', { method: 'POST', body: JSON.stringify({ grant_type: 'authorization_code', code: issued.body.code, redirect_uri: 'https://chatgpt.com/callback' }) });
+check('oauth token requires the pkce verifier', issued.status === 200 && bare.status === 400 && !bare.body.api_key && !bare.body.key && !bare.body.secret);
+
 server.close();
 if (failures.length) {
   console.error(`\n${failures.length} failed`);

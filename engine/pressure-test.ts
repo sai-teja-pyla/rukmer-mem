@@ -34,7 +34,7 @@ const routes = await import('./routes.js');
 
 const { getState, saveState, saveBlob, chunkCode, sha, DATA_DIR, uid } = core;
 const { upsertFacts, deriveFacts } = facts;
-const { searchMemory, ingestDocument, assertPublicHttpUrl, noteConversation, consolidationPasses, forgetById, flushConsolidation } = pipeline;
+const { searchMemory, ingestDocument, assertPublicHttpUrl, assertResolvedPublicUrl, isBlockedImportAddress, setImportLookupForTests, noteConversation, consolidationPasses, forgetById, flushConsolidation } = pipeline;
 
 console.log('\n== Functional ==');
 const codeParts = chunkCode('export function alpha() {\n  return 1;\n}\nexport function beta() {\n  return 2;\n}', 40);
@@ -59,6 +59,25 @@ try {
   check('blocks metadata host', true);
 }
 check('allows public https', assertPublicHttpUrl('https://example.com/a').startsWith('https://example.com'));
+for (const blocked of ['http://[::1]/secret', 'http://[::ffff:127.0.0.1]/', 'http://[fd00::1]/', 'http://2130706433/', 'http://0/', 'http://metadata.google.internal./']) {
+  try {
+    assertPublicHttpUrl(blocked);
+    check(`blocks ${blocked}`, false);
+  } catch {
+    check(`blocks ${blocked}`, true);
+  }
+}
+check('mapped metadata address is blocked', isBlockedImportAddress('::ffff:a9fe:a9fe') === true);
+setImportLookupForTests(async () => [{ address: '127.0.0.1' }]);
+try {
+  await assertResolvedPublicUrl('https://example.com/a');
+  check('blocks a name that resolves internally', false);
+} catch {
+  check('blocks a name that resolves internally', true);
+}
+setImportLookupForTests(async () => [{ address: '93.184.216.34' }]);
+check('allows a name that resolves publicly', (await assertResolvedPublicUrl('https://example.com/a')).startsWith('https://example.com'));
+setImportLookupForTests(null);
 
 let threw = false;
 try {

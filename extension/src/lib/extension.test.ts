@@ -81,6 +81,8 @@ const { mergeStoredState } = await import('../../../engine/core.ts');
 check('extension redirect allowed', isAllowedOauthRedirect('https://abcdefghijklmnop.chromiumapp.org/'));
 check('extension maps to browser', connectorFromRedirect('https://abcdefghijklmnop.chromiumapp.org/') === 'browser');
 check('http redirect rejected', !isAllowedOauthRedirect('http://evil.example/callback'));
+check('unrelated google host rejected', !isAllowedOauthRedirect('https://sites.google.com/callback'));
+check('gemini host allowed', isAllowedOauthRedirect('https://gemini.google.com/callback'));
 check('url scrub', !scrubSavedUrl('https://example.com/a?token=sekret&q=1').includes('token='));
 
 const tag = 'u_extuser--browser';

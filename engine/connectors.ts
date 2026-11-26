@@ -1,4 +1,4 @@
-import { assertPublicHttpUrl, ingestDocument, ingestUrl } from './pipeline.js';
+import { assertResolvedPublicUrl, fetchPublicUrl, ingestDocument, ingestUrl } from './pipeline.js';
 
 type ImportInput = {
   provider: string;
@@ -18,8 +18,8 @@ export async function importConnector(input: ImportInput) {
   }
   if (provider === 's3') {
     if (!input.url) throw Object.assign(new Error('Pass a presigned https URL. Secrets are not stored.'), { status: 400 });
-    const safe = assertPublicHttpUrl(input.url);
-    const res = await fetch(safe);
+    const safe = await assertResolvedPublicUrl(input.url);
+    const res = await fetchPublicUrl(safe);
     if (!res.ok) throw Object.assign(new Error(`S3 fetch failed ${res.status}`), { status: 400 });
     const text = (await res.text()).slice(0, 200000);
     const out = await ingestDocument({ title: safe.split('/').pop() || 's3-object', text, containerTag: tag, source: 's3', mime: 'text/plain' });
