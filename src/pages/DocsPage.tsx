@@ -11,6 +11,7 @@ const SECTIONS = [
   { id: 'import', label: 'Import' },
   { id: 'api-keys', label: 'API keys' },
   { id: 'playground', label: 'Playground' },
+  { id: 'memories', label: 'Memories' },
   { id: 'insights', label: 'User insights' },
   { id: 'profiles', label: 'Profiles' },
   { id: 'usage', label: 'Usage' },
@@ -138,6 +139,13 @@ export default function DocsPage() {
             </ul>
             <p className="mt-4">
               Match strictness is a score from 0 to 1. The default is 0.40. A memory is used only when its relevance is at least that high. Raise it to keep fewer, closer memories.
+            </p>
+          </section>
+
+          <section id="memories" className="scroll-mt-8">
+            <h2 className={`text-2xl font-bold mb-4 ${theme.header}`}>Memories</h2>
+            <p>
+              Memories lists what this account can read. Search, filters, and pages narrow the list. Add memory saves a note you type, including a short one. Delete hides it and offers Undo for a few seconds. Delete permanently removes it. Clean up previews duplicates, auto-saved model chats, and expired rows before anything is removed. Retention on the same page sets how long each kind is kept. 0 means keep.
             </p>
           </section>
 

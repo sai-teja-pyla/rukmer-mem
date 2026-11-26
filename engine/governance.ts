@@ -450,7 +450,8 @@ export function runExpiry(actor = 'system', now = Date.now(), tenantId?: string)
 
 export function setRetention(actor: string, input: { tenantId: string; memoryKind: MemoryKind | '*'; ttlDays: number; action: 'archive' | 'purge' }) {
   if (!isTenantAdmin(actor, input.tenantId)) throw Object.assign(new Error('Tenant admin required'), { status: 403 });
-  const days = Math.max(0, Math.min(3650, Number(input.ttlDays) || 0));
+  const parsed = Number(input.ttlDays);
+  const days = Math.max(0, Math.min(3650, Number.isFinite(parsed) ? Math.floor(parsed) : 0));
   const state = getState();
   const existing = state.retentionPolicies.find((p) => p.tenantId === input.tenantId && p.memoryKind === input.memoryKind);
   if (existing) {
@@ -566,6 +567,7 @@ export function governanceView(actor: string) {
     transit: 'tls',
     defaultVisibility: 'private' as const,
     tenants,
+    tenantAccess: tenants.map((tenantId) => ({ tenantId, admin: isTenantAdmin(actor, tenantId) })),
     retention: state.retentionPolicies.filter((p) => tenants.includes(p.tenantId)),
     redaction: tenants.map((tenantId) => ({ tenantId, ...redactionFor(tenantId) })),
     defaults: { ttlDays: DEFAULT_TTL, action: DEFAULT_ACTION, redaction: DEFAULT_REDACTION },

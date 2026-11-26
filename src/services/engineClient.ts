@@ -116,5 +116,29 @@ export const engine = {
     req(`/v4/teams/${encodeURIComponent(teamId)}/members/${encodeURIComponent(uid)}`, { method: 'PATCH', body: JSON.stringify({ role }) }),
   moveMemory: (id: string, to: 'private' | 'team', teamId?: string) =>
     req(`/v4/memories/${encodeURIComponent(id)}/move`, { method: 'POST', body: JSON.stringify({ to, teamId }) }),
+  listMemories: (query: Record<string, string | number | boolean | undefined> = {}) => {
+    const params = new URLSearchParams();
+    for (const [key, value] of Object.entries(query)) {
+      if (value === undefined || value === '' || value === false) continue;
+      params.set(key, String(value));
+    }
+    const qs = params.toString();
+    return req(`/v4/memories${qs ? `?${qs}` : ''}`);
+  },
+  createMemory: (body: Record<string, unknown>) => req('/v4/memories', { method: 'POST', body: JSON.stringify(body) }),
+  updateMemory: (id: string, body: Record<string, unknown>) =>
+    req(`/v4/memories/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(body) }),
+  forgetMemories: (body: { id?: string; ids?: string[]; permanent?: boolean }) =>
+    req('/v4/memories', { method: 'DELETE', body: JSON.stringify(body) }),
+  restoreMemories: (body: { ids: string[]; restoreExpired?: boolean }) =>
+    req('/v4/memories/restore', { method: 'POST', body: JSON.stringify(body) }),
+  forgetMatching: (body: Record<string, unknown>) =>
+    req('/v4/memories/forget-matching', { method: 'POST', body: JSON.stringify(body) }),
+  findDuplicates: (body: Record<string, unknown> = {}) =>
+    req('/v4/memories/duplicates', { method: 'POST', body: JSON.stringify(body) }),
+  governance: () => req('/v4/governance'),
+  setRetention: (body: { tenantId: string; memoryKind: string; ttlDays: number; action: 'archive' | 'purge' }) =>
+    req('/v4/governance/retention', { method: 'PUT', body: JSON.stringify(body) }),
+  runExpiry: (tenantId?: string) => req('/v4/governance/expiry', { method: 'POST', body: JSON.stringify({ tenantId }) }),
   closeSession: (sessionId: string) => req('/v4/sessions/close', { method: 'POST', body: JSON.stringify({ sessionId }) }),
 };

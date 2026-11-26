@@ -45,11 +45,23 @@ Search, document open, list, graph, profile injection, and export call `canRead`
 
 Expired, archived, and deleted rows are not returned. Search passes the signed-in user into the ranker, so a matching vector in another tenant is discarded even if a tag were wrong.
 
+## List and manual add
+
+`GET /v4/memories` lists documents and latest facts the caller can read. Query filters cover text, source, kind, container, visibility, scope, and dates. `limit` defaults to 50 and stops at 100. `cursor` is an opaque offset. `includeDeleted` adds retired rows the caller can erase. The response is `{ memories, nextCursor, total }`. Each item has `id`, `recordType`, `title`, `text`, `preview`, `source`, `kind`, `containerTag`, `visibility`, `teamId`, `ownerId`, `createdBy`, `createdAt`, `expiresAt`, `archived`, `forgotten`, `deletedAt`, `canErase`, and `canEdit`. Listing does not write an audit row.
+
+`POST /v4/memories` saves a note the person typed. The source is `user` and `extraction` is `manual`. Redaction still runs. A short or question-like note is stored. It is not rejected by the chat auto-save chatter filter. `PATCH /v4/memories/:id` changes text, title, or kind on a row the caller can erase. File memories return 409.
+
 ## Delete
 
-`DELETE /v4/memories` and `DELETE /v4/governance/memories/:id` erase the row. Erasure also removes its chunks, fact embeddings, file blob, and links. The inverted index and vector index rebuild on the next save, so the deleted text is gone from retrieval. `POST /v4/governance/forget` erases one memory, one owner, or one tenant. `dryRun: true` returns the ids and writes nothing.
+`DELETE /v4/memories` with `{ id }` or `{ ids }` is a soft delete. The row and its chunks get `forgotten` and `gov.deletedAt`. Text and embeddings stay, so restore is immediate. Search, graph, profile, and export hide the row because `canRead` treats it as retired. `POST /v4/memories/restore` with `{ ids }` clears that soft delete. A retention archive is not restored unless the body sets `restoreExpired`.
 
-Soft archive is the retention action `archive`: the row is hidden, its text and embedding are cleared, and `archived` is set. `purge` hard-erases.
+`permanent: true` calls `eraseIds` after `canErase`. That hard purge removes the document, chunks, linked file blob, and graph links. `DELETE /v4/governance/memories/:id` and `POST /v4/governance/forget` with `memoryId` stay on that hard purge. Owner and tenant bulk erase stay hard.
+
+`POST /v4/memories/forget-matching` accepts `query` and/or `ids`, plus `source`, `kind`, `junk`, and `expired`. It only touches rows the actor `canErase`. `dryRun: true` returns the count and writes no memory. The default confirm path is a soft delete. `permanent: true` purges. Junk means source `gemini-router`, `openai-router`, `anthropic-router`, or `grok-router`, not `user`.
+
+`POST /v4/memories/duplicates` previews exact text or fact keys and near embeddings at cosine 0.92 inside one container and visibility. `dryRun: false` retires only the drop rows.
+
+Soft archive from retention is different. The `archive` action hides the row, clears its text and embedding, and sets `archived`. `purge` hard-erases.
 
 ## Retention
 

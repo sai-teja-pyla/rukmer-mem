@@ -2,6 +2,7 @@ import React, { Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState 
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import {
   LayoutDashboard,
+  Library,
   MessageSquare,
   Tag,
   Share2,
@@ -69,6 +70,7 @@ const nav: NavItem[] = [
   { to: '/overview', label: 'Overview', icon: LayoutDashboard },
   { to: '/playground', label: 'Playground', icon: MessageSquare },
   { section: 'DATA' },
+  { to: '/memories', label: 'Memories', icon: Library },
   { to: '/container-tags', label: 'Container Tags', icon: Tag },
   { to: '/memory-graph', label: 'Memory Graph', icon: Share2 },
   { to: '/connectors', label: 'Connectors', icon: Unplug },

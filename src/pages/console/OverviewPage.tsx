@@ -17,9 +17,12 @@ Rukmer stores processed memory (chunks + durable facts). It does not replace Gem
 | Search documents | POST /v3/search | Find raw chunks for RAG grounding |
 | Search memories | POST /v4/search | Find extracted facts with graph context |
 | Get profile | GET /v4/profile | Static + dynamic context for a user |
-| List documents | POST /v3/documents/list | Paginate and filter ingested content |
-| Forget memory | DELETE /v4/memories | Soft-delete one fact; JSON body with containerTag plus id or exact content |
-| Forget matching | POST /v4/memories/forget-matching | Soft-delete every fact matching a query or an ids list; dryRun previews first |
+| List documents | POST /v3/documents/list | List ingested documents in one container. This is not the memories manager |
+| List memories | GET /v4/memories | Browse memories you can read, with filters and pages |
+| Add memory | POST /v4/memories | Save a note by hand. The source is user |
+| Forget memory | DELETE /v4/memories | Soft-delete ids. permanent: true erases them |
+| Restore memory | POST /v4/memories/restore | Undo a soft delete |
+| Forget matching | POST /v4/memories/forget-matching | Soft-delete rows you can erase that match a query, ids, junk, or expired. dryRun previews first |
 | Memory protocol | GET /v4/protocol | How Rukmer stores vs injects memory |`;
 
 export default function OverviewPage() {

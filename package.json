@@ -10,6 +10,7 @@
     "eval": "tsx engine/eval-run.ts",
     "pressure": "tsx engine/pressure-test.ts",
     "governance": "tsx engine/governance-test.ts",
+    "memory-manager": "tsx engine/memory-manager-test.ts",
     "security": "tsx engine/security-test.ts",
     "security-fixes": "tsx engine/security-fixes-test.ts",
     "playground-fixes": "tsx engine/playground-fixes-test.ts",

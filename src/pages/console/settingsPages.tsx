@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { useOutletContext } from 'react-router-dom';
 import { Shield, Monitor, Lock, RotateCcw, Download, LogOut } from 'lucide-react';
 import { PageHeader, DocLink, Panel, Row, Toggle, PrimaryButton, GhostButton, CopyField } from '../../components/console/ui';
+import { RetentionCard } from '../../components/console/RetentionCard';
 import type { UserProfile } from '../../types';
 import { loadProviderKeys, saveProviderKeys, type ProviderKeys } from '../../services/providerKeys';
 import { engine } from '../../services/engineClient';
@@ -340,6 +341,9 @@ export function TeamSettingsPage() {
           ))}
         </Panel>
       )}
+      <div className="mt-4">
+        <RetentionCard compact />
+      </div>
     </div>
   );
 }

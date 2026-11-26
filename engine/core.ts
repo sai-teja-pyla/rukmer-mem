@@ -82,6 +82,7 @@ export interface TripleRec {
   updatedAt?: string;
   embedding?: number[];
   kind: 'update' | 'extend' | 'derive' | 'assert';
+  forgotten?: boolean;
   horizon?: 'long' | 'short';
   occurredAt?: string | null;
   temporal?: TemporalKind;

@@ -9,6 +9,12 @@ import { GraphCountLabel, GraphStatus, graphDataText, graphView, nodeLabel } fro
 import { ScopeFilter, type MemoryScope } from '../../components/console/ScopeFilter';
 import type { UserProfile } from '../../types';
 
+function deletableMemoryId(node: { id: string; kind?: string }) {
+  if (node.id.startsWith('note_')) return node.id.slice('note_'.length);
+  if (node.kind === 'document' || /^(doc|trp|chk)_/.test(node.id)) return node.id;
+  return '';
+}
+
 function sourceMark(node: { source?: string; site?: string; browser?: string }) {
   if (node.site === 'gmail') return 'G';
   if (node.site === 'canvas') return 'C';
@@ -289,12 +295,26 @@ export default function MemoryGraphPage() {
   const graph = resource.data?.graph || EMPTY_GRAPH;
   const tagRows = resource.data?.tags || [];
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [askDelete, setAskDelete] = useState(false);
+  const [deleteError, setDeleteError] = useState('');
+  const [undo, setUndo] = useState<{ id: string } | null>(null);
   const [space, setSpace] = useState('all');
   const [menuOpen, setMenuOpen] = useState(false);
   const [view, setView] = useState({ x: 0, y: 0, k: 1 });
   const dismissed = useRef(false);
   const drag = useRef<{ px: number; py: number; x: number; y: number } | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!undo) return;
+    const timer = window.setTimeout(() => setUndo(null), 10000);
+    return () => window.clearTimeout(timer);
+  }, [undo]);
+
+  useEffect(() => {
+    setAskDelete(false);
+    setDeleteError('');
+  }, [selectedId]);
 
   useEffect(() => {
     const onFocus = () => resource.reload();
@@ -603,6 +623,45 @@ export default function MemoryGraphPage() {
                 ) : null}
                 <span className="truncate"># {selected.id}</span>
               </div>
+              {deletableMemoryId(selected) ? (
+                <div className="mt-4">
+                  {askDelete ? (
+                    <div className="rounded-lg border p-2" style={{ borderColor: 'var(--graph-border)' }}>
+                      <p className="text-[13px]">Delete this memory? You can undo for a few seconds.</p>
+                      {deleteError ? <p className="text-[12px] mt-1">{deleteError}</p> : null}
+                      <div className="flex gap-2 mt-2">
+                        <button type="button" onClick={() => setAskDelete(false)} className="h-7 px-2 rounded-md text-[12px] graph-muted">
+                          Cancel
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const id = deletableMemoryId(selected);
+                            if (!id) return;
+                            void engine
+                              .forgetMemories({ ids: [id] })
+                              .then(() => {
+                                setUndo({ id });
+                                setAskDelete(false);
+                                dismissed.current = true;
+                                setSelectedId(null);
+                                resource.reload();
+                              })
+                              .catch((err: unknown) => setDeleteError(err instanceof Error ? err.message : 'Could not delete'));
+                          }}
+                          className="h-7 px-2 rounded-md text-[12px]"
+                        >
+                          Delete
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <button type="button" onClick={() => setAskDelete(true)} className="h-8 px-3 rounded-lg border text-[12.5px]" style={{ borderColor: 'var(--graph-border)' }}>
+                      Delete
+                    </button>
+                  )}
+                </div>
+              ) : null}
             </div>
           </>
         ) : null}
@@ -610,6 +669,21 @@ export default function MemoryGraphPage() {
           <Legend />
         </div>
       </aside>
+      {undo ? (
+        <div className="absolute z-30 bottom-3 right-3 flex items-center gap-3 rounded-xl border px-3 py-2 text-[13px]" style={{ borderColor: 'var(--graph-border)', background: 'var(--graph-panel, #111)' }}>
+          <span>Memory deleted</span>
+          <button
+            type="button"
+            onClick={() => {
+              const id = undo.id;
+              setUndo(null);
+              void engine.restoreMemories({ ids: [id] }).then(() => resource.reload());
+            }}
+          >
+            Undo
+          </button>
+        </div>
+      ) : null}
     </div>
   );
 }

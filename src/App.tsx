@@ -24,6 +24,7 @@ const JoinTeamPage = lazy(() => import('./pages/JoinTeamPage'));
 const SubscriptionPage = lazy(() => import('./pages/SubscriptionPage'));
 const OverviewPage = lazy(() => import('./pages/console/OverviewPage'));
 const PlaygroundPage = lazy(() => import('./pages/console/PlaygroundPage'));
+const MemoriesPage = lazy(() => import('./pages/console/MemoriesPage'));
 const ContainerTagsPage = lazy(() => import('./pages/console/ContainerTagsPage'));
 const MemoryGraphPage = lazy(() => import('./pages/console/MemoryGraphPage'));
 const ConnectorsPage = lazy(() => import('./pages/console/ConnectorsPage'));
@@ -141,6 +142,7 @@ function AppRoutes() {
         <Route element={<ConsoleGate user={user} authLoading={authLoading} />}>
           <Route path="/overview" element={<OverviewPage />} />
           <Route path="/playground" element={<PlaygroundPage />} />
+          <Route path="/memories" element={<MemoriesPage />} />
           <Route path="/container-tags" element={<ContainerTagsPage />} />
           <Route path="/memory-graph" element={<MemoryGraphPage />} />
           <Route path="/connectors" element={<ConnectorsPage />} />

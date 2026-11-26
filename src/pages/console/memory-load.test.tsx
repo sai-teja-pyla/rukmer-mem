@@ -9,7 +9,9 @@ import {
   ContainerTagsStatus,
   GraphCountLabel,
   GraphStatus,
+  MemoriesStatus,
   TagRows,
+  memoriesListView,
   graphCountText,
   graphView,
   nodeLabel,
@@ -141,6 +143,13 @@ const graphHtml = renderToStaticMarkup(
   </div>
 );
 check('a populated 200 renders the graph data', visible(graphHtml).includes('4 total memories') && visible(graphHtml).includes('jasmine tea') && !visible(graphHtml).includes("Couldn't load your memories"));
+
+const memoryLoading = visible(renderToStaticMarkup(<MemoriesStatus phase="loading" onRetry={() => undefined} />));
+const memoryError = visible(renderToStaticMarkup(<MemoriesStatus phase="error" onRetry={() => undefined} />));
+const memoryEmpty = visible(renderToStaticMarkup(<MemoriesStatus phase="empty" onRetry={() => undefined} />));
+check('memories loading is not an empty list', memoriesListView('loading', 0) === 'loading' && memoryLoading.includes('Loading memories') && !memoryLoading.includes('No memories yet'));
+check('memories error is not an empty list', memoriesListView('error', 0) === 'error' && memoryError.includes("Couldn't load your memories") && !memoryError.includes('No memories yet'));
+check('memories empty is empty only after a load', memoriesListView('ready', 0) === 'empty' && memoryEmpty.includes('No memories yet'));
 
 let posts = 0;
 await requestJson('/v3/documents', { method: 'POST', body: '{}' }, {

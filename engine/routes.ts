@@ -4,7 +4,6 @@ import { encryptionAtRest, encryptionWarning, getState, loadState, memoryStorePr
 import {
   chatWithMemory,
   forgetById,
-  forgetMatching,
   forgetOwner,
   forgetTenant,
   exportMine,
@@ -25,6 +24,16 @@ import {
   flushConsolidation,
 } from './pipeline.js';
 import { upsertFacts } from './facts.js';
+import {
+  createManualMemory,
+  findDuplicateMemories,
+  forgetMemoriesMatching,
+  getMemory,
+  listMemories,
+  restoreMemories,
+  retireMemories,
+  updateManualMemory,
+} from './memoryManager.js';
 import { extractGraph, hasLlm } from './llm.js';
 import { isUsefulFact, pruneJunkMemory } from './quality.js';
 import { buildMemoryInjection } from './inject.js';
@@ -738,10 +747,56 @@ export function mountMemoryEngine(app: Express) {
     }
   });
 
-  app.delete('/v4/memories', (req, res) => {
+  function memoryIds(req: Request) {
+    const many = Array.isArray(req.body?.ids) ? req.body.ids.map(String) : [];
+    const one = String(req.body?.id || req.query.id || '').trim();
+    return [...many, one].map((id) => id.trim()).filter(Boolean);
+  }
+
+  app.get('/v4/memories', (req, res) => {
     try {
-      const id = String(req.body?.id || req.query.id || '');
-      res.json(forgetById(id, uidOf(req)));
+      privateNoStore(res);
+      const flag = (value: unknown) => value === true || value === 'true' || value === '1';
+      res.json(listMemories(uidOf(req), {
+        q: String(req.query.q || ''),
+        source: String(req.query.source || ''),
+        kind: String(req.query.kind || ''),
+        containerTag: String(req.query.containerTag || ''),
+        visibility: String(req.query.visibility || ''),
+        scope: String(req.query.scope || 'all'),
+        from: String(req.query.from || ''),
+        to: String(req.query.to || ''),
+        recordType: String(req.query.recordType || 'all'),
+        includeDeleted: flag(req.query.includeDeleted),
+        onlyDeleted: flag(req.query.onlyDeleted),
+        limit: Number(req.query.limit || 50),
+        cursor: String(req.query.cursor || ''),
+      }));
+    } catch (e: any) {
+      fail(res, e);
+    }
+  });
+
+  app.post('/v4/memories', async (req, res) => {
+    try {
+      privateNoStore(res);
+      res.status(201).json(await createManualMemory(uidOf(req), {
+        text: req.body?.text,
+        title: req.body?.title,
+        kind: req.body?.kind,
+        containerTag: req.body?.containerTag,
+        visibility: req.body?.visibility,
+        teamId: req.body?.teamId,
+      }));
+    } catch (e: any) {
+      fail(res, e);
+    }
+  });
+
+  app.post('/v4/memories/restore', (req, res) => {
+    try {
+      privateNoStore(res);
+      res.json(restoreMemories(uidOf(req), memoryIds(req), { restoreExpired: req.body?.restoreExpired === true }));
     } catch (e: any) {
       fail(res, e);
     }
@@ -749,7 +804,65 @@ export function mountMemoryEngine(app: Express) {
 
   app.post('/v4/memories/forget-matching', (req, res) => {
     try {
-      res.json(forgetMatching(String(req.body?.query || ''), tagOf(req), !!req.body?.dryRun));
+      privateNoStore(res);
+      res.json(forgetMemoriesMatching({
+        actor: uidOf(req),
+        query: req.body?.query,
+        ids: Array.isArray(req.body?.ids) ? req.body.ids.map(String) : undefined,
+        source: req.body?.source,
+        kind: req.body?.kind,
+        containerTag: req.body?.containerTag,
+        expired: req.body?.expired === true,
+        junk: req.body?.junk === true,
+        dryRun: req.body?.dryRun === true,
+        permanent: req.body?.permanent === true,
+      }));
+    } catch (e: any) {
+      fail(res, e);
+    }
+  });
+
+  app.post('/v4/memories/duplicates', (req, res) => {
+    try {
+      privateNoStore(res);
+      res.json(findDuplicateMemories(uidOf(req), {
+        dryRun: req.body?.dryRun !== false,
+        threshold: req.body?.threshold,
+        permanent: req.body?.permanent === true,
+      }));
+    } catch (e: any) {
+      fail(res, e);
+    }
+  });
+
+  app.get('/v4/memories/:id', (req, res) => {
+    try {
+      privateNoStore(res);
+      const flag = req.query.includeDeleted === 'true' || req.query.includeDeleted === '1';
+      res.json({ memory: getMemory(uidOf(req), String(req.params.id || ''), flag) });
+    } catch (e: any) {
+      fail(res, e);
+    }
+  });
+
+  app.patch('/v4/memories/:id', async (req, res) => {
+    try {
+      privateNoStore(res);
+      res.json(await updateManualMemory(uidOf(req), String(req.params.id || ''), {
+        text: req.body?.text,
+        title: req.body?.title,
+        kind: req.body?.kind,
+      }));
+    } catch (e: any) {
+      fail(res, e);
+    }
+  });
+
+  app.delete('/v4/memories', (req, res) => {
+    try {
+      privateNoStore(res);
+      const ids = memoryIds(req);
+      res.json(retireMemories(uidOf(req), ids, { permanent: req.body?.permanent === true, dryRun: req.body?.dryRun === true }));
     } catch (e: any) {
       fail(res, e);
     }

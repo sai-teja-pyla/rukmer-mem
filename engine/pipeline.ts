@@ -50,15 +50,6 @@ export type SearchOpts = {
   topic?: string;
 };
 
-function scopedChunks(tag?: string | null, includeForgotten = false) {
-  if (!tag) return [];
-  return getState().chunks.filter((c) => {
-    if (c.containerTag !== tag) return false;
-    if (!includeForgotten && c.forgotten) return false;
-    return true;
-  });
-}
-
 const SECRET_QUERY = /token|key|code|session|auth|password|secret|sig|signature/i;
 
 export function scrubSavedUrl(raw: string) {
@@ -1164,33 +1155,23 @@ export function forgetTenant(actor: string, tenantId: string, dryRun = false) {
   return out;
 }
 
-export function forgetMatching(query: string, containerTag?: string | null, dryRun = false) {
-  if (!containerTag) return { count: 0, ids: [] as string[], dryRun };
-  const q = query.toLowerCase();
-  const chunks = scopedChunks(containerTag, false).filter((c) => c.text.toLowerCase().includes(q));
-  const facts = getState().triples.filter(
-    (t) =>
-      t.containerTag === containerTag &&
-      t.isLatest !== false &&
-      `${t.subject} ${t.predicate} ${t.object} ${t.evidence}`.toLowerCase().includes(q)
-  );
-  if (!dryRun) {
-    chunks.forEach((c) => {
-      c.forgotten = true;
-      c.embedding = [];
-      if (c.gov) c.gov.deletedAt = new Date().toISOString();
-    });
-    const now = new Date().toISOString();
-    for (const fact of facts) {
-      fact.isLatest = false;
-      fact.validTo = now;
-      fact.embedding = [];
-      if (fact.gov) fact.gov.deletedAt = now;
-    }
-    saveState();
+export async function replaceDocumentText(doc: DocRec, text: string) {
+  const state = getState();
+  const now = new Date().toISOString();
+  for (const chunk of state.chunks) {
+    if (chunk.docId !== doc.id || chunk.forgotten) continue;
+    chunk.forgotten = true;
+    if (chunk.gov) chunk.gov.deletedAt = now;
   }
-  const ids = [...chunks.map((c) => c.id), ...facts.map((t) => t.id)];
-  return { count: ids.length, ids, dryRun };
+  doc.text = text;
+  doc.originalText = text;
+  const chunks = await attachChunks(doc, text);
+  return chunks.length;
+}
+
+/** Replaced by the memory manager. The old matcher hid rows without checking canErase and wiped embeddings. */
+export function forgetMatching(_query?: string, _containerTag?: string | null, dryRun = false) {
+  return { count: 0, ids: [] as string[], dryRun: !!dryRun, error: 'Use the memory manager forget-matching route' };
 }
 
 export function stats(uid?: string) {

@@ -145,6 +145,27 @@ function SourceMarks({ sites }: { sites?: string[] }) {
   );
 }
 
+export function memoriesListView(phase: 'loading' | 'error' | 'ready', count: number): LoadPhase {
+  return resourceView(phase, count);
+}
+
+export function MemoriesStatus({ phase, onRetry }: { phase: 'loading' | 'error' | 'empty'; onRetry: () => void }) {
+  if (phase === 'error') return <MemoryErrorBanner onRetry={onRetry} />;
+  if (phase === 'loading') {
+    return (
+      <div data-phase="loading" aria-busy="true" className="py-16 text-center text-[13px] text-zinc-400">
+        Loading memories…
+      </div>
+    );
+  }
+  return (
+    <div data-phase="empty" className="py-16 text-center">
+      <p className="text-[15px] font-medium text-zinc-100">No memories yet</p>
+      <p className="text-[13px] text-zinc-500 mt-1">Add one when something is missing.</p>
+    </div>
+  );
+}
+
 export function TagRows({ tags }: { tags: TagRow[] }) {
   return (
     <div className="overflow-x-auto" data-phase="ready">
