@@ -224,6 +224,7 @@ export function mountOauth(app: Express) {
       readOnly: body.readOnly === true || scope === 'memory:read',
       containerTags: tags,
       scope,
+      createdBy: { uid: uidUser, email: req.memoryUser?.email, name: req.memoryUser?.name },
     };
     const stateNow = getState();
     stateNow.oauthCodes = stateNow.oauthCodes.filter((c) => c.exp > Date.now());
@@ -301,7 +302,7 @@ async function issueConnectorKey(ownerUid: string, connector: string, label: str
     ownerUid,
     connector: connector || undefined,
     source: connector === 'cli' ? 'cli' as const : connector === 'mcp' ? 'mcp' as const : 'oauth' as const,
-    createdBy: { uid: ownerUid },
+    createdBy: prior?.createdBy || { uid: ownerUid },
     orgId: prior?.orgId,
     teamId: prior?.teamId,
     readOnly: prior?.readOnly === true,

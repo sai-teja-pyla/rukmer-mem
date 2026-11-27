@@ -31,7 +31,7 @@ import {
 import { upsertFacts } from './facts.js';
 import { extractGraph, hasLlm } from './llm.js';
 import { isUsefulFact, pruneJunkMemory } from './quality.js';
-import { buildMemoryInjection } from './inject.js';
+import { buildMemoryInjection, closeInjectSession } from './inject.js';
 import { completeChat, providerStatus, routeAnthropic, routeGemini, routeGrok, routeOpenAI } from './router.js';
 import { MEMORY_TOOLS, runMemoryTool } from './tools.js';
 import { CHATGPT_OPENAPI, handleMcp } from './mcp.js';
@@ -138,9 +138,21 @@ function assertKey(req: Request, tag: string, write: boolean) {
   }
 }
 
+function takeInjectSession(req: Request) {
+  const sessionId = String(req.body?.sessionId || req.body?.threadId || req.headers['x-rukmer-session'] || '');
+  const scope = String(req.body?.scope || req.query?.scope || '');
+  if (req.body && scope !== 'session') {
+    delete req.body.sessionId;
+    delete req.body.threadId;
+  }
+  return sessionId;
+}
+
 function tagOf(req: Request) {
   const uid = uidOf(req);
   const raw = String(req.body?.containerTag || req.query.containerTag || req.headers['x-container-tag'] || '');
+  const allowed = req.memoryUser?.via === 'apikey' ? req.memoryUser.containerTags : undefined;
+  if (raw && allowed?.length && !allowed.includes(raw)) throw Object.assign(new Error('Tag is outside this key'), { status: 403 });
   if (raw.startsWith('tm_')) {
     if (!canAccessTag(uid, raw)) throw Object.assign(new Error('Not a member of this team'), { status: 403 });
     assertKey(req, raw, false);
@@ -429,6 +441,7 @@ export function mountMemoryEngine(app: Express) {
     try {
       const doc = readDocument(String(req.params.id || ''), uidOf(req));
       if (!doc) return res.status(404).json({ error: 'Document not found' });
+      assertKey(req, String(doc.containerTag || ''), false);
       res.json(doc);
     } catch (e: any) {
       fail(res, e);
@@ -546,6 +559,7 @@ export function mountMemoryEngine(app: Express) {
 
   app.post('/v4/inject', async (req, res) => {
     try {
+      const sessionId = takeInjectSession(req);
       const q = sanitizePlain(req.body?.query || req.body?.prompt || '', 2000);
       const scoped = memoryScope(req);
       const out = await buildMemoryInjection(q, scoped.primary, {
@@ -556,9 +570,20 @@ export function mountMemoryEngine(app: Express) {
         actorId: scoped.uid,
         purpose: 'inject',
         containerTags: scoped.tags,
-        sessionId: String(req.body?.sessionId || req.headers['x-rukmer-session'] || ''),
+        sessionId,
       });
       res.json(out);
+    } catch (e: any) {
+      fail(res, e);
+    }
+  });
+
+  app.post('/v4/sessions/close', (req, res) => {
+    try {
+      const sessionId = takeInjectSession(req);
+      const scoped = memoryScope(req);
+      closeInjectSession(scoped.uid, scoped.primary, sessionId);
+      res.json({ ok: true });
     } catch (e: any) {
       fail(res, e);
     }
@@ -618,8 +643,10 @@ export function mountMemoryEngine(app: Express) {
 
   app.post('/v4/remember', async (req, res) => {
     try {
+      const tag = tagOf(req);
+      assertKey(req, tag, true);
       const out = await rememberTranscript({
-        containerTag: tagOf(req),
+        containerTag: tag,
         source: req.body?.source || 'api',
         messages: req.body?.messages || [],
         title: req.body?.title,
@@ -778,7 +805,11 @@ export function mountMemoryEngine(app: Express) {
         return extra ? { ...node, degree: extra.degree, sourceDocuments: extra.sourceDocuments } : node;
       });
       if (String(req.query.sort || '') === 'degree') {
-        payload.nodes = [...payload.nodes].sort((a, b) => Number(b.degree || 0) - Number(a.degree || 0) || String(a.label || '').localeCompare(String(b.label || '')));
+        const docs = payload.nodes.filter((node) => node.kind === 'document');
+        const rest = payload.nodes
+          .filter((node) => node.kind !== 'document')
+          .sort((a, b) => Number(b.degree || 0) - Number(a.degree || 0) || String(a.label || '').localeCompare(String(b.label || '')));
+        payload.nodes = [...docs, ...rest];
       }
       res.json(payload);
     } catch (e: any) {
@@ -789,6 +820,8 @@ export function mountMemoryEngine(app: Express) {
   app.delete('/v4/memories', (req, res) => {
     try {
       const id = String(req.body?.id || req.query.id || '');
+      const doc = readDocument(id, uidOf(req));
+      if (doc) assertKey(req, doc.containerTag, true);
       res.json(forgetById(id, uidOf(req)));
     } catch (e: any) {
       fail(res, e);
@@ -797,7 +830,9 @@ export function mountMemoryEngine(app: Express) {
 
   app.post('/v4/memories/forget-matching', (req, res) => {
     try {
-      res.json(forgetMatching(String(req.body?.query || ''), tagOf(req), !!req.body?.dryRun, uidOf(req)));
+      const tag = tagOf(req);
+      assertKey(req, tag, true);
+      res.json(forgetMatching(String(req.body?.query || ''), tag, !!req.body?.dryRun, uidOf(req)));
     } catch (e: any) {
       fail(res, e);
     }
@@ -1128,7 +1163,12 @@ export function mountMemoryEngine(app: Express) {
       const uid = uidOf(req);
       const tag = String(req.query.containerTag || '');
       if (tag) assertKey(req, tag, false);
-      const rows = tag ? listDocuments(tag, uid) : listDocuments(undefined, uid);
+      const rows = (tag ? listDocuments(tag, uid) : listDocuments(undefined, uid)).map((doc) => ({
+        ...doc,
+        text: doc.preview,
+        kind: doc.source,
+        docId: doc.id,
+      }));
       const limit = Math.min(200, Math.max(1, Number(req.query.limit || 50)));
       const page = pageByCursor(rows, String(req.query.cursor || ''), limit);
       res.json({ memories: page.items, items: page.items, nextCursor: page.nextCursor, hasMore: page.hasMore });
@@ -1162,6 +1202,7 @@ export function mountMemoryEngine(app: Express) {
       const docId = String(req.query.docId || '');
       const doc = readDocument(docId, uid);
       if (!doc) return res.status(404).json({ error: 'Document not found' });
+      assertKey(req, doc.containerTag, false);
       const rows = getState().chunks.filter((chunk) => chunk.docId === docId && !chunk.forgotten);
       const limit = Math.min(200, Math.max(1, Number(req.query.limit || 50)));
       const page = pageByCursor(rows, String(req.query.cursor || ''), limit);

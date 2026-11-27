@@ -113,7 +113,7 @@ async function attachChunks(doc: DocRec, text: string) {
   });
 }
 
-async function extractInto(tag: string, text: string, gov?: DocRec['gov'], originalText = '') {
+async function extractInto(tag: string, text: string, gov?: DocRec['gov'], originalText = '', docId = '') {
   const state = getState();
   const graph = await extractGraph(text.slice(0, 8000));
   for (const e of graph.entities || []) {
@@ -122,7 +122,8 @@ async function extractInto(tag: string, text: string, gov?: DocRec['gov'], origi
     if (state.entities.some((x) => x.containerTag === tag && x.name.toLowerCase() === name.toLowerCase())) continue;
     state.entities.push({ id: uid('ent'), containerTag: tag, name, type: e.type || 'topic' });
   }
-  upsertFacts(tag, graph.triples || [], text.slice(0, 240), gov, originalText || text);
+  const stamped = gov ? { ...gov, sourceRef: gov.sourceRef || docId || undefined } : gov;
+  upsertFacts(tag, graph.triples || [], text.slice(0, 240), stamped, originalText || text);
   deriveFacts(tag);
 }
 
@@ -208,7 +209,7 @@ export async function ingestDocument(input: {
         if (chunk.gov) chunk.gov.deletedAt = new Date().toISOString();
       }
       const chunks = await attachChunks(existing, text);
-      if (input.task !== 'rag' && input.extract !== false) await extractInto(tag, text, existing.gov, existing.originalText || text);
+      if (input.task !== 'rag' && input.extract !== false) await extractInto(tag, text, existing.gov, existing.originalText || text, existing.id);
       state.jobs.push({
         id: uid('job'),
         status: 'done',
@@ -252,34 +253,55 @@ export async function ingestDocument(input: {
   doc.processingStatus = 'searchable';
   state.documents.push(doc);
   const skipExtract = input.task === 'rag' || input.extract === false;
-  const finishExtract = async () => {
-    if (skipExtract) {
-      doc.processingStatus = 'done';
-      doc.memoryStatusReason = 'Extraction skipped';
-      return;
-    }
-    const before = getState().triples.filter((row) => row.containerTag === tag).length;
-    try {
-      await extractInto(tag, text, doc.gov, doc.originalText || text);
-      const after = getState().triples.filter((row) => row.containerTag === tag).length;
-      doc.processingStatus = 'done';
-      doc.memoryStatusReason = after > before ? '' : 'No durable facts found';
-    } catch {
-      doc.processingStatus = 'searchable';
-      doc.memoryStatusReason = 'Extraction failed';
-    }
-  };
-  if (input.deferExtract) void finishExtract().finally(() => saveState());
-  else await finishExtract();
-
-  state.jobs.push({
+  const job = {
     id: uid('job'),
-    status: doc.processingStatus || 'done',
+    status: skipExtract ? 'done' : 'searchable',
     message: `Ingested ${doc.title} (${chunks.length} chunks)`,
     at: new Date().toISOString(),
     ownerUid: uidFromTag(tag),
     containerTag: tag,
-  });
+  };
+  const finishExtract = async () => {
+    if (skipExtract) {
+      doc.processingStatus = 'done';
+      doc.memoryStatusReason = 'Extraction skipped';
+      job.status = 'done';
+      return;
+    }
+    const before = getState().triples.filter((row) => row.containerTag === tag).length;
+    try {
+      await extractInto(tag, text, doc.gov, doc.originalText || text, doc.id);
+      const after = getState().triples.filter((row) => row.containerTag === tag).length;
+      doc.processingStatus = 'done';
+      doc.memoryStatusReason = after > before ? '' : 'No durable facts found';
+      job.status = 'done';
+      if (doc.memoryStatusReason) job.message = doc.memoryStatusReason;
+    } catch {
+      doc.processingStatus = 'searchable';
+      doc.memoryStatusReason = 'Extraction failed';
+      job.status = 'error';
+      job.message = 'Extraction failed';
+    }
+  };
+  if (input.deferExtract && !skipExtract) {
+    const slow = setTimeout(() => {
+      if (doc.processingStatus === 'searchable') {
+        doc.memoryStatusReason = doc.memoryStatusReason || 'Taking longer than usual';
+        job.message = 'Taking longer than usual';
+      }
+    }, 30000);
+    slow.unref?.();
+    setImmediate(() => {
+      void finishExtract().finally(() => {
+        clearTimeout(slow);
+        if (doc.processingStatus === 'done' && doc.memoryStatusReason === 'Taking longer than usual') doc.memoryStatusReason = '';
+        saveState();
+      });
+    });
+  } else {
+    await finishExtract();
+  }
+  state.jobs.push(job);
   if (actorId) {
     audit({
       actorId,
@@ -1074,30 +1096,42 @@ export function readDocument(id: string, uid?: string) {
   };
 }
 
+/** degree = distinct neighboring names linked by a latest triple. sourceDocuments are newest first. */
 export function entityCatalog(uid: string) {
   const state = getState();
   const tags = new Set(readTagsFor(uid, { scope: 'all' }));
   const docs = state.documents.filter((doc) => tags.has(doc.containerTag) && canRead(uid, doc) && !doc.forgotten);
-  const triples = state.triples.filter((row) => tags.has(row.containerTag) && canRead(uid, row));
+  const byId = new Map(docs.map((doc) => [doc.id, doc]));
+  const triples = state.triples.filter((row) => tags.has(row.containerTag) && canRead(uid, row) && row.isLatest !== false);
   const neighbors = new Map<string, Set<string>>();
-  const link = (left: string, right: string) => {
+  const sources = new Map<string, Set<string>>();
+  const link = (left: string, right: string, docId?: string) => {
     const key = left.trim().toLowerCase();
     const other = right.trim().toLowerCase();
     if (!key || !other || key === other) return;
     const bag = neighbors.get(key) || new Set<string>();
     bag.add(other);
     neighbors.set(key, bag);
+    if (docId && byId.has(docId)) {
+      const bagDocs = sources.get(key) || new Set<string>();
+      bagDocs.add(docId);
+      sources.set(key, bagDocs);
+    }
   };
   for (const row of triples) {
-    link(row.subject, row.object);
-    link(row.object, row.subject);
+    const docId = row.gov?.sourceRef || '';
+    link(row.subject, row.object, docId);
+    link(row.object, row.subject, docId);
   }
   return state.entities
     .filter((entity) => tags.has(entity.containerTag))
     .map((entity) => {
       const key = entity.name.trim().toLowerCase();
-      const sourceDocuments = docs
-        .filter((doc) => `${doc.title}\n${doc.text}`.toLowerCase().includes(key))
+      const mentioned = docs.filter((doc) => key.length > 2 && `${doc.title}\n${doc.text}`.toLowerCase().includes(key)).map((doc) => doc.id);
+      const ids = new Set([...(sources.get(key) || []), ...mentioned]);
+      const sourceDocuments = [...ids]
+        .map((id) => byId.get(id))
+        .filter((doc): doc is NonNullable<typeof doc> => !!doc)
         .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
         .map((doc) => ({ id: doc.id, title: doc.title, createdAt: doc.createdAt, source: doc.source }));
       return {
@@ -1107,6 +1141,7 @@ export function entityCatalog(uid: string) {
         createdAt: sourceDocuments[0]?.createdAt || '',
         degree: neighbors.get(key)?.size || 0,
         sourceDocuments,
+        episodes: sourceDocuments,
       };
     });
 }
@@ -1318,6 +1353,8 @@ export function graphPayload(containerTag?: string | null, uid?: string, scope: 
         captureType: d.metadata?.capture_type || '',
         containerTag: d.containerTag,
         createdAt: d.createdAt,
+        processingStatus: d.processingStatus || 'done',
+        memoryStatusReason: d.memoryStatusReason || '',
         text: String(d.text || '').slice(0, 4000),
         originalText: d.originalText || '',
         facts: factsAbout(d.title),

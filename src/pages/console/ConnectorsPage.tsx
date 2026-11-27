@@ -387,41 +387,47 @@ function GmailConnectCard() {
   );
 }
 
-function ConnectorAsk() {
-  const [open, setOpen] = useState(false);
+function ConnectorAsk({ open, onClose }: { open: boolean; onClose: () => void }) {
   const [tool, setTool] = useState('');
   const [useCase, setUseCase] = useState('');
   const [note, setNote] = useState('');
+  const known = [...AI_APPS.map((app) => app.name), ...FILE_CONNECTORS.map((app) => app.name)];
+  const already = known.find((name) => name.toLowerCase() === tool.trim().toLowerCase());
+  if (!open && !note) return null;
   return (
-    <div className="pt-1">
-      <button type="button" className="text-[12.5px] text-zinc-300 underline" onClick={() => setOpen(true)}>
-        Request a connector
-      </button>
+    <>
+      {note ? <p className="mb-3 text-[12.5px] text-emerald-400">{note}</p> : null}
       {open ? (
-        <div className="mt-2 space-y-2">
-          <input value={tool} onChange={(e) => setTool(e.target.value)} placeholder="Tool" className="w-full h-8 px-2 rounded-md bg-[#0c0c0e] border border-white/[0.08] text-[12px]" />
-          <input value={useCase} onChange={(e) => setUseCase(e.target.value)} placeholder="What you need it for" className="w-full h-8 px-2 rounded-md bg-[#0c0c0e] border border-white/[0.08] text-[12px]" />
-          <button
-            type="button"
-            className="h-8 px-3 rounded-md bg-[#2563eb] text-[12px] text-white"
-            onClick={() =>
-              engine
-                .requestConnector({ tool, useCase })
-                .then(() => {
-                  setNote('Request saved');
-                  setOpen(false);
-                })
-                .catch((e) => setNote(e.message || 'Could not save the request'))
-            }
-          >
-            Send
-          </button>
-          {note ? <p className="text-[12px] text-zinc-400">{note}</p> : null}
+        <div className="fixed inset-0 z-40 bg-black/50 flex items-center justify-center p-4" onClick={onClose}>
+          <div className="w-full max-w-md rounded-xl border border-white/[0.1] bg-[#161618] p-4" onClick={(e) => e.stopPropagation()}>
+            <p className="text-[15px] text-white mb-3">Request a connector</p>
+            <input value={tool} onChange={(e) => setTool(e.target.value)} placeholder="Which tool?" className="w-full h-9 px-3 mb-2 rounded-lg bg-[#0c0c0e] border border-white/[0.08] text-[13px]" />
+            <textarea value={useCase} onChange={(e) => setUseCase(e.target.value)} placeholder="How would you use it?" className="w-full h-24 px-3 py-2 mb-2 rounded-lg bg-[#0c0c0e] border border-white/[0.08] text-[13px]" />
+            {already ? <p className="text-[12px] text-zinc-400 mb-2">{already} is already available on this page.</p> : null}
+            <div className="flex justify-end gap-2">
+              <button type="button" className="h-8 px-3 text-[13px] text-zinc-400" onClick={onClose}>Cancel</button>
+              <button
+                type="button"
+                className="h-8 px-3 rounded-md bg-[#2563eb] text-[12px] text-white"
+                onClick={() =>
+                  engine
+                    .requestConnector({ tool, useCase })
+                    .then(() => {
+                      setNote('Request saved');
+                      setTool('');
+                      setUseCase('');
+                      onClose();
+                    })
+                    .catch((e) => setNote(e.message || 'Could not save the request'))
+                }
+              >
+                Send
+              </button>
+            </div>
+          </div>
         </div>
-      ) : note ? (
-        <p className="text-[12px] text-zinc-400">{note}</p>
       ) : null}
-    </div>
+    </>
   );
 }
 
@@ -430,6 +436,7 @@ export default function ConnectorsPage() {
   const [q, setQ] = useState('');
   const [copied, setCopied] = useState<string | null>(null);
   const [connected, setConnected] = useState<AiAppId[]>([]);
+  const [askOpen, setAskOpen] = useState(false);
   const [key, setKey] = useState('');
   const [readyKey, setReadyKey] = useState('');
   const [busyApp, setBusyApp] = useState<AiAppId | null>(null);
@@ -544,7 +551,13 @@ export default function ConnectorsPage() {
             <DocLink section="connect">How connectors work ↗</DocLink>
           </>
         }
+        action={
+          <button type="button" className="h-8 px-3 rounded-lg border border-white/[0.1] text-[13px] text-zinc-200" onClick={() => setAskOpen(true)}>
+            Request a connector
+          </button>
+        }
       />
+      <ConnectorAsk open={askOpen} onClose={() => setAskOpen(false)} />
 
       <Panel className="mb-4 p-4 text-[13px] text-zinc-400 leading-relaxed space-y-2">
         <p className="text-zinc-200">You do not paste ChatGPT, Gemini, Claude, or Grok API keys.</p>
@@ -566,7 +579,6 @@ export default function ConnectorsPage() {
             {copied === 'mcpk' ? <Check size={12} /> : <Copy size={12} />} Copy MCP URL
           </button>
         </div>
-        <ConnectorAsk />
         <p className="text-[11px] font-mono text-zinc-500 break-all">{keyed}</p>
         {connectNote && (
           <p className="text-[12px] text-emerald-400" role="status">

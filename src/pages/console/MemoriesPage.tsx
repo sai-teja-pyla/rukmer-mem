@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Library, Search } from 'lucide-react';
-import { PageHeader, Panel, EmptyState, PrimaryButton, GhostButton } from '../../components/console/ui';
+import { PageHeader, Panel, EmptyState, PrimaryButton, GhostButton, StatusBadge } from '../../components/console/ui';
 import { engine } from '../../services/engineClient';
 
 type Doc = {
@@ -11,6 +11,8 @@ type Doc = {
   createdAt?: string;
   source?: string;
   containerTag?: string;
+  processingStatus?: string;
+  memoryStatusReason?: string;
 };
 
 type Undo = { title: string; text: string; containerTag?: string };
@@ -153,6 +155,7 @@ export default function MemoriesPage() {
                   <div className="flex items-start justify-between gap-3">
                     <div className="min-w-0">
                       <p className="text-[13.5px] text-zinc-100 truncate">{doc.title || 'Untitled memory'}</p>
+                      <StatusBadge status={doc.processingStatus} reason={doc.memoryStatusReason} />
                       <p className="text-[12.5px] text-zinc-400 mt-1 max-h-14 overflow-hidden whitespace-pre-wrap">{doc.preview || doc.text || 'No text'}</p>
                       <p className="text-[11px] text-zinc-500 mt-1">{when(doc.createdAt)}{doc.source ? ` · ${doc.source}` : ''}</p>
                     </div>

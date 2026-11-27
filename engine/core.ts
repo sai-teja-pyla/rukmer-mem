@@ -164,6 +164,7 @@ export interface OauthCodeRec {
   readOnly?: boolean;
   containerTags?: string[];
   scope?: string;
+  createdBy?: { uid: string; email?: string; name?: string };
 }
 
 export interface OauthRefreshRec {

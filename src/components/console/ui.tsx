@@ -186,6 +186,16 @@ export function TableHead({ cols }: { cols: string[] }) {
   );
 }
 
+export function StatusBadge({ status, reason }: { status?: string; reason?: string }) {
+  const label = status === 'searchable' ? 'Searchable' : status === 'queued' ? 'Queued' : 'Done';
+  return (
+    <span className="text-[11px] text-zinc-400" title={reason || undefined}>
+      {label}
+      {reason ? ` · ${reason}` : ''}
+    </span>
+  );
+}
+
 export function CopyField({ value }: { value: string }) {
   const [copied, setCopied] = React.useState(false);
   return (

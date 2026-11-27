@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Folder, FileText, Users } from 'lucide-react';
-import { PageHeader, DocLink, Panel, EmptyState, Skeleton, LoadError } from '../../components/console/ui';
+import { PageHeader, DocLink, Panel, EmptyState, Skeleton, LoadError, StatusBadge } from '../../components/console/ui';
 import { engine } from '../../services/engineClient';
 
 export default function UserInsightsPage() {
@@ -115,7 +115,7 @@ export default function UserInsightsPage() {
                   <div className="min-w-0">
                     <p className="text-[13.5px] text-zinc-100 truncate">{d.title}</p>
                     <p className="text-[12px] text-zinc-500">
-                      {d.folder} · {d.source} · {d.chars || 0} chars · {d.createdAt ? new Date(d.createdAt).toLocaleString() : ''}
+                      {d.folder} · {d.source} · {d.chars || 0} chars · {d.createdAt ? new Date(d.createdAt).toLocaleString() : ''} · <StatusBadge status={d.processingStatus} reason={d.memoryStatusReason} />
                     </p>
                   </div>
                 </div>

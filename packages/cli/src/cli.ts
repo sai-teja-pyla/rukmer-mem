@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import crypto from 'crypto';
+import { spawn } from 'child_process';
 import fs from 'fs';
 import http from 'http';
 import path from 'path';
@@ -91,6 +92,7 @@ Options:
 
 Commands:
   login     Sign in through the browser and save a key
+  logout    Remove the saved API key
   setup     Write RUKMER_API_KEY and wire MCP
   search    Search memory
   add       Save a note
@@ -117,6 +119,13 @@ async function login(flags: Flags) {
       authorize.searchParams.set('code_challenge_method', 'S256');
       authorize.searchParams.set('connector', 'cli');
       console.log(`Open ${authorize.toString()}`);
+      const opener = process.platform === 'darwin' ? 'open' : 'xdg-open';
+      try {
+        const child = spawn(opener, [authorize.toString()], { stdio: 'ignore', detached: true });
+        child.unref();
+      } catch {
+        /* the printed URL is enough when a browser cannot be opened */
+      }
       server.on('request', async (req, res) => {
         const incoming = new URL(req.url || '/', redirect);
         if (incoming.searchParams.get('state') !== state) {
@@ -142,17 +151,27 @@ async function login(flags: Flags) {
   console.log(`Saved ${envName}`);
 }
 
+async function logout() {
+  const cwd = process.cwd();
+  const envName = detectEnvFile(cwd);
+  const file = path.join(cwd, envName);
+  if (fs.existsSync(file)) {
+    const lines = fs.readFileSync(file, 'utf8').split(/\n/).filter((line) => !line.startsWith('RUKMER_API_KEY='));
+    fs.writeFileSync(file, `${lines.filter((line, index, all) => line || index < all.length - 1).join('\n')}\n`);
+  }
+  console.log('Signed out. RUKMER_API_KEY was removed from the local env file.');
+}
+
 async function setup(flags: Flags) {
   if (flags.help) return help(true);
   const cwd = process.cwd();
   const kind = fs.existsSync(path.join(cwd, 'package.json')) ? 'node' : fs.existsSync(path.join(cwd, 'pyproject.toml')) || fs.existsSync(path.join(cwd, 'requirements.txt')) ? 'python' : 'unknown';
   let apiKey = flags.apiKey || process.env.RUKMER_API_KEY || '';
   let url = flags.url || process.env.RUKMER_URL || 'https://app.rukmer.com';
-  if (!flags.yes && !apiKey) apiKey = await ask('Rukmer API key: ');
   if (!apiKey) {
-    console.error('An API key is required. Create one in the Rukmer console, then rerun with --api-key.');
-    process.exitCode = 1;
-    return;
+    await login(flags);
+    const saved = fs.readFileSync(path.join(cwd, detectEnvFile(cwd)), 'utf8');
+    apiKey = saved.split(/\n/).find((line) => line.startsWith('RUKMER_API_KEY='))?.slice('RUKMER_API_KEY='.length) || '';
   }
   const envName = detectEnvFile(cwd);
   upsertEnv(path.join(cwd, envName), { RUKMER_API_KEY: apiKey, RUKMER_URL: url });
@@ -170,6 +189,7 @@ async function main() {
     return;
   }
   if (flags.command === 'login') return login(flags);
+  if (flags.command === 'logout') return logout();
   if (flags.command === 'setup') return setup(flags);
   const client = new RukmerClient({
     baseUrl: flags.url || process.env.RUKMER_URL || 'https://app.rukmer.com',

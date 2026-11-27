@@ -56,6 +56,10 @@ type GraphNode = {
   text?: string;
   originalText?: string;
   facts?: Fact[];
+  processingStatus?: string;
+  memoryStatusReason?: string;
+  degree?: number;
+  sourceDocuments?: { id: string; title: string }[];
   x?: number;
   y?: number;
 };
@@ -541,6 +545,14 @@ export default function MemoryGraphPage() {
               <div className="flex items-center gap-2">
                 <Brain size={16} strokeWidth={1.7} />
                 <span className="text-[14px] font-medium">{selected.kind === 'document' ? 'Document' : 'Memory'}</span>
+                {selected.kind === 'document' ? (
+                  <span className="text-[11px] graph-muted" title={selected.memoryStatusReason || undefined}>
+                    {selected.processingStatus === 'searchable' ? 'Searchable' : selected.processingStatus === 'queued' ? 'Queued' : 'Done'}
+                    {selected.memoryStatusReason ? ` · ${selected.memoryStatusReason}` : ''}
+                  </span>
+                ) : selected.sourceDocuments?.length ? (
+                  <span className="text-[11px] graph-muted">{selected.sourceDocuments[0].title}</span>
+                ) : null}
                 {sourceMark(selected) ? (
                   <span className="text-[10px] tracking-wide graph-muted">{sourceCaption(selected)}</span>
                 ) : null}

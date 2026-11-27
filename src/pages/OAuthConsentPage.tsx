@@ -10,11 +10,18 @@ export default function OAuthConsentPage() {
   const [readOnly, setReadOnly] = useState(params.get('scope') === 'memory:read');
   const [tags, setTags] = useState<string[]>([]);
   const [picked, setPicked] = useState<string[]>([]);
+  const [teams, setTeams] = useState<{ id: string; name: string; orgId?: string }[]>([]);
+  const [teamId, setTeamId] = useState('');
   const client = params.get('connector') || params.get('client') || params.get('client_id') || 'unknown client';
   const redirect = params.get('redirect_uri') || '';
 
   useEffect(() => {
     engine.tags().then((out) => setTags((out.tags || []).map((row: { tag: string }) => row.tag))).catch(() => setTags([]));
+    engine.teams().then((out) => {
+      const rows = out.teams || [];
+      setTeams(rows);
+      if (rows.length === 1) setTeamId(rows[0].id);
+    }).catch(() => setTeams([]));
   }, []);
 
   const allow = async () => {
@@ -31,6 +38,8 @@ export default function OAuthConsentPage() {
         connector: params.get('connector') || params.get('client'),
         readOnly,
         containerTags: picked,
+        teamId,
+        orgId: teams.find((team) => team.id === teamId)?.orgId || '',
         scope: readOnly ? 'memory:read' : 'memory',
       });
       if (out.redirect) {
@@ -55,6 +64,16 @@ export default function OAuthConsentPage() {
             : `${client} wants to search and save durable facts in your private Rukmer space. Allow once. ChatGPT, Gemini, Claude, and Grok then use this memory going forward. They cannot import old website threads.`}
         </p>
         <p className="text-[13px] text-zinc-200 mb-2">Connecting {client}</p>
+        <label className="block text-[12px] text-zinc-400 mb-3">
+          Space
+          <select value={teamId} onChange={(e) => setTeamId(e.target.value)} className="mt-1 w-full h-9 px-2 rounded-lg bg-[#0c0c0e] border border-white/[0.08] text-zinc-200">
+            <option value="">Personal</option>
+            {teams.map((team) => (
+              <option key={team.id} value={team.id}>{team.name}</option>
+            ))}
+          </select>
+        </label>
+        <p className="text-[12px] text-zinc-400 mb-1">{readOnly ? 'Read only' : 'Read and write'}</p>
         <label className="flex items-center gap-2 text-[13px] text-zinc-300 mb-3">
           <input type="checkbox" checked={readOnly} onChange={(e) => setReadOnly(e.target.checked)} />
           Read only
