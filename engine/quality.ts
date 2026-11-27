@@ -130,14 +130,29 @@ export function isChatter(text: string) {
   return false;
 }
 
+const PREFERENCE_STATEMENT = /\b(?:i|we)\s+(?:like|love|prefer|drink)\b|\b(?:my favourite|my favorite|favourite|favorite|my coffee|i drink)\b/i;
+
 export function looksLikeDurableFact(text: string) {
   const t = text.trim();
-  if (isChatter(t) || t.length < 12) return false;
+  if (!t) return false;
+  const explicit = /\b(remember that|please remember|save this|note that|don't forget|do not forget)\b/i.test(t);
+  if (isChatter(t) && !explicit) return false;
+  if (PREFERENCE_STATEMENT.test(t) || explicit) return true;
+  if (t.length < 12) return false;
   if (/\b(remember that|save this|note that|don't forget|do not forget|important|decision|we decided|i decided|the plan|deadline|launch|prefer|i work|my name|i am|i'm|i live|based in|we need|next step|constraint|requirement|must store|must not)\b/i.test(t)) {
     return true;
   }
   if (t.includes('?') && t.replace(/[^?]/g, '').length === 1 && t.length < 48) return false;
   return t.length >= 28 && /\b(is|are|was|were|will|should|must|decided|owns|uses|needs|plans|building|works|stores|wants)\b/i.test(t);
+}
+
+/** A one-word answer such as "espresso" after a coffee question becomes a preference statement. */
+export function preferenceFromContext(latest: string, context: string) {
+  const answer = String(latest || '').trim();
+  if (!answer || answer.length > 48 || answer.includes('?') || isChatter(answer)) return '';
+  if (looksLikeDurableFact(answer)) return '';
+  if (!/\b(coffee|drink|tea|espresso|beverage)\b/i.test(context)) return '';
+  return `I like ${answer}`;
 }
 
 export function sanitiseGraph(raw: { entities?: any[]; triples?: any[] }) {

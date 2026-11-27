@@ -139,7 +139,7 @@ export default function ConsoleLayout({ user, restoring = false }: ConsoleLayout
   const navigate = useNavigate();
   const location = useLocation();
   const [query, setQuery] = useState('');
-  const [memoryScope, setMemoryScope] = useState<MemoryScope>('all');
+  const [memoryScope, setMemoryScope] = useState<MemoryScope>('private');
   const [toast, setToast] = useState('');
   const [inbox, setInbox] = useState<{ id: string; teamName: string }[]>([]);
   const [memories, setMemories] = useState<MemoryHit[]>([]);
@@ -605,6 +605,7 @@ export default function ConsoleLayout({ user, restoring = false }: ConsoleLayout
             </button>
           </div>
         ))}
+        <div className="shrink-0 px-3 sm:px-4 pt-2 text-[13px] text-zinc-300">You are in {memoryScope === 'team' ? 'an Organization' : memoryScope === 'all' ? 'Search all spaces' : 'Personal'}</div>
         <main
           className={`flex-1 min-h-0 min-w-0 bg-[#0f0f11] ${
             isImmersive ? 'overflow-hidden p-0' : 'overflow-y-auto overflow-x-hidden p-3 sm:p-4 md:p-5'

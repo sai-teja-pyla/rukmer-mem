@@ -144,8 +144,8 @@ export default function OverviewPage() {
 
         <section className="mt-6">
           <p className="text-[13px] text-zinc-400 mb-2">2. Run this in your project</p>
-          <div className="flex items-center justify-between gap-3 rounded-lg border border-white/[0.08] bg-[#0c0c0e] px-3 py-2.5">
-            <code className="text-[13px] text-zinc-100">$ npx rukmer setup</code>
+          <div className="flex items-center justify-between gap-3 rounded-lg border border-white/[0.08] bg-[#0c0c0e] px-3 py-2.5 min-w-0">
+            <code className="text-[13px] text-zinc-100 min-w-0 break-all">$ npx rukmer setup</code>
             <button type="button" className="text-[12.5px] text-[#93c5fd]" onClick={() => void copy('cmd', 'npx rukmer setup')}>
               {copied === 'cmd' ? 'Copied' : 'Copy'}
             </button>
@@ -218,12 +218,12 @@ export default function OverviewPage() {
 
 function StatusRow({ label, done, waiting, detail }: { label: string; done: boolean; waiting: boolean; detail: string }) {
   return (
-    <div className="mt-3 flex items-center justify-between gap-3 text-[13px]">
-      <span className="text-zinc-200 inline-flex items-center gap-2">
+    <div className="mt-3 flex items-center justify-between gap-3 text-[13px] min-w-0">
+      <span className="text-zinc-200 inline-flex items-center gap-2 min-w-0">
         {done ? <Check size={14} className="text-emerald-400" /> : waiting ? <Loader2 size={14} className="animate-spin text-zinc-500" /> : null}
         {label}
       </span>
-      <span className="text-zinc-500">{detail}</span>
+      <span className="text-zinc-500 min-w-0 break-words text-right">{detail}</span>
     </div>
   );
 }

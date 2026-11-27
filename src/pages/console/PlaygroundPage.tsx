@@ -22,6 +22,8 @@ import { keyHeaders, loadProviderKeys, pickReadyModel, saveProviderKeys, type Pr
 import type { UserProfile } from '../../types';
 import { homeTag as makeHomeTag } from '../../services/tenancy';
 import { spaceLabel, type SpaceRef } from '../../services/spaceLabel';
+import { openPlaygroundSession } from './playgroundSession';
+import { currentModel } from '../../../engine/models';
 
 type MemoryMode = 'agentic' | 'auto';
 type Retrieval = 'hybrid' | 'semantic' | 'keyword';
@@ -69,10 +71,14 @@ function newThread(): Thread {
 }
 
 const MODELS = [
-  { id: 'gemini-3.8-flash', label: 'Gemini 3.8 Flash', provider: 'gemini', vendor: 'Gemini' },
-  { id: 'gpt-4o-mini', label: 'ChatGPT 4o mini', provider: 'openai', vendor: 'OpenAI' },
-  { id: 'claude-sonnet-4-5', label: 'Claude Sonnet', provider: 'anthropic', vendor: 'Anthropic' },
-  { id: 'grok-3-mini', label: 'Grok 3 mini', provider: 'grok', vendor: 'xAI' },
+  { id: 'gemini-4-hydrogen', label: 'Gemini 4 Hydrogen', provider: 'gemini', vendor: 'Gemini' },
+  { id: 'gemini-4-carbon', label: 'Gemini 4 Carbon', provider: 'gemini', vendor: 'Gemini' },
+  { id: 'gemini-3.5-flash-lite', label: 'Gemini 3.5 Flash Lite', provider: 'gemini', vendor: 'Gemini' },
+  { id: 'gpt-6.2-astra', label: 'GPT 6.2 Astra', provider: 'openai', vendor: 'OpenAI' },
+  { id: 'claude-sonnet-5-5', label: 'Claude Sonnet 5.5', provider: 'anthropic', vendor: 'Anthropic' },
+  { id: 'claude-haiku-5-5', label: 'Claude Haiku 5.5', provider: 'anthropic', vendor: 'Anthropic' },
+  { id: 'claude-opus-5-5', label: 'Claude Opus 5.5', provider: 'anthropic', vendor: 'Anthropic' },
+  { id: 'grok-4.7', label: 'Grok 4.7', provider: 'grok', vendor: 'xAI' },
 ] as const;
 type Mode = 'chat' | 'search';
 const SOURCES = ['All sources', 'Documents', 'Conversations', 'Apps'];
@@ -203,7 +209,7 @@ function CircleCheck({ on, onClick, label }: { on: boolean; onClick: () => void;
 }
 
 export default function PlaygroundPage() {
-  const { user, homeTag, memoryScope = 'all', setMemoryScope } = useOutletContext<{
+  const { user, homeTag, memoryScope = 'private', setMemoryScope } = useOutletContext<{
     user: UserProfile;
     homeTag: string;
     memoryScope?: MemoryScope;
@@ -218,7 +224,8 @@ export default function PlaygroundPage() {
     const stored = loadProviderKeys();
     const ready: Record<string, boolean> = {};
     for (const candidate of MODELS) ready[candidate.provider] = !!stored[candidate.provider];
-    return pickReadyModel(MODELS, ready) || MODELS[0];
+    const remembered = MODELS.find((item) => item.id === currentModel(localStorage.getItem('rukmer.playground.model') || ''));
+    return remembered || pickReadyModel(MODELS, ready) || MODELS[0];
   });
   const [tag, setTag] = useState(mine);
   const [tagOptions, setTagOptions] = useState<string[]>(mine ? [mine] : []);
@@ -247,13 +254,17 @@ export default function PlaygroundPage() {
   const [copied, setCopied] = useState(false);
   const [modelOpen, setModelOpen] = useState(false);
   const modelBtnRef = useRef<HTMLButtonElement>(null);
+  const messagesRef = useRef<HTMLDivElement>(null);
+  const stickRef = useRef(true);
   const modelMenuRef = useRef<HTMLDivElement>(null);
   const [modelBox, setModelBox] = useState<{ left: number; maxHeight: number; top?: number; bottom?: number } | null>(null);
   const [threads, setThreads] = useState<Thread[]>(() => {
-    const saved = loadThreads(user.uid);
-    return saved.length ? saved : [newThread()];
+    const opened = openPlaygroundSession(loadThreads(user.uid), new URLSearchParams(window.location.search).get('thread') || '');
+    return [opened.active as Thread, ...opened.history.filter((item) => item.id !== opened.active.id) as Thread[]];
   });
-  const [threadId, setThreadId] = useState(() => (loadThreads(user.uid)[0] || newThread()).id);
+  const [threadId, setThreadId] = useState(() => openPlaygroundSession(loadThreads(user.uid), new URLSearchParams(window.location.search).get('thread') || '').active.id);
+  const [saveNote, setSaveNote] = useState('');
+  const [spaceHint, setSpaceHint] = useState<{ spaceLabel?: string; spaceKind?: string; requiresConfirmation?: boolean } | null>(null);
   const [hits, setHits] = useState<any[]>([]);
   const [busy, setBusy] = useState(false);
   const [renaming, setRenaming] = useState(false);
@@ -344,6 +355,12 @@ export default function PlaygroundPage() {
     };
   }, [modelOpen]);
 
+  useEffect(() => {
+    if (!stickRef.current) return;
+    const node = messagesRef.current;
+    if (node) node.scrollTop = node.scrollHeight;
+  }, [messages.length, busy, saveNote]);
+
   const search = searchParams.toString();
   useEffect(() => {
     const params = new URLSearchParams(search);
@@ -362,7 +379,11 @@ export default function PlaygroundPage() {
     const ready: Record<string, boolean> = {};
     for (const candidate of MODELS) ready[candidate.provider] = providerReady(candidate.provider);
     const first = pickReadyModel(MODELS, ready);
-    setModel((cur) => (ready[cur.provider] ? cur : first || cur));
+    setModel((cur) => {
+      const mapped = MODELS.find((item) => item.id === currentModel(cur.id)) || cur;
+      localStorage.setItem('rukmer.playground.model', mapped.id);
+      return ready[mapped.provider] ? mapped : first || mapped;
+    });
   }, [serverProviders, keys]);
 
   useEffect(() => {
@@ -562,6 +583,7 @@ export default function PlaygroundPage() {
             messages: history,
             containerTag: tag || mine,
             scope: memoryScope,
+            source: 'playground',
             memoriesRetrieved: retrieved,
             matchStrictness: strictness,
             retrieval,
@@ -595,6 +617,9 @@ export default function PlaygroundPage() {
         if (!answerText) throw new Error('The model did not reply.');
         const answer = answerText;
         const citations = (out.rukmer?.citations || []) as Citation[];
+        const saved = out.rukmer?.memorySave;
+        setSaveNote(saved?.saved ? `Saved to ${saved.spaceLabel || 'Personal'} memory` : saved?.skipped ? `Not saved: ${saved.reason || 'not a durable fact'}` : '');
+        setSpaceHint(out.rukmer?.otherSpaceHint || null);
         setHits([]);
         persistThreads(
           withUser.map((t) =>
@@ -649,8 +674,8 @@ export default function PlaygroundPage() {
         </p>
       </div>
 
-      <div className="flex-1 min-h-0 grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_300px] gap-3 overflow-y-auto xl:overflow-hidden">
-        <section className="min-h-[420px] xl:min-h-0 rounded-2xl border border-white/[0.07] bg-[#111113] flex flex-col overflow-hidden">
+      <div className="flex-1 min-h-0 grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_300px] gap-3 overflow-hidden">
+        <section className="min-h-0 h-full rounded-2xl border border-white/[0.07] bg-[#111113] flex flex-col overflow-hidden">
           <div className="flex flex-col gap-2 px-3 sm:px-4 pt-3 pb-2">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div className="inline-flex rounded-lg border border-white/[0.08] bg-[#0c0c0e] p-0.5">
@@ -672,6 +697,16 @@ export default function PlaygroundPage() {
               </button>
             </div>
             <div className="flex flex-wrap items-center gap-2">
+              <details className="text-[13px] text-zinc-300">
+                <summary className="cursor-pointer">Chat history</summary>
+                <div className="mt-1 max-h-40 overflow-auto">
+                  {threads.filter((item) => item.messages.some((message) => message.text.trim())).map((item) => (
+                    <button key={item.id} type="button" className="block w-full text-left px-2 py-1 rounded hover:bg-white/[0.05] break-words" onClick={() => setThreadId(item.id)}>
+                      {item.title}
+                    </button>
+                  ))}
+                </div>
+              </details>
               <select
                 aria-label="Chat thread"
                 value={threadId}
@@ -777,7 +812,14 @@ export default function PlaygroundPage() {
           ) : null}
           </div>
 
-          <div className="flex-1 min-h-0 overflow-y-auto px-3 sm:px-6 flex flex-col">
+          <div
+            ref={messagesRef}
+            onScroll={(event) => {
+              const node = event.currentTarget;
+              stickRef.current = node.scrollHeight - node.scrollTop - node.clientHeight < 80;
+            }}
+            className="flex-1 min-h-0 overflow-y-auto px-3 sm:px-6 flex flex-col"
+          >
             {mode === 'search' ? (
               <div className="py-4 space-y-3">
                 {searchSession ? (
@@ -874,7 +916,13 @@ export default function PlaygroundPage() {
                 </Link>
               </div>
             )}
-            <div className="rounded-xl border border-white/[0.09] bg-[#0c0c0e]">
+            {saveNote ? <p className="mb-2 text-[13px] text-emerald-300">{saveNote}</p> : null}
+            {spaceHint ? (
+              <p className="mb-2 text-[13px] text-amber-100">
+                I found a related memory in your {spaceHint.spaceKind === 'personal' ? 'Personal' : spaceHint.spaceLabel} space, which isn&apos;t active here. Switch to that space to use it{spaceHint.requiresConfirmation ? ', or ask me to copy it into this Organization space' : ''}.
+              </p>
+            ) : null}
+            <div className="shrink-0 sticky bottom-0 rounded-xl border border-white/[0.09] bg-[#0c0c0e] pb-[env(safe-area-inset-bottom)]">
               <div className="px-3 pt-2.5 pb-1 text-[12.5px] text-zinc-500">
                 {!tag
                   ? mode === 'chat'
@@ -899,7 +947,7 @@ export default function PlaygroundPage() {
                 }}
                 rows={2}
                 placeholder={mode === 'chat' ? '' : 'Enter a query'}
-                className="w-full bg-transparent px-3 text-[13.5px] text-zinc-200 outline-none resize-none min-h-[44px]"
+                className="w-full bg-transparent px-3 text-base md:text-[13.5px] text-zinc-200 outline-none resize-none min-h-[44px]"
               />
               <div className="flex flex-wrap items-center gap-2 px-2.5 pb-2">
                 <div>
@@ -1005,7 +1053,11 @@ export default function PlaygroundPage() {
                 <Sparkles size={12} className="text-zinc-500" />
                 <select
                   value={tag}
-                  onChange={(e) => setTag(e.target.value)}
+                  onChange={(e) => {
+                    const next = e.target.value;
+                    setTag(next);
+                    setMemoryScope?.(next.startsWith('tm_') ? 'team' : 'private');
+                  }}
                   className="bg-transparent outline-none pr-1"
                 >
                   {tagOptions.map((t) => (

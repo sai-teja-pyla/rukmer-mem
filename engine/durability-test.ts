@@ -50,6 +50,8 @@ await check('quality: reject related_to junk', async () => {
   assert(normalizePredicate('favorite drink') === 'prefers', `pred=${normalizePredicate('favorite drink')}`);
   assert(isUsefulFact({ subject: 'Saiteja', predicate: 'prefers', object: 'double espresso' }), 'good fact rejected');
   assert(!looksLikeDurableFact('Thanks that was helpful'), 'thanks stored as fact');
+  assert(looksLikeDurableFact('I like espresso'), 'like espresso dropped');
+  assert(!looksLikeDurableFact('What coffee do I prefer today?'), 'coffee question stored');
   assert(looksLikeDurableFact('Please remember that I work at Rukmer'), 'please remember missed');
   assert(looksLikeDurableFact('We decided the memory layer must store filtered facts, not whole chats'), 'decision dropped');
   assert(isUsefulFact({ subject: 'User', predicate: 'decided', object: 'store filtered facts' }), 'user decision rejected');

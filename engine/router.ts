@@ -6,9 +6,10 @@ import {
   injectOpenAIMessages,
   lastUserQuery,
 } from './inject.js';
+import { currentModel, geminiTryList } from './models.js';
 import { rememberTranscript } from './pipeline.js';
 import { MEMORY_TOOLS, runMemoryTool } from './tools.js';
-import { readTagsFor } from './spaces.js';
+import { readTagsFor, readableSpaces } from './spaces.js';
 import { resolveOwnedTag } from './tenancy.js';
 import { isProduction } from './security.js';
 
@@ -86,14 +87,34 @@ export function keyFor(provider: Provider, req: Request) {
   return header(req, 'x-grok-key') || header(req, 'x-xai-key') || token || serverProviderKey('grok');
 }
 
-function rememberLater(tag: string, query: string, actorId?: string) {
-  if (!query.trim()) return;
-  void rememberTranscript({
-    containerTag: tag,
-    source: 'conversation',
-    messages: [{ role: 'user', content: query }],
-    actorId,
-  }).catch(() => undefined);
+function spaceOf(tag: string, actorId?: string) {
+  const space = actorId ? readableSpaces(actorId).find((row) => row.tag === tag) : undefined;
+  const personal = !tag.startsWith('tm_');
+  return {
+    spaceKind: personal ? 'personal' : 'team',
+    spaceLabel: personal ? 'Personal' : space?.name || 'Organization',
+  };
+}
+
+async function rememberNow(tag: string, messages: { role?: string; content?: string }[], actorId: string | undefined, source: string) {
+  const started = Date.now();
+  try {
+    const saved = await Promise.race([
+      rememberTranscript({ containerTag: tag, source, messages, actorId }),
+      new Promise<never>((_, reject) => setTimeout(() => reject(new Error('timeout')), 4000)),
+    ]);
+    const place = spaceOf(tag, actorId);
+    return {
+      saved: saved.skipped !== true,
+      skipped: saved.skipped === true,
+      reason: saved.reason || (saved.skipped ? 'not-durable' : ''),
+      documentId: saved.document?.id,
+      ...place,
+      ms: Date.now() - started,
+    };
+  } catch {
+    return { saved: false, skipped: true, reason: 'save failed', ...spaceOf(tag, actorId) };
+  }
 }
 
 async function proxyJson(url: string, headers: Record<string, string>, body: unknown) {
@@ -192,7 +213,7 @@ export async function completeChat(req: Request, res: Response) {
     delete req.body.threadId;
   }
   const tag = tagOf(req);
-  const model = String(req.body?.model || 'gemini-3.8-flash');
+  const model = currentModel(String(req.body?.model || 'gemini-4-hydrogen'));
   const provider = providerFromModel(model);
   const key = keyFor(provider, req);
   if (!key) {
@@ -211,8 +232,11 @@ export async function completeChat(req: Request, res: Response) {
   let mem: Awaited<ReturnType<typeof buildMemoryInjection>> | null = null;
   let messages = rawMessages;
   if (useMemory) {
-    const scope = String(req.headers['x-rukmer-scope'] || req.body?.memoryScope || req.body?.scope || 'all');
+    const scope = String(req.headers['x-rukmer-scope'] || req.body?.memoryScope || req.body?.scope || 'private');
     const tags = uid ? readTagsFor(uid, { scope, teamId: req.body?.teamId, containerTag: tag }) : [tag];
+    const knowable = uid ? readTagsFor(uid, { scope: 'all' }) : tags;
+    const allowed = req.memoryUser?.containerTags;
+    const visible = allowed?.length ? knowable.filter((item) => allowed.includes(item)) : knowable;
     mem = await buildMemoryInjection(query, tag, {
       topK: Number(req.body?.memoriesRetrieved || 4),
       strictness: Number(req.body?.matchStrictness ?? req.body?.strictness ?? 0.4),
@@ -222,6 +246,7 @@ export async function completeChat(req: Request, res: Response) {
       actorId: uid,
       purpose: 'chat',
       containerTags: tags,
+      probeTags: visible.filter((item) => !tags.includes(item)),
       sessionId,
     });
     messages = injectOpenAIMessages(rawMessages, mem.injection, mem.system);
@@ -260,7 +285,7 @@ export async function completeChat(req: Request, res: Response) {
     json = openaiWrap(text, model, { raw: up.json });
     if (up.status >= 400) json = up.json;
   } else {
-    const tried = [...new Set([model, 'gemini-3.8-flash', 'gemini-2.5-flash', 'gemini-flash-latest'])];
+    const tried = geminiTryList(model);
     let up: { status: number; json: any } = { status: 400, json: {} };
     let text = '';
     for (const m of tried) {
@@ -286,7 +311,14 @@ export async function completeChat(req: Request, res: Response) {
     }
   }
 
-  if (useMemory && status < 400) rememberLater(tag, query, uid);
+  const memorySave = useMemory && status < 400
+    ? await rememberNow(
+        tag,
+        rawMessages.slice(-6).map((message) => ({ role: message.role, content: String(message.content || '') })),
+        uid,
+        req.body?.source === 'playground' ? 'playground' : 'conversation',
+      )
+    : { saved: false, skipped: true, reason: useMemory ? 'model failed' : 'memory off', ...spaceOf(tag, uid) };
   const citations = (mem?.retrieved.matches || []).map((match) => ({
     id: match.id,
     text: String(match.text || '').slice(0, 500),
@@ -326,20 +358,22 @@ export async function completeChat(req: Request, res: Response) {
       reusedMemoryIds: mem?.reusedMemoryIds || [],
       newMemoryIds: mem?.newMemoryIds || [],
       prefixChars: mem?.prefixChars || 0,
+      memorySave,
+      otherSpaceHint: (mem as { otherSpaceHint?: unknown } | null)?.otherSpaceHint,
       ...(!isProduction() && citations.length === 0 && emptyReason ? { debug: { reason: emptyReason } } : {}),
     },
   });
 }
 
 export async function routeOpenAI(req: Request, res: Response) {
-  req.body = { ...(req.body || {}), model: req.body?.model || 'gpt-4o-mini' };
+  req.body = { ...(req.body || {}), model: currentModel(req.body?.model || 'gpt-6.2-astra') };
   return completeChat(req, res);
 }
 
 export async function routeAnthropic(req: Request, res: Response) {
   req.body = {
     ...(req.body || {}),
-    model: req.body?.model || 'claude-sonnet-4-5',
+    model: currentModel(req.body?.model || 'claude-sonnet-5-5'),
     messages: req.body?.messages,
   };
   return completeChat(req, res);
@@ -348,13 +382,13 @@ export async function routeAnthropic(req: Request, res: Response) {
 export async function routeGemini(req: Request, res: Response) {
   req.body = {
     ...(req.body || {}),
-    model: String(req.params.model || req.body?.model || 'gemini-3.8-flash'),
+    model: currentModel(String(req.params.model || req.body?.model || 'gemini-4-hydrogen')),
     contents: req.body?.contents,
   };
   return completeChat(req, res);
 }
 
 export async function routeGrok(req: Request, res: Response) {
-  req.body = { ...(req.body || {}), model: req.body?.model || 'grok-3-mini' };
+  req.body = { ...(req.body || {}), model: currentModel(req.body?.model || 'grok-4.7') };
   return completeChat(req, res);
 }

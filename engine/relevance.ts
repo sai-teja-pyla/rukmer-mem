@@ -46,6 +46,28 @@ export function isProfileQuestion(query: string) {
   return /\b(about me|who am i|my profile|what do you know)\b/i.test(query);
 }
 
+const DRINK = /\b(coffee|drink|espresso|latte|cappuccino|tea|mocha|americano|matcha|chai|milk|beverage)\b/i;
+
+/** Questions about the user's own likes, drinks, or favorites. Not general knowledge. */
+export function isPreferenceQuestion(query: string) {
+  const q = String(query || '');
+  if (/\bcapital of\b/i.test(q)) return false;
+  if (/\b(what(?:'s| is)? my (?:favou?rite|favorite)|what do i (?:like|prefer|love)|what (?:coffee|drink)|coffee do i|drink do i)\b/i.test(q)) return true;
+  return /\b(i|me|my)\b/i.test(q) && /\b(like|prefer|love|favou?rite|favorite|coffee|drink)\b/i.test(q);
+}
+
+/** Floor score so "what coffee do I like?" can keep "prefers espresso" with no shared object word. */
+export function preferenceBoost(query: string, item: MemoryHit) {
+  if (!isPreferenceQuestion(query)) return 0;
+  const blob = `${item.predicate || ''} ${item.object || ''} ${item.text || ''} ${item.title || ''}`.toLowerCase();
+  const prefers = String(item.predicate || '').toLowerCase() === 'prefers' || /\bprefers\b/.test(blob);
+  if (!prefers) return 0;
+  if (/\b(city|where|live)\b/i.test(query)) return 0;
+  if (DRINK.test(query) && !DRINK.test(blob)) return 0;
+  if (!DRINK.test(query)) return 0;
+  return 0.72;
+}
+
 /**
  * False for small talk and general-knowledge questions that do not refer to the
  * user or a specific thing already worth looking up. A question is not skipped
@@ -132,6 +154,11 @@ export function selectMemories<T extends MemoryHit>(
     const parts = relevanceParts(query, item);
     let relevance = parts.gated ? parts.combined : 0;
     let keep = parts.gated && (strictness <= 0 || relevance >= strictness);
+    const pref = preferenceBoost(query, item);
+    if (pref) {
+      relevance = Math.max(relevance, pref);
+      keep = true;
+    }
     if (aboutUser && item.source === 'profile') {
       relevance = Math.max(relevance, Math.max(strictness, WEAK_BEST));
       keep = true;
@@ -160,13 +187,15 @@ export function selectMemories<T extends MemoryHit>(
   if (!deduped.length) return [] as T[];
   const best = deduped[0].relevance;
   const lexicalKeeper = deduped[0].lexical >= LEXICAL_GATE && best >= strictness;
-  if (best < WEAK_BEST && !lexicalKeeper && !(aboutUser && deduped[0].item.source === 'profile')) return [] as T[];
+  const preferenceKeeper = deduped.some((row) => preferenceBoost(query, row.item) > 0);
+  if (best < WEAK_BEST && !lexicalKeeper && !preferenceKeeper && !(aboutUser && deduped[0].item.source === 'profile')) return [] as T[];
 
   const out: T[] = [];
   for (const row of deduped) {
     const close = best - row.relevance <= SCORE_GAP + 1e-9 && row.relevance + 1e-9 >= best * SCORE_RATIO;
     const profileKeep = aboutUser && row.item.source === 'profile';
-    if (!close && !profileKeep) break;
+    const prefKeep = preferenceBoost(query, row.item) > 0;
+    if (!close && !profileKeep && !prefKeep) break;
     out.push({ ...row.item, score: Number(row.relevance.toFixed(4)), vectorScore: row.item.vectorScore });
     if (out.length >= topK) break;
   }

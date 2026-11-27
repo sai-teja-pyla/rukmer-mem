@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
+import { useOutletContext } from 'react-router-dom';
 import { Library, Search } from 'lucide-react';
 import { PageHeader, Panel, EmptyState, PrimaryButton, GhostButton, StatusBadge } from '../../components/console/ui';
 import { engine } from '../../services/engineClient';
@@ -25,6 +26,9 @@ function when(iso?: string) {
 }
 
 export default function MemoriesPage() {
+  const { homeTag = '', memoryScope = 'private' } = useOutletContext<{ homeTag?: string; memoryScope?: string }>();
+  const writeTag = memoryScope === 'private' ? homeTag : undefined;
+  const spaceName = memoryScope === 'team' ? 'Organization' : 'Personal';
   const [docs, setDocs] = useState<Doc[]>([]);
   const [query, setQuery] = useState('');
   const [title, setTitle] = useState('');
@@ -37,7 +41,7 @@ export default function MemoriesPage() {
   const [retentionNote, setRetentionNote] = useState('');
 
   const load = async () => {
-    const data = await engine.listDocs();
+    const data = await engine.listDocs(writeTag, memoryScope === 'all' ? 'all' : memoryScope);
     setDocs(data.documents || []);
   };
 
@@ -51,7 +55,7 @@ export default function MemoriesPage() {
         setDays(Number(policy?.ttlDays ?? (Number.isFinite(fallback) ? fallback : 30)));
       })
       .catch(() => {});
-  }, []);
+  }, [writeTag, memoryScope]);
 
   useEffect(() => {
     if (!undo) return;
@@ -71,10 +75,10 @@ export default function MemoriesPage() {
     setBusy(true);
     setStatus('');
     try {
-      await engine.ingest({ title: title.trim() || 'Memory', text: body, source: 'memory' });
+      await engine.ingest({ title: title.trim() || 'Memory', text: body, source: 'memory', containerTag: writeTag, scope: memoryScope === 'team' ? 'team' : 'private' });
       setTitle('');
       setText('');
-      setStatus('Memory saved');
+      setStatus(`Saved to ${spaceName} memory`);
       await load();
     } catch (err) {
       setStatus(err instanceof Error ? err.message : 'Could not save');
@@ -125,7 +129,7 @@ export default function MemoriesPage() {
   };
 
   return (
-    <div className="max-w-[1100px] mx-auto">
+    <div className="max-w-[1100px] mx-auto min-w-0">
       <PageHeader
         title="Memories"
         subtitle="Everything Rukmer has saved for you. Search it, add a note, or delete one you do not want kept."
@@ -154,9 +158,10 @@ export default function MemoriesPage() {
                 <div key={doc.id} className="px-4 py-3 border-t border-white/[0.06] first:border-t-0">
                   <div className="flex items-start justify-between gap-3">
                     <div className="min-w-0">
-                      <p className="text-[13.5px] text-zinc-100 truncate">{doc.title || 'Untitled memory'}</p>
+                      <p className="text-[13.5px] text-zinc-100 break-words [overflow-wrap:anywhere]">{doc.title || 'Untitled memory'}</p>
+                      <p className="text-[11px] text-zinc-500">{spaceName}</p>
                       <StatusBadge status={doc.processingStatus} reason={doc.memoryStatusReason} />
-                      <p className="text-[12.5px] text-zinc-400 mt-1 max-h-14 overflow-hidden whitespace-pre-wrap">{doc.preview || doc.text || 'No text'}</p>
+                      <p className="text-[12.5px] text-zinc-400 mt-1 max-h-14 overflow-hidden whitespace-pre-wrap break-words [overflow-wrap:anywhere]">{doc.preview || doc.text || 'No text'}</p>
                       <p className="text-[11px] text-zinc-500 mt-1">{when(doc.createdAt)}{doc.source ? ` · ${doc.source}` : ''}</p>
                     </div>
                     {pending === doc.id ? (
