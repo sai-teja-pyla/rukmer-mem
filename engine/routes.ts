@@ -150,8 +150,8 @@ function takeInjectSession(req: Request) {
 
 function tagOf(req: Request) {
   const uid = uidOf(req);
-  const raw = String(req.body?.containerTag || req.query.containerTag || req.headers['x-container-tag'] || '');
   const allowed = req.memoryUser?.via === 'apikey' ? req.memoryUser.containerTags : undefined;
+  const raw = String(req.body?.containerTag || req.query.containerTag || req.headers['x-container-tag'] || (allowed?.length === 1 ? allowed[0] : ''));
   if (raw && allowed?.length && !allowed.includes(raw)) throw Object.assign(new Error('Tag is outside this key'), { status: 403 });
   if (raw.startsWith('tm_')) {
     if (!canAccessTag(uid, raw)) throw Object.assign(new Error('Not a member of this team'), { status: 403 });
@@ -720,9 +720,12 @@ export function mountMemoryEngine(app: Express) {
         return res.status(400).json({ error: 'Unknown app' });
       }
       const state = getState();
-      const before = state.apiKeys.length;
-      state.apiKeys = state.apiKeys.filter((k) => !(k.ownerUid === uid && k.connector === app));
-      if (state.apiKeys.length !== before) {
+      const doomed = state.apiKeys.filter((k) => k.ownerUid === uid && k.connector === app);
+      for (const key of doomed) {
+        await forgetKey(key.hash);
+        state.oauthRefreshes = (state.oauthRefreshes || []).filter((row) => row.keyHash !== key.hash);
+      }
+      if (doomed.length) {
         audit({ actorId: uid, action: 'retain', memoryId: app, tenantId: homeTag(uid), detail: 'connector-disconnected result=ok' });
         await persistNow();
       }
@@ -732,10 +735,12 @@ export function mountMemoryEngine(app: Express) {
     }
   });
 
-  app.get('/v4/connectors/browser', (req, res) => {
+  app.get('/v4/connectors/browser', async (req, res) => {
     try {
+      const uid = uidOf(req);
+      await keysFor(uid);
       const full = String(req.query.full || '') === '1';
-      res.json(browserConnectorView(uidOf(req), full));
+      res.json(browserConnectorView(uid, full));
     } catch (e: any) {
       fail(res, e);
     }

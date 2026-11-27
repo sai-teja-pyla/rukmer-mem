@@ -22,7 +22,7 @@ export function browserConnectorView(uid: string, full = false) {
     if (at && (!row.lastSync || at > row.lastSync)) row.lastSync = at;
     byName.set(label, row);
   };
-  for (const key of keys) touch(key.name, key.lastUsed, 0, true);
+  for (const key of keys) touch(key.name, null, 0, true);
   const sites = { gmail: 0, canvas: 0, x: 0, browser: 0 };
   let lastSync: string | null = null;
   for (const doc of docs) {
@@ -34,11 +34,11 @@ export function browserConnectorView(uid: string, full = false) {
     else sites.browser += 1;
     if (!lastSync || at > lastSync) lastSync = at;
   }
-  for (const key of keys) {
-    if (key.lastUsed && (!lastSync || key.lastUsed > lastSync)) lastSync = key.lastUsed;
-  }
+  const status = !keys.length ? 'disconnected' : docs.length === 0 ? 'setup_incomplete' : 'connected';
   return {
-    connected: keys.length > 0,
+    connected: status === 'connected',
+    status,
+    hasKey: keys.length > 0,
     items: docs.length,
     lastSync,
     browsers: [...byName.values()].sort((a, b) => a.name.localeCompare(b.name)),
@@ -54,6 +54,13 @@ export function browserConnectorView(uid: string, full = false) {
         }))
       : undefined,
   };
+}
+
+export function browserDisplayStatus(view: { hasKey?: boolean; items?: number; status?: string }, extensionDetected: boolean) {
+  if (!view?.hasKey) return 'disconnected';
+  if (!extensionDetected) return 'extension_missing';
+  if (!view.items) return 'setup_incomplete';
+  return 'connected';
 }
 
 export function createBrowserPair(uid: string) {

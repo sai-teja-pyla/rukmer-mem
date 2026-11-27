@@ -40,7 +40,7 @@ export function isAllowedOauthRedirect(redirectUri: string) {
     if (u.protocol !== 'https:' && !loopback) return false;
     if (host.endsWith('.chromiumapp.org') && host !== 'chromiumapp.org') return true;
     if (ALLOWED_REDIRECT_HOSTS.has(host)) return true;
-    return ['cursor.com', 'cursor.sh', 'anthropic.com', 'openai.com', 'google.com'].some((root) => host === root || host.endsWith('.' + root));
+    return ['cursor.com', 'cursor.sh', 'anthropic.com', 'openai.com'].some((root) => host === root || host.endsWith('.' + root));
   } catch {
     return false;
   }

@@ -4,6 +4,7 @@ import { Link } from 'react-router-dom';
 import { Bot, Copy, Check } from 'lucide-react';
 import { PageHeader, DocLink, Panel, EmptyState, TableHead, PrimaryButton, Toggle } from '../../components/console/ui';
 import { mcpUrl as liveMcpUrl } from '../../services/aiConnectors';
+import { BrowserAppCard, GmailAppCard } from './AppConnections';
 
 function ConnectedAgents() {
   const [rows, setRows] = useState<any[] | null>(null);
@@ -172,14 +173,18 @@ export default function AgentsMcpPage() {
   return (
     <div className="max-w-[1100px] mx-auto pb-8">
       <PageHeader
-        title="Agents"
+        title="Apps & MCP"
         subtitle={
           <>
-            Coding agents (Cursor, Claude Code, Codex) live here. For Claude, ChatGPT, and Grok as chat apps, use Connectors. Gemini is coming soon.{' '}
+            Gmail, the browser extension, and coding agents share this page. Each app saves into the space you pick.{' '}
             <DocLink section="agents">How agents connect ↗</DocLink>
           </>
         }
       />
+      <p className="text-[14px] font-medium text-zinc-200 mb-2">Apps</p>
+      <GmailAppCard />
+      <p className="text-[14px] font-medium text-zinc-200 mb-2">Browser</p>
+      <BrowserAppCard />
 
       <Panel className="mb-6 p-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 sm:gap-4">
         <div>

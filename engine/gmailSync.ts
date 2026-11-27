@@ -64,8 +64,8 @@ export function prepareGmailMessage(message: GmailDraft) {
   };
 }
 
-export async function saveGmailMessages(uid: string, messages: GmailDraft[]) {
-  const tag = homeTag(uid);
+export async function saveGmailMessages(uid: string, messages: GmailDraft[], containerTag?: string) {
+  const tag = containerTag || homeTag(uid);
   let imported = 0;
   let skipped = 0;
   for (const message of messages) {
