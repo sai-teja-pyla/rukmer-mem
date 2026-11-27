@@ -65,7 +65,7 @@ export default function OAuthConsentPage() {
         </p>
         <p className="text-[13px] text-zinc-200 mb-2">Connecting {client}</p>
         <label className="block text-[12px] text-zinc-400 mb-3">
-          Space
+          Default space
           <select value={teamId} onChange={(e) => setTeamId(e.target.value)} className="mt-1 w-full h-9 px-2 rounded-lg bg-[#0c0c0e] border border-white/[0.08] text-zinc-200">
             <option value="">Personal</option>
             {teams.map((team) => (

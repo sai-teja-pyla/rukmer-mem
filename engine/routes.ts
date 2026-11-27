@@ -485,9 +485,11 @@ export function mountMemoryEngine(app: Express) {
             union: true,
           }).filter((tag) => scoped.tags.includes(tag) || tag === scoped.primary)
         : scoped.tags;
+      const knowable = readTagsFor(scoped.uid, { scope: 'all' }).filter((tag) => !req.memoryUser?.containerTags?.length || req.memoryUser.containerTags.includes(tag));
       const out = await searchMemory(q, {
         containerTag: scoped.primary,
         containerTags: extra,
+        probeTags: knowable.filter((tag) => !extra.includes(tag)),
         topK: req.body?.topK || req.body?.memoriesRetrieved || 10,
         strictness: req.body?.matchStrictness ?? req.body?.strictness ?? 0.4,
         rerank: !!req.body?.rerank,
@@ -610,14 +612,14 @@ export function mountMemoryEngine(app: Express) {
     res.json({
       object: 'list',
       data: [
-        { id: 'gemini-3.8-flash', owned_by: 'google', configured: configured.gemini },
-        { id: 'gemini-2.5-flash', owned_by: 'google', configured: configured.gemini },
-        { id: 'gpt-4o-mini', owned_by: 'openai', configured: configured.openai },
-        { id: 'gpt-4o', owned_by: 'openai', configured: configured.openai },
-        { id: 'claude-sonnet-4-5', owned_by: 'anthropic', configured: configured.anthropic },
-        { id: 'claude-3-5-haiku-latest', owned_by: 'anthropic', configured: configured.anthropic },
-        { id: 'grok-3-mini', owned_by: 'xai', configured: configured.grok },
-        { id: 'grok-3', owned_by: 'xai', configured: configured.grok },
+        { id: 'gemini-4-hydrogen', owned_by: 'google', configured: configured.gemini },
+        { id: 'gemini-4-carbon', owned_by: 'google', configured: configured.gemini },
+        { id: 'gemini-3.5-flash-lite', owned_by: 'google', configured: configured.gemini },
+        { id: 'gpt-6.2-astra', owned_by: 'openai', configured: configured.openai },
+        { id: 'claude-sonnet-5-5', owned_by: 'anthropic', configured: configured.anthropic },
+        { id: 'claude-haiku-5-5', owned_by: 'anthropic', configured: configured.anthropic },
+        { id: 'claude-opus-5-5', owned_by: 'anthropic', configured: configured.anthropic },
+        { id: 'grok-4.7', owned_by: 'xai', configured: configured.grok },
       ],
     });
   });

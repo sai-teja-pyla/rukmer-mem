@@ -1,7 +1,7 @@
 import { getState, sanitizeMeta, tokenize, type TemporalKind } from './core.js';
 import { isRetired } from './governance.js';
 import { isUsefulFact } from './quality.js';
-import { memoryFactKey, memoryTextKey, relevanceScore } from './relevance.js';
+import { memoryFactKey, memoryTextKey, preferenceBoost, relevanceScore } from './relevance.js';
 import { queryTimeIntent, timeMultiplier } from './temporal.js';
 
 export type MetaFilter = { all?: Record<string, string>; any?: Record<string, string> };
@@ -523,7 +523,7 @@ export function rankTagged(
       if (!matchMeta(rec.metadata, opts.filter)) return null;
       if (rec.kind === 'fact' && !rec.isLatest && intent !== 'past') return null;
       const vectorScore = vecMap.get(row.id) || 0;
-      const relevance = relevanceScore(query, {
+      const hit = {
         id: rec.id,
         text: rec.text,
         title: rec.title,
@@ -531,7 +531,8 @@ export function rankTagged(
         subject: rec.subject,
         predicate: rec.predicate,
         object: rec.object,
-      });
+      };
+      const relevance = Math.max(relevanceScore(query, hit), preferenceBoost(query, hit));
       if (opts.strict > 0 && relevance < opts.strict) return null;
       return { ...rec, score: Number(relevance.toFixed(4)), vectorScore };
     })

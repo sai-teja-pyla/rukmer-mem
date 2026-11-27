@@ -18,6 +18,10 @@ delete process.env.XAI_API_KEY;
 delete process.env.GROK_API_KEY;
 
 const { needsMemory, selectMemories } = await import('./relevance.js');
+const { looksLikeDurableFact } = await import('./quality.js');
+const { currentModel } = await import('./models.js');
+const { runMemoryTool } = await import('./tools.js');
+const { openPlaygroundSession } = await import('../src/pages/console/playgroundSession.js');
 const { completeChat, keyFor, missingKeyMessage, providerStatus } = await import('./router.js');
 const { MEMORY_TOOLS } = await import('./tools.js');
 const { MCP_INSTRUCTIONS, CHATGPT_OPENAPI } = await import('./mcp.js');
@@ -56,6 +60,14 @@ const likeHits = selectMemories(
 );
 check('like does not match likely or likes', likeHits.length === 1 && likeHits[0].id === 'lisbon');
 check('kept score is at least strictness', likeHits.every((hit) => Number(hit.score) >= 0.4));
+check('I like espresso is durable', looksLikeDurableFact('I like espresso') === true);
+check('thanks is not a durable fact', looksLikeDurableFact('Thanks that was helpful') === false);
+check('a coffee question is not stored', looksLikeDurableFact('What coffee do I prefer today?') === false);
+check('legacy model ids map forward', currentModel('gpt-4o-mini') === 'gpt-6.2-astra' && currentModel('gemini-3.8-flash') === 'gemini-4-hydrogen' && currentModel('claude-sonnet-4-5') === 'claude-sonnet-5-5' && currentModel('grok-3-mini') === 'grok-4.7');
+check('a fresh playground visit starts a new chat', (() => {
+  const opened = openPlaygroundSession([{ id: 'old', title: 'Yesterday', updatedAt: '', messages: [{ role: 'user', text: 'I like espresso' }] }]);
+  return opened.active.messages.length === 0 && opened.history.length === 1 && opened.history[0].id === 'old';
+})());
 const filler = selectMemories(
   'Can you tell me what you know?',
   [
@@ -102,7 +114,7 @@ check(
 
 const toolText = `${JSON.stringify(MEMORY_TOOLS)}\n${MCP_INSTRUCTIONS}\n${CHATGPT_OPENAPI.info.description}`;
 check('mcp wording is not an instruction to the model', !/\b(always call|you must|ignore|before answering|required during|call this)\b/i.test(toolText));
-check('mcp tools stay named', MEMORY_TOOLS.map((tool) => tool.function.name).join() === 'searchMemories,addMemory');
+check('mcp tools stay named', MEMORY_TOOLS.map((tool) => tool.function.name).join() === 'searchMemories,addMemory,copyMemoryToSpace');
 
 check('graph count matches container tag memories', countMemories([{ tag: 'u_a', memories: 1 }, { tag: 'u_b', memories: 2 }], 'all') === 3);
 check('graph count follows the selected space', countMemories([{ tag: 'u_a', memories: 1 }, { tag: 'u_b', memories: 2 }], 'u_a') === 1);
@@ -276,13 +288,58 @@ check(
   'named-user Lisbon drops work and name facts',
   namedRows.length > 0 && namedRows.every(lisbonLinked) && !namedRows.some((row) => /rukmer|name is nori/i.test(`${row.subject} ${row.object} ${row.text}`))
 );
-const { runMemoryTool } = await import('./tools.js');
 const toolBake = await runMemoryTool('searchMemories', { query: 'How do I bake sourdough bread?' }, 'reluser');
 const toolLisbon = await runMemoryTool('searchMemories', { query: 'Lisbon' }, 'reluser');
 const toolRows = [...(toolLisbon.matches || []), ...(toolLisbon.related || [])];
 check('searchMemories sourdough is empty', toolBake.matches.length === 0 && (toolBake.related || []).length === 0);
 check('searchMemories Lisbon texts are unique', uniqueTexts(toolRows));
 check('searchMemories Lisbon stays on Lisbon', toolRows.length > 0 && toolRows.every(lisbonLinked));
+
+const espresso = await rememberTranscript({
+  containerTag: homeTag('prefuser'),
+  source: 'playground',
+  actorId: 'prefuser',
+  messages: [{ role: 'user', content: 'I like espresso' }],
+});
+const coffeeHit = await searchMemory('What coffee do I like?', { containerTag: homeTag('prefuser'), actorId: 'prefuser', topK: 4, strictness: 0.4 });
+const toolCoffee = await runMemoryTool('searchMemories', { query: 'What kind of coffee do I like?', scope: 'all' }, 'prefuser');
+check('playground save is not skipped', espresso.skipped !== true, JSON.stringify(espresso).slice(0, 160));
+check('coffee question finds espresso', [...coffeeHit.matches, ...(toolCoffee.matches || [])].some((hit) => /espresso/i.test(`${hit.text} ${hit.title || ''}`)));
+const follow = await rememberTranscript({
+  containerTag: homeTag('followuser'),
+  source: 'conversation',
+  actorId: 'followuser',
+  messages: [
+    { role: 'assistant', content: 'What coffee do you like?' },
+    { role: 'user', content: 'espresso' },
+  ],
+});
+const followHit = await searchMemory('What coffee do I like?', { containerTag: homeTag('followuser'), actorId: 'followuser', topK: 4 });
+check('a short espresso answer is stored', follow.skipped !== true && followHit.matches.some((hit) => /espresso/i.test(hit.text)));
+const shared = await runMemoryTool('searchMemories', { query: 'What coffee do I like?', scope: 'private' }, 'prefuser');
+check('any connected tool sees the personal fact', (shared.matches || []).some((hit: { text?: string }) => /espresso/i.test(hit.text || '')));
+const { createTeam } = await import('./governance.js');
+const team = createTeam('prefuser', 'Acme');
+const teamTag = `tm_${team.id}`;
+const guarded = await searchMemory('What coffee do I like?', {
+  containerTag: teamTag,
+  containerTags: [teamTag],
+  probeTags: [homeTag('prefuser')],
+  actorId: 'prefuser',
+  topK: 4,
+});
+check('team search does not leak personal text', !JSON.stringify(guarded.matches || []).toLowerCase().includes('espresso'));
+check('team search hints at personal', guarded.otherSpaceHint?.found === true && guarded.otherSpaceHint.spaceKind === 'personal' && guarded.otherSpaceHint.requiresConfirmation === true, JSON.stringify({ hint: guarded.otherSpaceHint, n: guarded.matches?.length, tag: teamTag }));
+const quiet = await runMemoryTool('searchMemories', { query: 'What coffee do I like?', scope: 'team', teamId: team.id }, 'prefuser', { containerTags: [teamTag] });
+check('a team-only key gets no personal hint', !quiet.otherSpaceHint && !JSON.stringify(quiet.matches || []).toLowerCase().includes('espresso'));
+const denied = await runMemoryTool('copyMemoryToSpace', { memoryId: espresso.document?.id, containerTag: teamTag }, 'prefuser');
+check('personal to team copy waits for confirmation', denied.copied === false && denied.requiresConfirmation === true);
+const copied = await runMemoryTool('copyMemoryToSpace', { memoryId: espresso.document?.id, containerTag: teamTag, confirm: true }, 'prefuser');
+const teamHit = await searchMemory('What coffee do I like?', { containerTag: teamTag, containerTags: [teamTag], actorId: 'prefuser', topK: 4 });
+check('confirmed copy is visible in the team space', copied.copied === true && teamHit.matches.some((hit) => /espresso/i.test(hit.text)));
+const lead = await buildMemoryInjection('What coffee do I like?', homeTag('prefuser'), { actorId: 'prefuser', topK: 4 });
+check('the system lead forbids the no-write-tool story', /never say you lack a write tool/i.test(lead.system));
+check('capital questions do not need memory', needsMemory('What is the capital of France?') === false);
 
 const express = (await import('express')).default;
 const { mountMemoryEngine } = await import('./routes.js');

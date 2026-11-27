@@ -21,11 +21,11 @@ import { EMBED_MODEL, embedMany, embedQuery, extractGraph, generateText, hasLlm,
 import { deriveFacts, upsertFacts } from './facts.js';
 import { looksLikePdf, textFromPdf, textFromPdfBase64 } from './pdf.js';
 import { describeImage } from './vision.js';
-import { isChatter, isUsefulFact, looksLikeDurableFact, sanitiseGraph } from './quality.js';
+import { isChatter, isUsefulFact, looksLikeDurableFact, preferenceFromContext, sanitiseGraph } from './quality.js';
 import { applyDecay } from './memory.js';
 import { buildMemoryInjection } from './inject.js';
 import { canAccessTag, homeTag, ownsTag, scopeFromTag, uidFromTag } from './tenancy.js';
-import { readTagsFor, readableSpaces } from './spaces.js';
+import { readTagsFor, readableSpaces, type ReadableSpace } from './spaces.js';
 import { checkUpload, sanitizeName, sanitizePlain } from './security.js';
 import { ensureIndex, rankTagged, relatedForMatches, tagCount, vectorDim, type MetaFilter, type Retrieval } from './search-index.js';
 import { memoryTextKey, needsMemory, selectMemories } from './relevance.js';
@@ -51,6 +51,17 @@ export type SearchOpts = {
   until?: string;
   topic?: string;
   sessionId?: string;
+  probeTags?: string[];
+};
+
+export type OtherSpaceHint = {
+  found: true;
+  spaceKind: 'personal' | 'team';
+  spaceLabel: string;
+  spaceTag: string;
+  canSwitch: boolean;
+  canCopy: boolean;
+  requiresConfirmation: boolean;
 };
 
 function scopedChunks(tag?: string | null, includeForgotten = false) {
@@ -715,7 +726,7 @@ export async function searchMemory(query: string, opts: SearchOpts = {}) {
   const has = tags.some((tag) => tagCount(tag) > 0);
   if (!tags.length || !has) {
     void embedP.then(() => undefined).catch(() => undefined);
-    return emptySearch(q, started, 'below-threshold');
+    return { ...emptySearch(q, started, 'below-threshold'), otherSpaceHint: await otherSpaceHint(q, opts) };
   }
   const embedStarted = Date.now();
   let qVec = await embedP;
@@ -810,7 +821,42 @@ export async function searchMemory(query: string, opts: SearchOpts = {}) {
     scores,
     tokensInjected: Math.ceil(matches.reduce((n, match) => n + String(match.text || '').length, 0) / 4),
     skipReason: matches.length ? '' : 'below-threshold',
+    otherSpaceHint: matches.length ? undefined : await otherSpaceHint(q, opts),
   };
+}
+
+function spaceHint(space: ReadableSpace, activeIsTeam: boolean): OtherSpaceHint {
+  const personal = space.kind !== 'team';
+  return {
+    found: true,
+    spaceKind: personal ? 'personal' : 'team',
+    spaceLabel: personal ? 'Personal' : space.name || 'Organization',
+    spaceTag: space.tag,
+    canSwitch: true,
+    canCopy: true,
+    requiresConfirmation: activeIsTeam && personal,
+  };
+}
+
+async function otherSpaceHint(query: string, opts: SearchOpts): Promise<OtherSpaceHint | undefined> {
+  const probe = (opts.probeTags || []).filter(Boolean);
+  if (!probe.length || !opts.actorId) return undefined;
+  const peek = await searchMemory(query, {
+    ...opts,
+    containerTag: probe[0],
+    containerTags: probe,
+    probeTags: [],
+    includeRelated: false,
+    topK: 1,
+  });
+  const hit = peek.matches[0];
+  if (!hit?.containerTag) return undefined;
+  const spaces = readableSpaces(opts.actorId);
+  const space = spaces.find((row) => row.tag === hit.containerTag);
+  if (!space) return undefined;
+  const active = (opts.containerTags?.length ? opts.containerTags : [opts.containerTag]).filter(Boolean) as string[];
+  const activeIsTeam = active.some((tag) => tag.startsWith('tm_'));
+  return spaceHint(space, activeIsTeam);
 }
 
 export type ChatTurn = { role: 'user' | 'assistant' | 'system'; content: string };
@@ -845,7 +891,7 @@ export async function commitImportantMemory(input: {
   const triples = (graph.triples || []).filter(isUsefulFact);
   const autoSave = AUTO_SAVE_SOURCES.has(String(input.source || ''));
   if (!triples.length) {
-    if (autoSave) return { skipped: true, reason: 'not-durable', facts: 0, document: null };
+    if (autoSave && !looksLikeDurableFact(raw)) return { skipped: true, reason: 'not-durable', facts: 0, document: null };
     if (sameStoredText(tag, raw)) return { skipped: true, reason: 'duplicate', facts: 0, document: null };
     const doc = await ingestDocument({
       title: input.title || raw.slice(0, 80),
@@ -867,7 +913,11 @@ export async function commitImportantMemory(input: {
     return { saved: true, skipped: false, type: 'raw', facts: 0, document: doc.document, chunks: doc.chunks };
   }
   const text = triples
-    .map((t) => `${t.subject} ${String(t.predicate).replace(/_/g, ' ')} ${t.object}.`)
+    .map((t) => {
+      const line = `${t.subject} ${String(t.predicate).replace(/_/g, ' ')} ${t.object}.`;
+      const drink = t.predicate === 'prefers' && /\b(espresso|coffee|latte|cappuccino|tea|mocha|americano|matcha|chai|milk)\b/i.test(t.object);
+      return drink ? `${line} coffee drink` : line;
+    })
     .join('\n');
   const state = getState();
   for (const e of graph.entities || []) {
@@ -965,11 +1015,13 @@ export async function rememberTranscript(input: {
     .map((m) => ({ role: String(m.role || 'user'), text: String(m.content || m.text || '').trim() }))
     .filter((m) => m.text);
   if (!turns.length) throw new Error('No messages to remember');
-  const userText = turns
-    .filter((m) => m.role === 'user' || m.role === 'human')
+  const userTurns = turns.filter((m) => m.role === 'user' || m.role === 'human');
+  const latest = userTurns[userTurns.length - 1]?.text || '';
+  const context = turns
+    .filter((m) => m.text !== latest)
     .map((m) => m.text)
-    .join('\n')
-    .trim();
+    .join('\n');
+  const userText = (looksLikeDurableFact(latest) ? latest : preferenceFromContext(latest, context)).trim();
   if (!userText || !looksLikeDurableFact(userText)) {
     return { skipped: true, reason: 'not-durable', facts: 0, document: null };
   }

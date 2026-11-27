@@ -56,8 +56,8 @@ export const engine = {
   me: () => req('/v3/me'),
   ingest: (body: any) => req('/v3/documents', { method: 'POST', body: JSON.stringify(body) }),
   ingestBatch: (body: any) => req('/v3/documents/batch', { method: 'POST', body: JSON.stringify(body) }),
-  listDocs: (containerTag?: string) =>
-    req('/v3/documents/list', { method: 'POST', body: JSON.stringify({ containerTag }) }),
+  listDocs: (containerTag?: string, scope?: string) =>
+    req('/v3/documents/list', { method: 'POST', body: JSON.stringify({ containerTag, scope }) }),
   forget: (id: string) => req('/v4/memories', { method: 'DELETE', body: JSON.stringify({ id }) }),
   governance: () => req('/v4/governance'),
   setRetention: (body: { ttlDays: number; memoryKind?: string; action?: string; tenantId?: string }) =>

@@ -1,8 +1,9 @@
 import { getState } from './core.js';
+import { canRead } from './governance.js';
 import { commitImportantMemory, listAuthoredMemories, searchMemory } from './pipeline.js';
+import { readTagsFor, readableSpaces } from './spaces.js';
 import { TOOL_ALLOWLIST } from './security.js';
-import { readTagsFor } from './spaces.js';
-import { homeTag, ownsTag } from './tenancy.js';
+import { canAccessTag, homeTag, ownsTag } from './tenancy.js';
 
 export const MEMORY_TOOLS = [
   {
@@ -45,6 +46,22 @@ export const MEMORY_TOOLS = [
       },
     },
   },
+  {
+    type: 'function',
+    function: {
+      name: 'copyMemoryToSpace',
+      description: 'Copies a memory the user already owns into another space. Personal to team requires confirm:true. Does not reveal hidden text first.',
+      parameters: {
+        type: 'object',
+        properties: {
+          memoryId: { type: 'string' },
+          containerTag: { type: 'string', description: 'Destination space tag.' },
+          confirm: { type: 'boolean', description: 'Required true when copying Personal into a team or organization space.' },
+        },
+        required: ['memoryId', 'containerTag'],
+      },
+    },
+  },
 ];
 
 export async function runMemoryTool(name: string, args: any, uid?: string, access?: { readOnly?: boolean; containerTags?: string[] }) {
@@ -69,10 +86,15 @@ export async function runMemoryTool(name: string, args: any, uid?: string, acces
         purpose: 'tool',
       });
     }
-    const tags = readTagsFor(uid, { scope: scope === 'private' || scope === 'team' ? scope : 'all', teamId: args?.teamId, containerTag: args?.containerTag });
+    let tags = readTagsFor(uid, { scope: scope === 'private' || scope === 'team' ? scope : 'all', teamId: args?.teamId, containerTag: args?.containerTag });
+    if (access?.containerTags?.length) tags = tags.filter((tag) => access.containerTags!.includes(tag));
+    const knowable = access?.containerTags?.length
+      ? readTagsFor(uid, { scope: 'all' }).filter((tag) => access.containerTags!.includes(tag))
+      : readTagsFor(uid, { scope: 'all' });
     const found = await searchMemory(query, {
       containerTag: tags[0] || homeTag(uid),
       containerTags: tags,
+      probeTags: knowable.filter((tag) => !tags.includes(tag)),
       topK: 8,
       includeRelated: true,
       actorId: uid,
@@ -97,13 +119,16 @@ export async function runMemoryTool(name: string, args: any, uid?: string, acces
   if (name === 'addMemory') {
     const writeScope = args?.scope === 'team' ? 'team' : 'private';
     const requested = String(args?.containerTag || '').trim();
+    const assigned = access?.containerTags?.length === 1 ? access.containerTags[0] : '';
+    const target = requested || assigned;
+    const containerTag = target && (ownsTag(uid, target) || canAccessTag(uid, target)) ? target : homeTag(uid);
     const saved = await commitImportantMemory({
       title: args?.title,
       text: String(args?.text || ''),
-      containerTag: requested && ownsTag(uid, requested) ? requested : homeTag(uid),
+      containerTag,
       source: 'tool',
       actorId: uid,
-      scope: writeScope,
+      scope: containerTag.startsWith('tm_') ? 'team' : writeScope,
       teamId: args?.teamId,
     });
     const status = saved.document?.processingStatus || (saved.skipped ? 'done' : 'searchable');
@@ -113,6 +138,45 @@ export async function runMemoryTool(name: string, args: any, uid?: string, acces
       memoryStatusReason: saved.document?.memoryStatusReason || '',
       memoryExtraction: status === 'done' ? 'complete' : 'in_progress',
     };
+  }
+  if (name === 'copyMemoryToSpace') {
+    const id = String(args?.memoryId || '');
+    const dest = String(args?.containerTag || '');
+    if (!dest || !canAccessTag(uid, dest)) throw Object.assign(new Error('Destination space is not available'), { status: 403 });
+    if (access?.containerTags?.length && !access.containerTags.includes(dest)) {
+      throw Object.assign(new Error('Tag is outside this key'), { status: 403 });
+    }
+    const state = getState();
+    const doc = state.documents.find((row) => row.id === id && !row.forgotten) || state.documents.find((row) => state.chunks.some((chunk) => chunk.id === id && chunk.docId === row.id));
+    if (!doc || !canRead(uid, doc)) throw Object.assign(new Error('Memory not found'), { status: 404 });
+    const personalToTeam = !doc.containerTag.startsWith('tm_') && dest.startsWith('tm_');
+    if (personalToTeam && args?.confirm !== true) {
+      const from = readableSpaces(uid).find((row) => row.tag === doc.containerTag);
+      return {
+        copied: false,
+        requiresConfirmation: true,
+        otherSpaceHint: {
+          found: true,
+          spaceKind: 'personal',
+          spaceLabel: 'Personal',
+          spaceTag: from?.tag || doc.containerTag,
+          canSwitch: true,
+          canCopy: true,
+          requiresConfirmation: true,
+        },
+      };
+    }
+    const copied = await commitImportantMemory({
+      title: doc.title,
+      text: doc.originalText || doc.text,
+      containerTag: dest,
+      source: 'tool',
+      actorId: uid,
+      scope: dest.startsWith('tm_') ? 'team' : 'private',
+      teamId: dest.startsWith('tm_') ? dest.replace(/^tm_/, '') : undefined,
+      metadata: { copiedFrom: doc.id },
+    });
+    return { copied: copied.skipped !== true, documentId: copied.document?.id, requiresConfirmation: false };
   }
   throw new Error(`Unknown memory tool ${name}`);
 }

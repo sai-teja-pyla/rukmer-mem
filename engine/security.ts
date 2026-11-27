@@ -19,7 +19,7 @@ export const ALLOWED_ORIGINS = [
 ];
 
 /** Tools an authenticated caller may invoke. Anything else is rejected. */
-export const TOOL_ALLOWLIST = ['searchMemories', 'addMemory'] as const;
+export const TOOL_ALLOWLIST = ['searchMemories', 'addMemory', 'copyMemoryToSpace'] as const;
 
 const LIMITS: Record<string, number> = {
   auth: 30,

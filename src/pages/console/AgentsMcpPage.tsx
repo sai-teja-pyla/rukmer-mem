@@ -53,24 +53,19 @@ function ConnectedAgents() {
                   <button type="button" className="underline" onClick={() => engine.patchAgent(row.id, { containerTags: [] }).then(load)}>All tags I can access</button>
                   <button type="button" className="text-red-300" onClick={() => engine.revokeKey(row.id).then(load)}>Disconnect</button>
                 </div>
-                {tags.length ? (
-                  <div className="mt-1 flex flex-wrap gap-2">
+                <label className="mt-2 block text-[12px] text-zinc-400">
+                  Default space
+                  <select
+                    className="mt-1 h-9 w-full rounded-md bg-[#0c0c0e] border border-white/[0.08] px-2 text-zinc-200"
+                    value={(row.containerTags || []).length === 1 ? row.containerTags[0] : ''}
+                    onChange={(event) => engine.patchAgent(row.id, { containerTags: event.target.value ? [event.target.value] : [] }).then(load)}
+                  >
+                    <option value="">All spaces I can access</option>
                     {tags.map((tag) => (
-                      <label key={tag} className="inline-flex items-center gap-1 text-[11px] text-zinc-500">
-                        <input
-                          type="checkbox"
-                          checked={(row.containerTags || []).includes(tag)}
-                          onChange={() => {
-                            const current = row.containerTags || [];
-                            const next = current.includes(tag) ? current.filter((item: string) => item !== tag) : [...current, tag];
-                            void engine.patchAgent(row.id, { containerTags: next }).then(load);
-                          }}
-                        />
-                        {tag}
-                      </label>
+                      <option key={tag} value={tag}>{tag.startsWith('u_') ? 'Personal' : tag.startsWith('tm_') ? 'Organization' : tag}</option>
                     ))}
-                  </div>
-                ) : null}
+                  </select>
+                </label>
               </div>
             ))}
           </div>
