@@ -1334,6 +1334,15 @@ export function stats(uid?: string) {
     latestFacts: s.triples.filter((t) => t.isLatest !== false && mine(t)).length,
     embeddings: s.chunks.filter((c) => c.embedding.length && mine(c)).length,
     requests: uid ? s.requests.filter((r) => r.ownerUid === uid).length : s.requests.length,
+    searchesToday: (() => {
+      const start = new Date();
+      start.setUTCHours(0, 0, 0, 0);
+      const from = start.getTime();
+      return s.requests.filter((row) => {
+        if (uid && row.ownerUid !== uid) return false;
+        return row.type === 'search' && Date.parse(row.at) >= from;
+      }).length;
+    })(),
     llm: hasLlm(),
   };
 }
@@ -1350,47 +1359,46 @@ export function keptRequests<T extends { at: string }>(rows: T[], now = Date.now
     .slice(0, 4000);
 }
 
-const CONSOLE_READS = new Set([
-  '/v3/tags',
-  '/v3/stats',
-  '/v3/insights',
-  '/v3/jobs',
-  '/v3/requests',
-  '/v3/keys',
-  '/v3/me',
-  '/v4/graph',
-  '/v4/security',
-  '/v4/profile',
-  '/v4/protocol',
-  '/v4/tools',
-  '/v4/governance',
-  '/v4/governance/audit',
-  '/v4/teams',
-  '/v4/connectors/apps',
-  '/v4/connectors/browser',
-  '/v4/client',
-  '/v4/path',
-  '/v4/orgs',
-]);
-
-/** Customer usage. Page loads are not requests the user made. */
+/** Product traffic only. Console reads must not rewrite the store. */
 export function usageEvent(method: string, path: string) {
   const verb = String(method || 'GET').toUpperCase();
   const clean = String(path || '').split('?')[0];
-  if (verb === 'GET' && (CONSOLE_READS.has(clean) || clean.startsWith('/v4/teams/'))) return { record: false, type: 'read' };
-  let type = 'other';
-  if (clean.includes('/search')) type = 'search';
-  else if (clean.includes('/chat') || clean.includes('/completions') || clean.includes('/messages') || clean.includes('generateContent')) type = 'chat';
-  else if (verb !== 'GET' && (clean.includes('/document') || clean.includes('/remember') || clean.includes('/import'))) type = 'ingest';
-  else if (verb === 'GET') type = 'read';
-  return { record: true, type };
+  if (verb !== 'POST') return { record: false, type: 'read' };
+  if (clean === '/v4/search' || clean === '/v3/search') return { record: true, type: 'search' };
+  if (
+    clean === '/v4/chat' ||
+    clean === '/v4/remember' ||
+    clean.endsWith('/chat/completions') ||
+    clean.includes('/messages') ||
+    clean.includes('generateContent')
+  ) {
+    return { record: true, type: 'chat' };
+  }
+  if (clean === '/v3/documents' || clean === '/v3/documents/batch' || clean === '/v4/inject') return { record: true, type: 'ingest' };
+  if (clean === '/v4/tools/execute' || clean === '/mcp') return { record: true, type: 'other' };
+  return { record: false, type: 'read' };
 }
+
+const REQUEST_FLUSH_MS = Number(process.env.RUKMER_REQUEST_FLUSH_MS || 3000);
+let requestFlush: ReturnType<typeof setTimeout> | null = null;
 
 export function logRequest(rec: { method: string; path: string; status: number; ms: number; type: string; ownerUid?: string }) {
   const s = getState();
   s.requests.unshift({ id: uid('req'), at: new Date().toISOString(), ...rec });
   s.requests = keptRequests(s.requests);
+  if (requestFlush) return;
+  requestFlush = setTimeout(() => {
+    requestFlush = null;
+    saveState();
+  }, REQUEST_FLUSH_MS);
+}
+
+export function flushRequestLogForTests() {
+  if (!requestFlush) return false;
+  clearTimeout(requestFlush);
+  requestFlush = null;
   saveState();
+  return true;
 }
 
 export function moveMemory(actor: string, id: string, to: 'private' | 'team', teamId?: string) {

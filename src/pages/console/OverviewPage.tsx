@@ -1,177 +1,209 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Copy, Check, ChevronDown, Sparkles, Box, FileText, Play, Globe } from 'lucide-react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { Check, Loader2, Play, Globe, FileText } from 'lucide-react';
 import { engine } from '../../services/engineClient';
+import { mcpUrl } from '../../services/aiConnectors';
 
-const BASE_PROMPT = `# You are onboarding this project to Rukmer Memory
+const USE_CASES = ['Build with Rukmer', 'Connect my AI tools', 'Team memory'] as const;
+const USE_KEY = 'rukmer.setup.useCase';
 
-Rukmer is a memory API for AI apps and agents: ingest conversations, documents, files, and URLs; get semantic search, extracted facts, and per-user profiles back. Every call is scoped to one containerTag, with strict isolation between tags.
+function ago(iso?: string | null) {
+  if (!iso) return '';
+  const ms = Date.now() - Date.parse(iso);
+  if (!Number.isFinite(ms) || ms < 0) return 'just now';
+  const minutes = Math.round(ms / 60000);
+  if (minutes < 1) return 'just now';
+  if (minutes < 60) return `${minutes} minute${minutes === 1 ? '' : 's'} ago`;
+  const hours = Math.round(minutes / 60);
+  if (hours < 48) return `${hours} hour${hours === 1 ? '' : 's'} ago`;
+  const days = Math.round(hours / 24);
+  return `${days} day${days === 1 ? '' : 's'} ago`;
+}
 
-Rukmer stores processed memory (chunks + durable facts). It does not replace Gemini, GPT, Claude, or Grok. Those models generate answers after Rukmer injects retrieved memory into the prompt.
+function shortPrompt(origin: string, key: string) {
+  const secret = key || 'rk_live_…';
+  return `Wire this app to Rukmer Memory at ${origin}.
 
-## What you can call
+Use API key ${secret}. Send it as Authorization: Bearer <key>.
 
-| Operation | Endpoint | Use when |
-|---|---|---|
-| Add content | POST /v3/documents | Ingest conversations, documents, files, URLs |
-| Search documents | POST /v3/search | Find raw chunks for RAG grounding |
-| Search memories | POST /v4/search | Find extracted facts with graph context |
-| Get profile | GET /v4/profile | Static + dynamic context for a user |
-| List documents | POST /v3/documents/list | Paginate and filter ingested content |
-| Forget memory | DELETE /v4/memories | Soft-delete one fact; JSON body with containerTag plus id or exact content |
-| Forget matching | POST /v4/memories/forget-matching | Soft-delete every fact matching a query or an ids list; dryRun previews first |
-| Memory protocol | GET /v4/protocol | How Rukmer stores vs injects memory |`;
+1. Ingest: POST ${origin}/v3/documents
+   { "title": "Note", "text": "...", "source": "app" }
+2. Retrieve: POST ${origin}/v4/search
+   { "query": "what should I remember?" }
+3. Remember a chat turn: POST ${origin}/v4/remember
+   { "messages": [{ "role": "user", "content": "..." }] }
+
+Keep the key in .env as RUKMER_API_KEY. Do not commit it.`;
+}
 
 export default function OverviewPage() {
-  const [copied, setCopied] = useState(false);
+  const client = useQueryClient();
+  const [useCase, setUseCase] = useState(() => {
+    try {
+      return localStorage.getItem(USE_KEY) || '';
+    } catch {
+      return '';
+    }
+  });
+  const [editingUse, setEditingUse] = useState(!useCase);
+  const [copied, setCopied] = useState('');
+  const [manualOpen, setManualOpen] = useState(false);
+  const [secret, setSecret] = useState('');
   const [loiNote, setLoiNote] = useState(false);
+  const keyOnce = useRef(false);
+  const origin = typeof window === 'undefined' ? 'https://app.rukmer.com' : window.location.origin;
+
   useEffect(() => {
     if (sessionStorage.getItem('rukmer.loiAccepted') === '1') {
       sessionStorage.removeItem('rukmer.loiAccepted');
       setLoiNote(true);
     }
   }, []);
-  const [includeKey, setIncludeKey] = useState(true);
-  const [manualOpen, setManualOpen] = useState(false);
-  const [counts, setCounts] = useState<{ memories: number | null; documents: number | null; searches: number | null }>({
-    memories: null,
-    documents: null,
-    searches: null,
+
+  const counts = useQuery({
+    queryKey: ['stats'],
+    queryFn: () => engine.stats(),
+  });
+  const status = useQuery({
+    queryKey: ['setup-status'],
+    queryFn: () => engine.setupStatus(),
+    refetchInterval: (query) => (query.state.data?.firstRequestAt ? false : 3000),
   });
 
   useEffect(() => {
-    let cancel = false;
-    Promise.all([engine.stats(), engine.insights(), engine.requests()])
-      .then(([stats, insights, requests]) => {
-        if (cancel) return;
-        const start = new Date();
-        start.setHours(0, 0, 0, 0);
-        const searches = (requests?.requests || []).filter(
-          (row: { type?: string; at?: string }) => row.type === 'search' && Date.parse(String(row.at || '')) >= start.getTime()
-        ).length;
-        setCounts({
-          memories: Number(insights?.memories ?? stats?.chunks ?? 0),
-          documents: Number(stats?.documents ?? 0),
-          searches,
-        });
+    const row = status.data;
+    if (!row || row.hasKey || secret || keyOnce.current) return;
+    keyOnce.current = true;
+    void engine
+      .createKey('Setup')
+      .then((out) => {
+        setSecret(String(out.secret || ''));
+        void client.invalidateQueries({ queryKey: ['setup-status'] });
       })
       .catch(() => {
-        if (!cancel) setCounts({ memories: null, documents: null, searches: null });
+        keyOnce.current = false;
       });
-    return () => {
-      cancel = true;
-    };
-  }, []);
+  }, [status.data, secret, client]);
 
-  const prompt = useMemo(() => {
-    if (!includeKey) return BASE_PROMPT;
-    return `${BASE_PROMPT}
-
-## Auth
-Send Firebase ID tokens as: Authorization: Bearer <ID_TOKEN>
-Keep secrets in .env — never commit keys.`;
-  }, [includeKey]);
-
-  const lines = prompt.split('\n');
-
-  const copyPrompt = async () => {
+  const choose = (value: string) => {
+    setUseCase(value);
+    setEditingUse(false);
     try {
-      await navigator.clipboard.writeText(prompt);
+      localStorage.setItem(USE_KEY, value);
     } catch {
-      /* clipboard may be blocked in embedded browsers */
+      /* ignore */
     }
-    setCopied(true);
-    setTimeout(() => setCopied(false), 1600);
   };
 
+  const copy = async (id: string, text: string) => {
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch {
+      /* clipboard may be blocked */
+    }
+    setCopied(id);
+    window.setTimeout(() => setCopied(''), 1400);
+  };
+
+  const ready = status.data;
+  const memories = counts.data ? Number(counts.data.chunks ?? 0) : null;
+  const documents = counts.data ? Number(counts.data.documents ?? 0) : null;
+  const searches = counts.data ? Number(counts.data.searchesToday ?? 0) : null;
+
   return (
-    <div className="max-w-[1220px] mx-auto">
-      <div className="rounded-2xl border border-white/[0.07] bg-[#141416] p-5 md:p-7">
-        <div className="grid md:grid-cols-[minmax(240px,0.95fr)_minmax(0,1.25fr)] gap-6 lg:gap-8 items-stretch">
-          <div className="flex flex-col justify-center py-8 min-[960px]:py-10">
-            <div className="flex items-center gap-2.5 text-zinc-400 mb-6">
-              <Sparkles size={18} strokeWidth={1.6} />
-              <Box size={18} strokeWidth={1.6} />
-              <FileText size={18} strokeWidth={1.6} />
-            </div>
-            <h1 className="text-[26px] sm:text-[32px] font-semibold tracking-tight text-white mb-3">Get started</h1>
-            {loiNote && (
-              <p className="text-[13px] text-zinc-300 mb-3">Letter of Intent accepted for this account.</p>
-            )}
-            <p className="text-[14px] text-zinc-400 leading-relaxed max-w-[340px]">
-              Start in Playground, import a file, then connect Claude Code, Cursor, or Codex. Chat apps use Connectors.
+    <div className="max-w-[920px] mx-auto">
+      <div className="rounded-2xl border border-white/[0.07] bg-[#141416] p-5 md:p-6">
+        <h1 className="text-[22px] font-semibold text-white tracking-tight">Set up Rukmer</h1>
+        {loiNote ? <p className="text-[13px] text-zinc-300 mt-2">Letter of Intent accepted for this account.</p> : null}
+
+        <section className="mt-5">
+          <p className="text-[13px] text-zinc-400 mb-2">1. What brings you here?</p>
+          {useCase && !editingUse ? (
+            <p className="text-[14px] text-zinc-100">
+              {useCase}{' '}
+              <button type="button" className="text-[#60a5fa] text-[13px]" onClick={() => setEditingUse(true)}>
+                Change
+              </button>
             </p>
-
-            <div className="flex flex-wrap items-center gap-3 mt-7">
-              <button
-                onClick={copyPrompt}
-                className="inline-flex items-center gap-2 h-10 px-4 rounded-lg bg-[#2563eb] hover:bg-[#1d4ed8] text-white text-[13.5px] font-medium"
-              >
-                {copied ? <Check size={15} /> : null}
-                {copied ? 'Copied' : 'Copy prompt'}
-              </button>
-              <button
-                onClick={() => setManualOpen((v) => !v)}
-                className="text-[13.5px] text-zinc-400 hover:text-zinc-200 inline-flex items-center gap-1"
-              >
-                or set up manually
-                <ChevronDown size={15} className={`transition-transform ${manualOpen ? 'rotate-180' : ''}`} />
-              </button>
-            </div>
-
-            {manualOpen && (
-              <div className="mt-4 rounded-lg border border-white/[0.07] bg-black/25 p-3 text-[12.5px] text-zinc-400 space-y-1.5 max-w-[360px]">
-                <p>1. Open <Link to="/playground" className="text-zinc-200">Playground</Link> and ask what Rukmer knows.</p>
-                <p>2. Add files from <Link to="/import" className="text-zinc-200">Import</Link>. They show up on the memory graph.</p>
-                <p>3. Connect <Link to="/agents-mcp" className="text-zinc-200">Claude Code, Cursor, or Codex</Link>, or a chat app from <Link to="/connectors" className="text-zinc-200">Connectors</Link>.</p>
-              </div>
-            )}
-
-            <div className="mt-8 flex flex-col gap-2 text-[13px]">
-              <Link to="/playground" className="text-zinc-300 hover:text-white w-fit">1. Try Playground</Link>
-              <Link to="/import" className="text-zinc-300 hover:text-white w-fit">2. Import a document</Link>
-              <Link to="/agents-mcp" className="text-zinc-300 hover:text-white w-fit">3. Connect Claude Code, Cursor, or Codex</Link>
-              <Link to="/connectors" className="text-zinc-500 hover:text-zinc-300 w-fit">Chat apps (Gemini coming soon)</Link>
-            </div>
-          </div>
-
-          <div className="relative rounded-xl border border-white/[0.08] bg-[#0c0c0e] overflow-hidden min-h-[240px] sm:min-h-[360px]">
-            <button
-              onClick={copyPrompt}
-              className="absolute top-2.5 right-2.5 z-10 h-8 w-8 rounded-md border border-white/[0.08] bg-[#141416] text-zinc-400 hover:text-white flex items-center justify-center"
-              aria-label="Copy prompt"
-            >
-              {copied ? <Check size={14} /> : <Copy size={14} />}
-            </button>
-            <pre className="text-[12.5px] leading-[1.7] p-4 pr-12 pb-14 overflow-auto max-h-[440px] font-mono">
-              {lines.map((line, i) => (
-                <div key={i} className="flex gap-5">
-                  <span className="w-4 shrink-0 text-right text-zinc-600 select-none">{i + 1}</span>
-                  <span className={`whitespace-pre-wrap ${line.startsWith('#') ? 'text-zinc-400' : 'text-zinc-200'}`}>
-                    {line || ' '}
-                  </span>
-                </div>
+          ) : (
+            <div className="flex flex-wrap gap-2">
+              {USE_CASES.map((item) => (
+                <button
+                  key={item}
+                  type="button"
+                  onClick={() => choose(item)}
+                  className="h-9 px-3 rounded-lg border border-white/[0.08] bg-[#0c0c0e] text-[13px] text-zinc-200 hover:border-[#2563eb]"
+                >
+                  {item}
+                </button>
               ))}
-            </pre>
-            <div className="absolute bottom-3 right-3 flex items-center gap-2 text-[12px] text-zinc-400">
-              <span>Include auth steps</span>
-              <button
-                role="switch"
-                aria-checked={includeKey}
-                onClick={() => setIncludeKey((v) => !v)}
-                className={`h-[22px] w-10 rounded-full relative transition-colors ${includeKey ? 'bg-[#2563eb]' : 'bg-zinc-700'}`}
-              >
-                <span className={`absolute top-[3px] h-4 w-4 rounded-full bg-white transition-all ${includeKey ? 'left-[22px]' : 'left-[3px]'}`} />
-              </button>
             </div>
+          )}
+        </section>
+
+        <section className="mt-6">
+          <p className="text-[13px] text-zinc-400 mb-2">2. Run this in your project</p>
+          <div className="flex items-center justify-between gap-3 rounded-lg border border-white/[0.08] bg-[#0c0c0e] px-3 py-2.5">
+            <code className="text-[13px] text-zinc-100">$ npx rukmer setup</code>
+            <button type="button" className="text-[12.5px] text-[#93c5fd]" onClick={() => void copy('cmd', 'npx rukmer setup')}>
+              {copied === 'cmd' ? 'Copied' : 'Copy'}
+            </button>
           </div>
-        </div>
+          <p className="text-[12.5px] text-zinc-500 mt-2">Launches your coding agent to wire Rukmer into your app.</p>
+          <div className="flex flex-wrap gap-3 mt-3 text-[13px]">
+            <button type="button" className="text-zinc-300 hover:text-white" onClick={() => void copy('prompt', shortPrompt(origin, secret))}>
+              {copied === 'prompt' ? 'Copied' : 'Copy a prompt instead'}
+            </button>
+            <button type="button" className="text-zinc-400 hover:text-zinc-200" onClick={() => setManualOpen((v) => !v)}>
+              Set up manually {manualOpen ? '▴' : '▾'}
+            </button>
+          </div>
+          {manualOpen ? (
+            <div className="mt-3 rounded-lg border border-white/[0.07] bg-black/25 p-3 text-[12.5px] text-zinc-400 space-y-2">
+              <p>MCP URL: <span className="text-zinc-200">{mcpUrl()}</span></p>
+              <p>Search: <code className="text-zinc-200">POST {origin}/v4/search</code></p>
+              <p>
+                <Link to="/api-keys" className="text-[#93c5fd]">API keys</Link>
+                {' · '}
+                <Link to="/agents-mcp" className="text-[#93c5fd]">Agents</Link>
+                {' · '}
+                <Link to="/docs" className="text-[#93c5fd]">Docs</Link>
+              </p>
+            </div>
+          ) : null}
+        </section>
+
+        <section className="mt-6 rounded-xl border border-white/[0.08] bg-[#0c0c0e] p-4">
+          <p className="text-[14px] text-zinc-100">3. Listening for your first request</p>
+          <p className="text-[12.5px] text-zinc-500 mt-1">Run the command in your project. This page picks it up on its own.</p>
+          <StatusRow
+            label="API key ready"
+            done={!!ready?.hasKey || !!secret}
+            waiting={!ready}
+            detail={ready?.hasKey || secret ? `Created ${ago(ready?.keyCreatedAt)}` : 'Creating a Setup key…'}
+          />
+          {secret ? (
+            <p className="mt-2 text-[12px] text-amber-200">
+              Shown only once. <span className="font-mono text-emerald-300 break-all">{secret}</span>{' '}
+              <button type="button" className="text-[#93c5fd]" onClick={() => void copy('secret', secret)}>
+                {copied === 'secret' ? 'Copied' : 'Copy'}
+              </button>
+            </p>
+          ) : null}
+          <StatusRow
+            label="First request"
+            done={!!ready?.firstRequestAt}
+            waiting={!ready?.firstRequestAt}
+            detail={ready?.firstRequestAt ? ago(ready.firstRequestAt) : 'Waiting'}
+          />
+        </section>
       </div>
 
       <div className="grid sm:grid-cols-3 gap-3 mt-6">
-        <CountCard label="Memories" value={counts.memories} />
-        <CountCard label="Documents" value={counts.documents} />
-        <CountCard label="Searches today" value={counts.searches} />
+        <CountCard label="Memories" value={counts.isPending ? null : memories} />
+        <CountCard label="Documents" value={counts.isPending ? null : documents} />
+        <CountCard label="Searches today" value={counts.isPending ? null : searches} />
       </div>
 
       <h2 className="text-[16px] font-medium text-zinc-200 mt-8 mb-3">Explore</h2>
@@ -180,6 +212,18 @@ Keep secrets in .env — never commit keys.`;
         <ExploreCard to="/import" icon={<Globe size={16} />} title="Import" subtitle="Add a file or note, then search it" />
         <ExploreCard to="/memory-graph" icon={<FileText size={16} />} title="Memory graph" subtitle="See documents and facts after import" />
       </div>
+    </div>
+  );
+}
+
+function StatusRow({ label, done, waiting, detail }: { label: string; done: boolean; waiting: boolean; detail: string }) {
+  return (
+    <div className="mt-3 flex items-center justify-between gap-3 text-[13px]">
+      <span className="text-zinc-200 inline-flex items-center gap-2">
+        {done ? <Check size={14} className="text-emerald-400" /> : waiting ? <Loader2 size={14} className="animate-spin text-zinc-500" /> : null}
+        {label}
+      </span>
+      <span className="text-zinc-500">{detail}</span>
     </div>
   );
 }
@@ -195,10 +239,7 @@ function CountCard({ label, value }: { label: string; value: number | null }) {
 
 function ExploreCard({ to, icon, title, subtitle }: { to: string; icon: React.ReactNode; title: string; subtitle: string }) {
   return (
-    <Link
-      to={to}
-      className="group flex items-start gap-3 rounded-xl border border-white/[0.07] bg-[#141416] hover:bg-[#19191c] px-4 py-[18px]"
-    >
+    <Link to={to} className="group flex items-start gap-3 rounded-xl border border-white/[0.07] bg-[#141416] hover:bg-[#19191c] px-4 py-[18px]">
       <span className="mt-0.5 text-zinc-500">{icon}</span>
       <span className="flex-1 min-w-0">
         <span className="block text-[14px] font-medium text-zinc-100">{title}</span>
