@@ -294,18 +294,23 @@ function keywordSearch(tag: string, query: string) {
   const inv = postings.get(tag);
   if (!inv) return [];
   const qTokens = queryTokens(query);
-  const N = Math.max((idsByTag.get(tag) || []).length, 1);
+  const N = Math.max(new Set(idsByTag.get(tag) || []).size, 1);
   const scores = new Map<string, number>();
   const k1 = 1.2;
   const b = 0.75;
   const avg = avgLen.get(tag) || 40;
   for (const qt of qTokens) {
-    const list = inv.get(qt) || [];
-    const n = list.length;
+    const byId = new Map<string, { tf: number; len: number }>();
+    for (const posting of inv.get(qt) || []) {
+      const prev = byId.get(posting.id);
+      if (prev) prev.tf += posting.tf;
+      else byId.set(posting.id, { tf: posting.tf, len: posting.len });
+    }
+    const n = byId.size;
     const idf = Math.log(1 + (N - n + 0.5) / (n + 0.5));
-    for (const p of list) {
-      const score = idf * ((p.tf * (k1 + 1)) / (p.tf + k1 * (1 - b + b * (p.len / avg))));
-      scores.set(p.id, (scores.get(p.id) || 0) + score);
+    for (const [id, posting] of byId) {
+      const score = idf * ((posting.tf * (k1 + 1)) / (posting.tf + k1 * (1 - b + b * (posting.len / avg))));
+      scores.set(id, (scores.get(id) || 0) + score);
     }
   }
   return [...scores.entries()].map(([id, score]) => ({ id, score })).filter((x) => x.score > 0);

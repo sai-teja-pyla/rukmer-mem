@@ -156,9 +156,8 @@ export function TagRows({ tags, homeTag, teams }: { tags: TagRow[]; homeTag?: st
         const named = spaceLabel(row.tag, { homeTag, teams });
         return (
         <div key={row.tag} className="grid grid-cols-4 min-w-[560px] px-4 py-3 text-[13px] text-zinc-300 border-t border-white/[0.06]">
-          <span className="text-zinc-100 inline-flex items-center gap-1.5 flex-wrap" title={named.raw}>
+          <span className="text-zinc-100 inline-flex items-center gap-1.5 flex-wrap" title={named.label === named.raw ? undefined : named.raw}>
             {named.label}
-            {named.label !== named.raw ? <span className="text-[11px] text-zinc-500">{named.raw}</span> : null}
             <SourceMarks sites={row.sites} />
           </span>
           <span>{row.documents ?? 0}</span>

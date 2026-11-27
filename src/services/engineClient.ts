@@ -53,6 +53,10 @@ export const engine = {
   ingestBatch: (body: any) => req('/v3/documents/batch', { method: 'POST', body: JSON.stringify(body) }),
   listDocs: (containerTag?: string) =>
     req('/v3/documents/list', { method: 'POST', body: JSON.stringify({ containerTag }) }),
+  forget: (id: string) => req('/v4/memories', { method: 'DELETE', body: JSON.stringify({ id }) }),
+  governance: () => req('/v4/governance'),
+  setRetention: (body: { ttlDays: number; memoryKind?: string; action?: string; tenantId?: string }) =>
+    req('/v4/governance/retention', { method: 'PUT', body: JSON.stringify(body) }),
   getDoc: (id: string) => req(`/v3/documents/${encodeURIComponent(id)}`),
   tags: (scope?: 'all' | 'private' | 'team') => req(`/v3/tags${scope && scope !== 'all' ? `?scope=${encodeURIComponent(scope)}` : ''}`),
   search: (body: any) => req('/v4/search', { method: 'POST', body: JSON.stringify(body) }),

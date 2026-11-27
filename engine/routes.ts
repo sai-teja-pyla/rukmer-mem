@@ -18,6 +18,7 @@ import {
   readDocument,
   listTags,
   logRequest,
+  usageEvent,
   rememberTranscript,
   searchMemory,
   stats,
@@ -214,19 +215,15 @@ export function mountMemoryEngine(app: Express) {
     res.on('finish', () => {
       if (req.path.startsWith('/v3') || req.path.startsWith('/v4') || req.path.startsWith('/v1') || req.path.startsWith('/mcp')) {
         try {
+          const usage = usageEvent(req.method, req.path);
+          if (!usage.record) return;
           logRequest({
             method: req.method,
             path: req.path,
             status: res.statusCode,
             ms: Date.now() - start,
             ownerUid: req.memoryUser?.uid || '',
-            type: req.path.includes('search')
-              ? 'search'
-              : req.path.includes('chat')
-                ? 'chat'
-                : req.path.includes('document') || req.path.includes('remember')
-                  ? 'ingest'
-                  : 'other',
+            type: usage.type,
           });
         } catch {
           /* ignore */
