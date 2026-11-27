@@ -2,6 +2,24 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 
 export type MemoryPhase = 'loading' | 'error' | 'ready';
 
+export const MEMORY_LOAD_TIMEOUT_MS = 12000;
+
+export function withTimeout<T>(work: Promise<T>, ms = MEMORY_LOAD_TIMEOUT_MS) {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('This is taking too long. Retry.')), ms);
+    work.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (err) => {
+        clearTimeout(timer);
+        reject(err);
+      }
+    );
+  });
+}
+
 export function useMemoryResource<T>(loader: () => Promise<T>, opts?: { enabled?: boolean; refreshMs?: number; reloadKey?: string }) {
   const enabled = opts?.enabled !== false;
   const refreshMs = opts?.refreshMs ?? 0;
@@ -11,18 +29,20 @@ export function useMemoryResource<T>(loader: () => Promise<T>, opts?: { enabled?
   const [phase, setPhase] = useState<MemoryPhase>('loading');
   const hasData = useRef(false);
   const seq = useRef(0);
+  const inFlight = useRef(false);
   const loaderRef = useRef(loader);
   loaderRef.current = loader;
 
-  const load = useCallback(() => {
+  const load = useCallback((force = false) => {
     if (!enabled) return;
+    if (inFlight.current && !force) return;
     const id = ++seq.current;
+    inFlight.current = true;
     if (!hasData.current) {
       setPhase('loading');
       setError('');
     }
-    loaderRef
-      .current()
+    withTimeout(loaderRef.current())
       .then((value) => {
         if (id !== seq.current) return;
         hasData.current = true;
@@ -36,15 +56,19 @@ export function useMemoryResource<T>(loader: () => Promise<T>, opts?: { enabled?
         setData(null);
         setError(message);
         setPhase('error');
+      })
+      .finally(() => {
+        if (id === seq.current) inFlight.current = false;
       });
   }, [enabled]);
 
   const retry = useCallback(() => {
     hasData.current = false;
+    inFlight.current = false;
     setData(null);
     setError('');
     setPhase('loading');
-    load();
+    load(true);
   }, [load]);
 
   useEffect(() => {

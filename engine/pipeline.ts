@@ -28,7 +28,7 @@ import { canAccessTag, homeTag, ownsTag, scopeFromTag, uidFromTag } from './tena
 import { readTagsFor, readableSpaces } from './spaces.js';
 import { checkUpload, sanitizeName, sanitizePlain } from './security.js';
 import { ensureIndex, rankTagged, relatedForMatches, tagCount, vectorDim, type MetaFilter, type Retrieval } from './search-index.js';
-import { selectMemories } from './relevance.js';
+import { memoryTextKey, needsMemory, selectMemories } from './relevance.js';
 import { assignGovernance, audit, canErase, canRead, eraseBulk, eraseMemory, findMemory, govOf, pickTeam, prepareWrite, teamContainer } from './governance.js';
 
 export type SearchOpts = {
@@ -164,7 +164,7 @@ export async function ingestDocument(input: {
   if (gov?.visibility === 'team' && gov.teamId) tag = teamContainer(gov.teamId);
   const tenantId = gov?.tenantId || tag;
   const cleaned = prepareWrite(tenantId, raw);
-  const titleClean = prepareWrite(tenantId, input.title || 'Untitled');
+  const titleClean = prepareWrite(tenantId, documentTitle(input.title, raw));
   const text = cleaned.text;
   const keptOriginal = input.originalText ? prepareWrite(tenantId, input.originalText).text.trim().slice(0, 4000) : '';
   if (!text.trim()) throw Object.assign(new Error('Nothing left to store after redaction'), { status: 422 });
@@ -600,10 +600,58 @@ export function listAuthoredMemories(actor: string, opts: SearchOpts = {}) {
   return { query: '', matches, related: [] as [], tookMs: 0 };
 }
 
+export function documentTitle(title: string | undefined, text: string) {
+  const given = String(title || '').trim();
+  if (given) return given.slice(0, 120);
+  const line = String(text || '').split(/\n/)[0].replace(/\s+/g, ' ').trim().slice(0, 80);
+  return line || 'Note';
+}
+
+const AUTO_SAVE_SOURCES = new Set(['gemini-router', 'openai-router', 'anthropic-router', 'grok-router', 'playground', 'conversation']);
+
+function sameStoredText(tag: string, text: string) {
+  const key = memoryTextKey(text);
+  if (!key) return false;
+  return getState().documents.some(
+    (doc) => doc.containerTag === tag && !doc.forgotten && (memoryTextKey(doc.text) === key || memoryTextKey(doc.originalText || '') === key)
+  );
+}
+
+function emptySearch(query: string, started: number, skipReason: string) {
+  return {
+    query,
+    intent: classifyIntent(query),
+    matches: [] as {
+      id: string;
+      docId?: string;
+      title: string;
+      text: string;
+      score: number;
+      vectorScore?: number;
+      source?: string;
+      containerTag?: string;
+      createdAt?: string;
+      temporal?: string;
+      occurredAt?: string | null;
+    }[],
+    related: [] as [],
+    tookMs: Date.now() - started,
+    embedMs: 0,
+    mode: 'empty',
+    channels: { semantic: false, keyword: false, graph: false },
+    stats: { chunks: 0, documents: 0 },
+    retrievedCount: 0,
+    scores: [] as number[],
+    tokensInjected: 0,
+    skipReason,
+  };
+}
+
 export async function searchMemory(query: string, opts: SearchOpts = {}) {
   const started = Date.now();
   const retrieval = retrievalOf(opts.retrieval);
   const qRaw = sanitizePlain(query, 2000);
+  if (!needsMemory(qRaw)) return emptySearch(qRaw, started, 'no-memory-needed');
   const { normalized, expanded } = expandQuery(qRaw);
   const shortFavourite = /\bfavou?rites?\b|\bfavorites?\b/i.test(normalized) && normalized.split(/\s+/).filter(Boolean).length <= 4;
   const q = opts.rewrite || shortFavourite ? expanded : normalized;
@@ -621,17 +669,7 @@ export async function searchMemory(query: string, opts: SearchOpts = {}) {
   const has = tags.some((tag) => tagCount(tag) > 0);
   if (!tags.length || !has) {
     void embedP.then(() => undefined).catch(() => undefined);
-    return {
-      query: q,
-      intent: classifyIntent(q),
-      matches: [],
-      related: [],
-      tookMs: Date.now() - started,
-      embedMs: 0,
-      mode: 'empty',
-      channels: { semantic: false, keyword: false, graph: false },
-      stats: { chunks: 0, documents: 0 },
-    };
+    return emptySearch(q, started, 'below-threshold');
   }
   const embedStarted = Date.now();
   let qVec = await embedP;
@@ -705,15 +743,14 @@ export async function searchMemory(query: string, opts: SearchOpts = {}) {
         .join(','),
     });
   }
+  const related = opts.includeRelated === false || !matches.length ? [] : relatedForMatches(matches, { visible });
+  const scores = matches.map((match) => Number(match.score) || 0);
   return {
     query: q,
     intent: classifyIntent(q),
     timeIntent: ranked.intent,
     matches,
-    related:
-      opts.includeRelated === false || !matches.length
-        ? []
-        : relatedForMatches(matches, { visible }),
+    related,
     tookMs: Date.now() - started,
     embedMs,
     mode: retrieval === 'hybrid' && !qVec.length ? 'keyword' : retrieval,
@@ -723,6 +760,10 @@ export async function searchMemory(query: string, opts: SearchOpts = {}) {
       documents: tags.reduce((n, tag) => n + live.documents.filter((d) => d.containerTag === tag && !d.forgotten).length, 0),
       ...ranked.stats,
     },
+    retrievedCount: matches.length,
+    scores,
+    tokensInjected: Math.ceil(matches.reduce((n, match) => n + String(match.text || '').length, 0) / 4),
+    skipReason: matches.length ? '' : 'below-threshold',
   };
 }
 
@@ -737,6 +778,7 @@ export async function commitImportantMemory(input: {
   visibility?: string;
   scope?: string;
   teamId?: string;
+  metadata?: Record<string, string>;
 }) {
   const scope = input.scope === 'team' || input.visibility === 'team' ? 'team' : 'private';
   const team = scope === 'team' && input.actorId ? pickTeam(input.actorId, input.teamId) : undefined;
@@ -755,7 +797,10 @@ export async function commitImportantMemory(input: {
       .catch(() => undefined);
   }
   const triples = (graph.triples || []).filter(isUsefulFact);
+  const autoSave = AUTO_SAVE_SOURCES.has(String(input.source || ''));
   if (!triples.length) {
+    if (autoSave) return { skipped: true, reason: 'not-durable', facts: 0, document: null };
+    if (sameStoredText(tag, raw)) return { skipped: true, reason: 'duplicate', facts: 0, document: null };
     const doc = await ingestDocument({
       title: input.title || raw.slice(0, 80),
       text: raw,
@@ -770,8 +815,9 @@ export async function commitImportantMemory(input: {
       teamId: team?.id,
       memoryKind: scope === 'team' || input.source === 'tool' ? (scope === 'team' ? 'decision' : 'fact') : 'context',
       durable: scope === 'team' || input.source === 'tool',
+      metadata: input.metadata,
     });
-    noteConversation(tag, raw);
+    if (!autoSave) noteConversation(tag, raw);
     return { saved: true, skipped: false, type: 'raw', facts: 0, document: doc.document, chunks: doc.chunks };
   }
   const text = triples
@@ -801,6 +847,9 @@ export async function commitImportantMemory(input: {
     raw
   );
   deriveFacts(tag);
+  if (sameStoredText(tag, text) || sameStoredText(tag, raw)) {
+    return { skipped: true, reason: 'duplicate', facts: triples.length, triples, saved, document: null };
+  }
   const doc = await ingestDocument({
     title: input.title || text.split('\n')[0].slice(0, 80),
     text,
@@ -815,6 +864,7 @@ export async function commitImportantMemory(input: {
     teamId: team?.id,
     memoryKind: 'fact',
     durable: scope === 'team' || input.source === 'tool',
+    metadata: input.metadata,
   });
   noteConversation(tag, raw);
   return { skipped: false, facts: triples.length, triples, saved, document: doc.document, chunks: doc.chunks };
@@ -824,8 +874,10 @@ const convoBuf = new Map<string, string[]>();
 export let consolidationPasses = 0;
 
 export function noteConversation(tag: string, text: string) {
+  const body = String(text || '');
+  if (!body.trim() || /\bassistant\s*:/i.test(body) || body.includes('\nAgreed:\n')) return;
   const buf = convoBuf.get(tag) || [];
-  buf.push(text.slice(0, 2000));
+  buf.push(body.slice(0, 2000));
   if (buf.length > 12) buf.shift();
   convoBuf.set(tag, buf);
   if (buf.length >= 4) {
@@ -867,28 +919,25 @@ export async function rememberTranscript(input: {
     .map((m) => ({ role: String(m.role || 'user'), text: String(m.content || m.text || '').trim() }))
     .filter((m) => m.text);
   if (!turns.length) throw new Error('No messages to remember');
-  const userText = turns.filter((m) => m.role === 'user').map((m) => m.text).join('\n');
-  const assistantText = turns
-    .filter((m) => m.role === 'assistant')
+  const userText = turns
+    .filter((m) => m.role === 'user' || m.role === 'human')
     .map((m) => m.text)
-    .filter((t) => looksLikeDurableFact(t))
     .join('\n')
-    .slice(0, 1200);
-  if (isChatter(userText) && !assistantText) {
+    .trim();
+  if (!userText || !looksLikeDurableFact(userText)) {
     return { skipped: true, reason: 'not-durable', facts: 0, document: null };
   }
-  const dialogue = [`User:\n${userText.slice(0, 4000)}`, assistantText ? `Agreed:\n${assistantText}` : '']
-    .filter(Boolean)
-    .join('\n\n');
+  const source = String(input.source || 'conversation');
   return commitImportantMemory({
     containerTag: tag,
-    source: input.source || 'conversation',
+    source: /-router$/.test(source) ? 'conversation' : source,
     title: input.title,
-    text: dialogue,
+    text: userText.slice(0, 4000),
     actorId: input.actorId,
     visibility: input.visibility,
     teamId: input.teamId,
     scope: input.visibility === 'team' ? 'team' : undefined,
+    metadata: { extractedFrom: 'user' },
   });
 }
 
@@ -926,11 +975,8 @@ export async function chatWithMemory(
   if (opts.remember !== false && query.trim()) {
     void rememberTranscript({
       containerTag: tag,
-      source: opts.source || 'playground',
-      messages: [
-        { role: 'user', content: query },
-        { role: 'assistant', content: answer },
-      ],
+      source: opts.source && !/-router$/.test(opts.source) ? opts.source : 'conversation',
+      messages: [{ role: 'user', content: query }],
       actorId: opts.actorId,
     }).catch(() => undefined);
   }
@@ -1179,7 +1225,7 @@ export function graphPayload(containerTag?: string | null, uid?: string, scope: 
         })
         .map((d) => ({
           id: `note_${d.id}`,
-          label: 'Note',
+          label: documentTitle('', String(d.originalText || d.text || '')),
           kind: 'memory' as const,
           type: 'note',
           source: d.source,

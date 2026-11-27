@@ -362,7 +362,7 @@ await check('chit-chat is not stored as memory', async () => {
   for (const content of filler) {
     const rem = await json('/v4/remember', {
       method: 'POST',
-      body: JSON.stringify({ containerTag: chatTag, messages: [{ role: 'user', content }, { role: 'assistant', content: 'Sure.' }] }),
+      body: JSON.stringify({ containerTag: chatTag, messages: [{ role: 'user', content }, { role: 'assistant', content: 'The capital of Mongolia is Ulaanbaatar, and this long factual reply must not be stored.' }] }),
     });
     assert(rem.status === 200, rem.data.error || rem.status);
     assert(rem.data.skipped === true || rem.data.chunks === 0, `stored filler: ${content} -> ${JSON.stringify(rem.data).slice(0, 160)}`);
@@ -372,6 +372,23 @@ await check('chit-chat is not stored as memory', async () => {
   assert(docs.length === 0, `stored ${docs.length} conversation dumps`);
   const graph = await json(`/v4/graph?containerTag=${encodeURIComponent(chatTag)}`);
   assert((graph.data.edges || []).length === 0, `graph edges=${graph.data.edges?.length}`);
+});
+
+await check('a repeated user fact is stored once', async () => {
+  const milk = `${TAG}-milk`;
+  const messages = [
+    { role: 'user', content: 'Remember that I prefer oat milk' },
+    { role: 'assistant', content: 'You prefer oat milk, and that paraphrase must not be stored as its own memory.' },
+  ];
+  const first = await json('/v4/remember', { method: 'POST', body: JSON.stringify({ containerTag: milk, messages }) });
+  const second = await json('/v4/remember', { method: 'POST', body: JSON.stringify({ containerTag: milk, messages }) });
+  assert(first.status === 200 && first.data.skipped !== true, JSON.stringify(first.data).slice(0, 180));
+  const list = await json('/v3/documents/list', { method: 'POST', body: JSON.stringify({ containerTag: milk }) });
+  const docs = list.data.documents || [];
+  assert(docs.length === 1, `stored ${docs.length} oat milk documents`);
+  assert(second.data.skipped === true, 'second identical fact was stored again');
+  const hay = docs.map((doc: { title?: string; preview?: string; originalText?: string }) => `${doc.title} ${doc.preview} ${doc.originalText || ''}`).join('\n');
+  assert(!/paraphrase/i.test(hay), 'assistant paraphrase stored');
 });
 
 await check('only durable facts are stored from a mixed session', async () => {

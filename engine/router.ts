@@ -86,15 +86,13 @@ export function keyFor(provider: Provider, req: Request) {
   return header(req, 'x-grok-key') || header(req, 'x-xai-key') || token || serverProviderKey('grok');
 }
 
-function rememberLater(tag: string, source: string, query: string, answer: string) {
-  if (!query || !answer) return;
+function rememberLater(tag: string, query: string, actorId?: string) {
+  if (!query.trim()) return;
   void rememberTranscript({
     containerTag: tag,
-    source,
-    messages: [
-      { role: 'user', content: query },
-      { role: 'assistant', content: answer.slice(0, 8000) },
-    ],
+    source: 'conversation',
+    messages: [{ role: 'user', content: query }],
+    actorId,
   }).catch(() => undefined);
 }
 
@@ -211,7 +209,7 @@ export async function completeChat(req: Request, res: Response) {
     const scope = String(req.headers['x-rukmer-scope'] || req.body?.memoryScope || req.body?.scope || 'all');
     const tags = uid ? readTagsFor(uid, { scope, teamId: req.body?.teamId, containerTag: tag }) : [tag];
     mem = await buildMemoryInjection(query, tag, {
-      topK: Number(req.body?.memoriesRetrieved || 8),
+      topK: Number(req.body?.memoriesRetrieved || 4),
       strictness: Number(req.body?.matchStrictness ?? req.body?.strictness ?? 0.4),
       rerank: !!req.body?.rerank,
       rewrite: !!req.body?.rewriteQuery,
@@ -282,7 +280,7 @@ export async function completeChat(req: Request, res: Response) {
     }
   }
 
-  if (useMemory && status < 400) rememberLater(tag, `${provider}-router`, query, answer);
+  if (useMemory && status < 400) rememberLater(tag, query, uid);
   const citations = (mem?.retrieved.matches || []).map((match) => ({
     id: match.id,
     text: String(match.text || '').slice(0, 500),
@@ -290,11 +288,16 @@ export async function completeChat(req: Request, res: Response) {
     source: match.source || 'memory',
     score: match.score,
   }));
+  const skipReason = !memoryOn(req)
+    ? 'memory off'
+    : req.body?.compareWithoutMemory === true
+      ? 'compare mode'
+      : mem?.skipReason || mem?.retrieved?.skipReason || (useMemory && citations.length === 0 ? 'below-threshold' : '');
   const emptyReason = !tag
     ? 'no tag'
-    : !memoryOn(req)
+    : skipReason === 'memory off'
       ? 'memory off'
-      : req.body?.compareWithoutMemory === true
+      : skipReason === 'compare mode'
         ? 'compare mode'
         : useMemory && citations.length === 0
           ? 'below threshold'
@@ -307,6 +310,10 @@ export async function completeChat(req: Request, res: Response) {
       provider,
       containerTag: tag,
       matches: citations.length,
+      retrievedCount: citations.length,
+      scores: citations.map((hit) => hit.score),
+      tokensInjected: Number(mem?.tokensInjected || 0),
+      skipReason,
       citations,
       ...(!isProduction() && citations.length === 0 && emptyReason ? { debug: { reason: emptyReason } } : {}),
     },

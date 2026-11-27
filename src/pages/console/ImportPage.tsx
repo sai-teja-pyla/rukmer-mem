@@ -5,6 +5,8 @@ import { PageHeader, DocLink, Panel, PrimaryButton, GhostButton, Skeleton } from
 import { engine } from '../../services/engineClient';
 import type { UserProfile } from '../../types';
 import { homeTag as makeHomeTag } from '../../services/tenancy';
+import { importTitle, isChatDump } from '../../services/importTitle';
+import { spaceLabel } from '../../services/spaceLabel';
 
 const TYPES = ['TXT', 'MD', 'JSON', 'CSV', 'HTML', 'PDF', 'PNG', 'JPG'];
 const PASTE_LIMIT = 50000;
@@ -44,6 +46,8 @@ export default function ImportPage() {
   const [openDoc, setOpenDoc] = useState<any>(null);
   const [openError, setOpenError] = useState('');
   const [busy, setBusy] = useState(false);
+  const [pasteBusy, setPasteBusy] = useState(false);
+  const [pasteMessage, setPasteMessage] = useState('');
   const [status, setStatus] = useState('');
   const readerRef = useRef<HTMLDivElement>(null);
   const openReq = useRef(0);
@@ -67,15 +71,16 @@ export default function ImportPage() {
     try {
       const d = await engine.listDocs(tag || mine);
       const documents = d.documents || [];
-      if (docsReq.current !== token) return documents as any[];
+      if (docsReq.current !== token) return { documents: documents as any[], error: '' };
       setDocs(documents);
       setDocsError('');
       setDocsLoaded(true);
-      return documents as any[];
+      return { documents: documents as any[], error: '' };
     } catch (e: any) {
-      if (docsReq.current !== token) return [] as any[];
-      setDocsError(e?.message || 'Could not load files');
-      return [] as any[];
+      const message = e?.message || 'Could not load files';
+      if (docsReq.current !== token) return { documents: [] as any[], error: message };
+      setDocsError(message);
+      return { documents: [] as any[], error: message };
     } finally {
       if (docsReq.current === token) setDocsLoading(false);
     }
@@ -102,7 +107,7 @@ export default function ImportPage() {
 
   const openFile = (id: string, listed?: any) => {
     const token = ++openReq.current;
-    const row = listed || docs.find((d) => d.id === id);
+    const row = listed || (docs || []).find((d) => d.id === id);
     setOpenId(id);
     setOpenError('');
     setOpenDoc(row ? { ...row, text: row.preview || row.text || '' } : null);
@@ -162,8 +167,8 @@ export default function ImportPage() {
       setUrl('');
       setUrlHint('');
       setStatus('URL ingested');
-      const documents = await refresh();
-      if (documents[0]?.id) openFile(documents[0].id, documents[0]);
+      const listed = await refresh();
+      if (listed.documents[0]?.id) openFile(listed.documents[0].id, listed.documents[0]);
     } catch (e: any) {
       setStatus(e.message);
     } finally {
@@ -178,20 +183,19 @@ export default function ImportPage() {
   };
 
   const savePaste = async () => {
-    if (busy) {
-      setStatus('Working…');
-      return;
-    }
+    if (pasteBusy) return;
     if (explainPaste()) return;
     if (pasteText.length > PASTE_LIMIT) {
       setPasteHint('Keep it under 50,000 characters');
       return;
     }
-    setBusy(true);
+    const title = importTitle(pasteTitle, pasteText);
+    setPasteBusy(true);
+    setPasteMessage('Saving…');
     try {
       await engine.ingest({
         text: pasteText.slice(0, PASTE_LIMIT),
-        title: pasteTitle.trim(),
+        title,
         containerTag: tag,
         task,
         source: 'paste',
@@ -199,13 +203,17 @@ export default function ImportPage() {
       setPasteText('');
       setPasteTitle('');
       setPasteHint('');
-      setStatus('Text saved');
-      const documents = await refresh();
-      if (documents[0]?.id) openFile(documents[0].id, documents[0]);
+      const listed = await refresh();
+      if (listed.error) {
+        setPasteMessage(`Saved '${title}', but the list did not refresh.`);
+      } else {
+        setPasteMessage(`Saved '${title}'`);
+        if (listed.documents[0]?.id) openFile(listed.documents[0].id, listed.documents[0]);
+      }
     } catch (e: any) {
-      setStatus(e.message);
+      setPasteMessage(e.message || 'Could not save');
     } finally {
-      setBusy(false);
+      setPasteBusy(false);
     }
   };
 
@@ -220,8 +228,9 @@ export default function ImportPage() {
       await engine.ingestBatch({ containerTag: tag, task, documents: staged });
       setStaged([]);
       setStatus('Import complete');
-      const documents = await refresh();
-      if (documents[0]?.id) openFile(documents[0].id, documents[0]);
+      const listed = await refresh();
+      if (listed.error) setStatus('Import finished, but the list did not refresh.');
+      else if (listed.documents[0]?.id) openFile(listed.documents[0].id, listed.documents[0]);
     } catch (e: any) {
       setStatus(e.message);
     } finally {
@@ -363,11 +372,11 @@ export default function ImportPage() {
               <p className="text-[12px] text-zinc-500">{pasteText.length.toLocaleString()} / 50,000</p>
               <span className="relative inline-flex">
                 <GhostButton
-                  disabled={!pasteText.trim() || busy}
-                  title={!pasteText.trim() ? 'Enter some text' : busy ? 'Working…' : 'Save'}
+                  disabled={!pasteText.trim() || pasteBusy}
+                  title={!pasteText.trim() ? 'Enter some text' : pasteBusy ? 'Saving…' : 'Save'}
                   onClick={() => void savePaste()}
                 >
-                  Save
+                  {pasteBusy ? 'Saving…' : 'Save'}
                 </GhostButton>
                 {!pasteText.trim() && (
                   <button
@@ -385,6 +394,14 @@ export default function ImportPage() {
                 {pasteHint}
               </p>
             ) : null}
+            {pasteMessage ? (
+              <p className="mt-2 text-[12.5px] text-zinc-300" role="status">
+                {pasteMessage}
+                {pasteMessage.includes('did not refresh') ? (
+                  <button type="button" onClick={() => void refresh()} className="ml-2 text-blue-300">Retry</button>
+                ) : null}
+              </p>
+            ) : null}
           </Panel>
 
           <Panel>
@@ -399,7 +416,7 @@ export default function ImportPage() {
                 className="h-8 px-2 rounded-lg border border-white/[0.08] bg-[#0c0c0e] text-[12.5px] text-zinc-300"
               >
                 {tags.map((t) => (
-                  <option key={t}>{t}</option>
+                  <option key={t} value={t}>{spaceLabel(t, { homeTag: mine }).label}</option>
                 ))}
               </select>
             </div>
@@ -453,11 +470,17 @@ export default function ImportPage() {
                 Retry
               </button>
             </div>
-          ) : (docs || []).length === 0 ? (
-            <p className="text-[12.5px] text-zinc-500">Nothing stored in this tag yet. After Import finishes, files appear here.</p>
+          ) : (docs || []).filter((d) => !isChatDump(d.source)).length === 0 ? (
+            <div>
+              <p className="text-[12.5px] text-zinc-500">Nothing stored in this tag yet. After Import finishes, files appear here.</p>
+              {(docs || []).some((d) => isChatDump(d.source)) ? <p className="text-[12px] text-zinc-500 mt-2">Auto-saved chats are kept out of this list.</p> : null}
+            </div>
           ) : (
             <div className="space-y-2 max-h-[420px] overflow-y-auto">
-              {docs.map((d) => {
+              {(docs || []).some((d) => isChatDump(d.source)) ? (
+                <p className="text-[12px] text-zinc-500">Auto-saved chats are kept out of this list.</p>
+              ) : null}
+              {(docs || []).filter((d) => !isChatDump(d.source)).map((d) => {
                 const open = openId === d.id;
                 return (
                   <button

@@ -219,7 +219,7 @@ export function mountMemoryEngine(app: Express) {
             path: req.path,
             status: res.statusCode,
             ms: Date.now() - start,
-            ownerUid: req.memoryUser?.uid,
+            ownerUid: req.memoryUser?.uid || '',
             type: req.path.includes('search')
               ? 'search'
               : req.path.includes('chat')
@@ -286,7 +286,7 @@ export function mountMemoryEngine(app: Express) {
   app.get('/v3/me', (req, res) => {
     try {
       const uid = uidOf(req);
-      res.json({ uid, homeTag: homeTag(uid), via: req.memoryUser?.via });
+      res.json({ uid, homeTag: homeTag(uid), via: req.memoryUser?.via, providers: providerStatus() });
     } catch (e: any) {
       fail(res, e);
     }
@@ -362,7 +362,7 @@ export function mountMemoryEngine(app: Express) {
       for (const item of items) {
         results.push(
           await ingestPayload({
-            title: item.title || item.name || 'Untitled',
+            title: item.title || item.name || '',
             text: item.text || item.content || '',
             pdfBase64: item.pdfBase64,
             imageBase64: item.imageBase64,

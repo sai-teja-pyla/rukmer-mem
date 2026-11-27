@@ -21,6 +21,7 @@ import { threadTitle, titleAfterSend } from '../../services/threadTitle';
 import { keyHeaders, loadProviderKeys, pickReadyModel, saveProviderKeys, type ProviderKeys } from '../../services/providerKeys';
 import type { UserProfile } from '../../types';
 import { homeTag as makeHomeTag } from '../../services/tenancy';
+import { spaceLabel, type SpaceRef } from '../../services/spaceLabel';
 
 type MemoryMode = 'agentic' | 'auto';
 type Retrieval = 'hybrid' | 'semantic' | 'keyword';
@@ -224,9 +225,17 @@ export default function PlaygroundPage() {
   const [keys, setKeys] = useState<ProviderKeys>(() => loadProviderKeys());
   const [keysOpen, setKeysOpen] = useState(false);
   const [serverProviders, setServerProviders] = useState<Record<string, boolean>>({});
+  const [providerPhase, setProviderPhase] = useState<'loading' | 'ready' | 'error'>('loading');
+  const [providerTry, setProviderTry] = useState(0);
+  const [providerError, setProviderError] = useState('');
+  const [teams, setTeams] = useState<SpaceRef[]>([]);
+  const [submitted, setSubmitted] = useState('');
+  const [sendHint, setSendHint] = useState('');
+  const [searchNote, setSearchNote] = useState('');
+  const [searchSession, setSearchSession] = useState<{ query: string; summary: string; citations: Citation[] } | null>(null);
   const [source, setSource] = useState(SOURCES[0]);
   const [useProfile, setUseProfile] = useState(true);
-  const [retrieved, setRetrieved] = useState(10);
+  const [retrieved, setRetrieved] = useState(4);
   const [strictness, setStrictness] = useState(0.4);
   const [rerank, setRerank] = useState(false);
   const [retrieval, setRetrieval] = useState<Retrieval>('hybrid');
@@ -261,8 +270,13 @@ export default function PlaygroundPage() {
   };
 
   const startChat = () => {
-    const created = newThread();
-    persistThreads([created, ...threads], created.id);
+    const empty = threads.find((item) => item.messages.length === 0 && (item.title === 'New chat' || /^New chat \d+$/.test(item.title)));
+    if (empty) {
+      persistThreads(threads, empty.id);
+    } else {
+      const created = newThread();
+      persistThreads([created, ...threads], created.id);
+    }
     setHits([]);
     setInput('');
     setRenaming(false);
@@ -342,7 +356,7 @@ export default function PlaygroundPage() {
   }, [search, user.uid]);
 
   const providerReady = (provider: string) => !!(serverProviders[provider] || keys[provider as keyof ProviderKeys]);
-  const noneReady = !MODELS.some((candidate) => providerReady(candidate.provider));
+  const noneReady = providerPhase === 'ready' && !providerReady(model.provider);
 
   useEffect(() => {
     const ready: Record<string, boolean> = {};
@@ -364,11 +378,33 @@ export default function PlaygroundPage() {
         setTag((cur) => (tags.includes(cur) ? cur : mine));
       })
       .catch(() => {});
-    engine
-      .security()
-      .then((d) => setServerProviders(d.providers || {}))
-      .catch(() => {});
-  }, []);
+    let cancelled = false;
+    const loadProviders = async () => {
+      let last = 'Could not check model keys';
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        try {
+          const [health, me] = await Promise.all([engine.health(), engine.me().catch(() => ({} as { providers?: Record<string, boolean> }))]);
+          if (cancelled) return;
+          setServerProviders(me.providers || health.providers || {});
+          setProviderError('');
+          setProviderPhase('ready');
+          return;
+        } catch (err) {
+          last = err instanceof Error ? err.message : last;
+          await new Promise((resolve) => setTimeout(resolve, 400 * (attempt + 1)));
+        }
+      }
+      if (!cancelled) {
+        setProviderError(last);
+        setProviderPhase('error');
+      }
+    };
+    void loadProviders();
+    engine.teams().then((out) => setTeams(out.teams || [])).catch(() => setTeams([]));
+    return () => {
+      cancelled = true;
+    };
+  }, [providerTry]);
 
   const payload = useMemo(
     () => ({
@@ -396,7 +432,7 @@ export default function PlaygroundPage() {
   const requestPreview = useMemo(() => {
     const chatBody = {
       model: model.id,
-      messages: [{ role: 'user', content: input || 'What do you know about me?' }],
+      messages: [{ role: 'user', content: (input.trim() ? input : submitted) || 'What do you know about me?' }],
     };
     const body = JSON.stringify(mode === 'chat' ? chatBody : payload, null, 2);
     const url = mode === 'chat' ? '/v1/chat/completions' : '/v4/search';
@@ -408,13 +444,13 @@ export default function PlaygroundPage() {
       return `const res = await fetch("${url}", {\n  method: "POST",\n  headers: {\n    "Content-Type": "application/json",\n    "x-container-tag": "${tag}",\n    "x-${model.provider}-key": process.env.PROVIDER_API_KEY,\n  },\n  body: JSON.stringify(${body}),\n});`;
     }
     return `import requests\n\nrequests.post(\n  "https://app.rukmer.com${url}",\n  headers={"x-container-tag": "${tag}", "x-${model.provider}-key": key},\n  json=${body},\n)`;
-  }, [payload, requestTab, mode, model, tag, input]);
+  }, [payload, requestTab, mode, model, tag, input, submitted]);
 
   const reset = () => {
     setMemoryMode('agentic');
     setSource(SOURCES[0]);
     setUseProfile(true);
-    setRetrieved(10);
+    setRetrieved(4);
     setStrictness(0.4);
     setRerank(false);
     setRetrieval('hybrid');
@@ -436,8 +472,23 @@ export default function PlaygroundPage() {
 
   const send = async (text?: string) => {
     const value = (text ?? input).trim();
-    if (!value || busy) return;
-    if (mode === 'chat' && noneReady) return;
+    if (!value) {
+      setSendHint(mode === 'search' ? 'Enter a query' : 'Enter a message');
+      return;
+    }
+    if (busy) {
+      setSendHint(mode === 'search' ? 'A search is already running.' : 'Already sending.');
+      return;
+    }
+    if (mode === 'chat' && providerPhase === 'loading') {
+      setSendHint('Still checking model keys.');
+      return;
+    }
+    if (mode === 'chat' && noneReady) {
+      setSendHint('Add a model key for this model, or switch to Search.');
+      return;
+    }
+    setSendHint('');
     const withUser = threads.map((t) =>
       t.id === threadId
         ? {
@@ -458,7 +509,8 @@ export default function PlaygroundPage() {
       );
     };
     setBusy(true);
-    persistThreads(withUser);
+    setSubmitted(value);
+    if (mode === 'chat') persistThreads(withUser);
     setInput('');
     const body = {
       query: value,
@@ -478,7 +530,9 @@ export default function PlaygroundPage() {
     };
     try {
       if (mode === 'search') {
+        const started = Date.now();
         const out = await engine.search(body);
+        const waited = Date.now() - started;
         const citations = (out.matches || []).map((hit: Citation) => ({
           id: String(hit.id),
           text: String(hit.text || ''),
@@ -486,14 +540,15 @@ export default function PlaygroundPage() {
           source: hit.source,
           score: hit.score,
         }));
+        const serverMs = Number(out.tookMs) || 0;
+        const lag = waited > serverMs + 1500 ? ` · ${waited}ms in the browser` : '';
         setHits([]);
-        persistThreads(
-          withUser.map((t) =>
-            t.id === threadId
-              ? { ...t, updatedAt: new Date().toISOString(), messages: [...t.messages, { role: 'assistant' as const, text: `Found ${citations.length} memories in ${out.tookMs}ms · ${out.mode || 'hybrid'}`, citations }] }
-              : t
-          )
-        );
+        setSearchSession({
+          query: value,
+          summary: `Found ${citations.length} memories in ${serverMs}ms · ${out.mode || 'hybrid'}${lag}`,
+          citations,
+        });
+        setSearchNote('');
       } else {
         const history = [...messages, { role: 'user' as const, text: value }]
           .filter((m) => !m.error)
@@ -554,22 +609,39 @@ export default function PlaygroundPage() {
         );
       }
     } catch (err: unknown) {
-      failThread(err instanceof Error ? err.message : 'The model did not reply.');
+      const message = err instanceof Error ? err.message : 'The model did not reply.';
+      if (mode === 'search') {
+        setInput(value);
+        setSearchNote(message);
+      } else {
+        failThread(message);
+      }
     } finally {
       setBusy(false);
     }
   };
 
   const chatBlocked = mode === 'chat' && noneReady;
-  const canSend = !!input.trim() && !busy && !chatBlocked;
-  const sendTitle = chatBlocked ? 'Add an API key' : busy ? 'Waiting for a reply' : input.trim() ? 'Send' : 'Enter a query';
+  const checkingKeys = mode === 'chat' && providerPhase === 'loading';
+  const canSend = !!input.trim() && !busy && !chatBlocked && !checkingKeys;
+  const sendTitle = checkingKeys
+    ? 'Still checking model keys'
+    : chatBlocked
+      ? 'Add an API key'
+      : busy
+        ? mode === 'search'
+          ? 'Searching'
+          : 'Waiting for a reply'
+        : input.trim()
+          ? 'Send'
+          : 'Enter a query';
 
   return (
     <div className="h-full min-h-0 flex flex-col px-3 sm:px-5 pt-3 sm:pt-4 pb-3">
       <div className="shrink-0 mb-3">
         <h1 className="hidden lg:block text-[22px] font-semibold text-white tracking-tight">Playground</h1>
         <p className="text-[13px] text-zinc-400 mt-0.5">
-          Chat here to save memory, or search what is already stored.{' '}
+          Chat with memory, or search what is already stored.{' '}
           <Link to="/connectors" className="text-[#60a5fa] hover:underline">
             Connect Claude, ChatGPT, or Grok
           </Link>
@@ -706,14 +778,35 @@ export default function PlaygroundPage() {
           </div>
 
           <div className="flex-1 min-h-0 overflow-y-auto px-3 sm:px-6 flex flex-col">
-            {messages.length === 0 ? (
+            {mode === 'search' ? (
+              <div className="py-4 space-y-3">
+                {searchSession ? (
+                  <>
+                    <p className="text-[13px] text-zinc-300">{searchSession.summary}</p>
+                    <p className="text-[12px] text-zinc-500">Query: {searchSession.query}</p>
+                    {searchSession.citations.map((h) => (
+                      <div key={h.id} className="rounded-lg border border-white/[0.07] bg-black/20 p-3">
+                        <div className="flex items-center justify-between text-[11px] text-zinc-500 mb-1">
+                          <span>{h.title}</span>
+                          <span>{h.score}</span>
+                        </div>
+                        <p className="text-[13px] text-zinc-200 leading-relaxed">{h.text}</p>
+                      </div>
+                    ))}
+                  </>
+                ) : (
+                  <div className="flex-1 flex flex-col items-center justify-center text-center py-8">
+                    <p className="text-[16px] font-medium text-zinc-100">Search across your memory</p>
+                  </div>
+                )}
+                {busy ? <p className="text-[13.5px] text-zinc-300">Searching…</p> : null}
+              </div>
+            ) : messages.length === 0 ? (
               <div className="flex-1 flex flex-col items-center justify-center text-center py-8">
                 <div className="h-11 w-11 rounded-xl bg-[#1d4ed8]/20 border border-[#3b82f6]/30 flex items-center justify-center mb-4">
                   <SparkIcon />
                 </div>
-                <p className="text-[16px] font-medium text-zinc-100">
-                  {mode === 'chat' ? 'See what Rukmer can do' : 'Search across your memory'}
-                </p>
+                <p className="text-[16px] font-medium text-zinc-100">See what Rukmer can do</p>
               </div>
             ) : (
               <div className="py-4 space-y-4">
@@ -725,8 +818,8 @@ export default function PlaygroundPage() {
                         m.error
                           ? 'bg-red-500/10 border border-red-400/30 text-red-100'
                           : m.role === 'user'
-                            ? 'bg-[#1e3a5f] text-zinc-100'
-                            : 'bg-white/[0.04] border border-white/[0.06] text-zinc-300'
+                            ? 'bg-[#1d4ed8] text-white'
+                            : 'bg-white/[0.04] border border-white/[0.06] text-zinc-100'
                       }`}
                     >
                       {m.error ? <p className="text-[11px] tracking-wide text-red-300/80 mb-1">Error</p> : null}
@@ -760,6 +853,16 @@ export default function PlaygroundPage() {
           </div>
 
           <div className="px-4 pb-3 pt-1">
+            {mode === 'chat' && providerPhase === 'error' && (
+              <div className="mb-2 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-white/10 bg-white/[0.04] px-3 py-2 text-[12.5px] text-zinc-200">
+                <span>Couldn't check model keys. {providerError} Retry.</span>
+                <button type="button" onClick={() => setProviderTry((n) => n + 1)} className="h-7 px-2.5 rounded-md border border-white/10 text-[12px]">
+                  Retry
+                </button>
+              </div>
+            )}
+            {sendHint ? <p className="mb-2 text-[12.5px] text-zinc-300">{sendHint}</p> : null}
+            {mode === 'search' && searchNote ? <p className="mb-2 text-[12.5px] text-zinc-300">{searchNote}</p> : null}
             {chatBlocked && (
               <div className="mb-2 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-amber-300/25 bg-amber-400/10 px-3 py-2 text-[12.5px] text-amber-100">
                 <span>No model key yet. Add one in Settings → Advanced or use Search mode</span>
@@ -787,7 +890,11 @@ export default function PlaygroundPage() {
                 onKeyDown={(e) => {
                   if (e.key === 'Enter' && !e.shiftKey) {
                     e.preventDefault();
-                    send();
+                    if (!canSend) {
+                      setSendHint(sendTitle);
+                      return;
+                    }
+                    void send();
                   }
                 }}
                 rows={2}
@@ -799,12 +906,17 @@ export default function PlaygroundPage() {
                   <button
                     ref={modelBtnRef}
                     type="button"
-                    onClick={() => setModelOpen((v) => !v)}
-                    className="h-7 px-2 rounded-md text-[12.5px] text-zinc-200 hover:bg-white/[0.04] inline-flex items-center gap-1"
+                    onClick={() => {
+                      if (mode === 'search') return;
+                      setModelOpen((v) => !v);
+                    }}
+                    disabled={mode === 'search'}
+                    className="h-7 px-2 rounded-md text-[12.5px] text-zinc-200 hover:bg-white/[0.04] inline-flex items-center gap-1 disabled:opacity-60"
                     aria-expanded={modelOpen}
                     aria-haspopup="listbox"
+                    title={mode === 'search' ? 'Search does not use a model' : model.label}
                   >
-                    {model.label}
+                    {mode === 'search' ? 'Model unused' : model.label}
                     <span className="text-zinc-500 text-[11px] inline-flex items-center gap-0.5">
                       {memoryMode === 'agentic' ? 'Agentic' : 'Auto'} <ChevronDown size={12} />
                     </span>
@@ -898,7 +1010,7 @@ export default function PlaygroundPage() {
                 >
                   {tagOptions.map((t) => (
                     <option key={t} value={t} className="bg-[#161618]">
-                      {t}
+                      {spaceLabel(t, { homeTag: mine, teams }).label}
                     </option>
                   ))}
                 </select>

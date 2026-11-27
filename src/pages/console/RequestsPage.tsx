@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { Activity } from 'lucide-react';
 import { PageHeader, DocLink, Panel, EmptyState } from '../../components/console/ui';
 import { engine } from '../../services/engineClient';
+import { requestTypeLines } from './memoryStates';
 
 const RANGE_MS = { '24h': 86400000, '7d': 7 * 86400000 };
 
@@ -12,12 +13,29 @@ function inRange(at: string, range: '24h' | '7d') {
 
 export default function RequestsPage() {
   const [data, setData] = useState<any>({ requests: [], byType: {}, ok: 0, avgMs: 0 });
+  const [phase, setPhase] = useState<'loading' | 'ready' | 'error'>('loading');
+  const [error, setError] = useState('');
   const [type, setType] = useState('all');
   const [status, setStatus] = useState('all');
   const [range, setRange] = useState<'24h' | '7d'>('7d');
 
+  const load = () => {
+    setPhase('loading');
+    setError('');
+    engine
+      .requests()
+      .then((out) => {
+        setData(out || { requests: [], byType: {} });
+        setPhase('ready');
+      })
+      .catch((err: unknown) => {
+        setError(err instanceof Error ? err.message : 'Could not load requests');
+        setPhase('error');
+      });
+  };
+
   useEffect(() => {
-    engine.requests().then(setData).catch(() => {});
+    load();
   }, []);
 
   const windowed = (data.requests || []).filter((r: { at: string }) => inRange(r.at, range));
@@ -85,7 +103,7 @@ export default function RequestsPage() {
         <Panel className="p-4 min-h-[120px]">
           <p className="text-[11px] tracking-[0.12em] text-zinc-500 mb-6">BY TYPE</p>
           <p className="text-[22px] text-zinc-200">{total} <span className="text-[13px] text-zinc-500">requests</span></p>
-          <p className="text-[12px] text-zinc-500 mt-2">{JSON.stringify(byType)}</p>
+          <p className="text-[12px] text-zinc-500 mt-2">{phase === 'loading' ? 'Loading requests…' : phase === 'error' ? 'Could not load requests' : requestTypeLines(byType)}</p>
         </Panel>
         <Panel className="p-4 min-h-[120px]">
           <p className="text-[11px] tracking-[0.12em] text-zinc-500 mb-6">2XX RESPONSES</p>
@@ -97,8 +115,16 @@ export default function RequestsPage() {
         </Panel>
       </div>
       <Panel>
-        {rows.length === 0 ? (
-          <EmptyState icon={<Activity size={18} />} title="No requests yet" body="API requests will appear here once you start making calls." />
+        {phase === 'loading' ? (
+          <p className="px-4 py-8 text-[13px] text-zinc-400">Loading requests…</p>
+        ) : phase === 'error' ? (
+          <div className="px-4 py-8 text-center">
+            <p className="text-[14px] text-zinc-200">Couldn't load requests</p>
+            <p className="text-[12.5px] text-zinc-500 mt-1">{error}</p>
+            <button type="button" onClick={load} className="mt-3 text-[13px] text-blue-300">Retry</button>
+          </div>
+        ) : rows.length === 0 ? (
+          <EmptyState icon={<Activity size={18} />} title="No requests yet" body="Requests from this account in the selected period show up here. An empty list means none were recorded, not that the page failed to load." />
         ) : (
           <div>
             {rows.map((r: any) => (

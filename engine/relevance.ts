@@ -46,17 +46,38 @@ export function isProfileQuestion(query: string) {
   return /\b(about me|who am i|my profile|what do you know)\b/i.test(query);
 }
 
+/**
+ * False for small talk and general-knowledge questions that do not refer to the
+ * user or a specific thing already worth looking up. A question is not skipped
+ * only because it starts with "what".
+ */
+export function needsMemory(query: string) {
+  const q = String(query || '').trim();
+  if (!q) return false;
+  if (isProfileQuestion(q)) return true;
+  if (/^(thanks|thank you|hello|hi|hey|ok|okay|cool|good morning|good night)\b/i.test(q) && q.length < 90) return false;
+  if (/\b(my|mine|remember|don't forget|do not forget|favou?rite|favorite)\b/i.test(q)) return true;
+  if (/\b(i|me)\b/i.test(q) && /\b(like|prefer|love|live|work|know|remember|plan|planning|city|coffee|name|drink)\b/i.test(q)) return true;
+  if (/\bcapital of\b/i.test(q)) return false;
+  if (/\b(how do i|how to|how can i)\b/i.test(q) && /\b(bake|cook|sourdough|bread)\b/i.test(q)) return false;
+  return true;
+}
+
 function clamp01(value: number) {
   if (!Number.isFinite(value)) return 0;
   return Math.min(1, Math.max(0, value));
 }
 
-/**
- * One 0–1 relevance score for chat injection and Search.
- * Word overlap is a fraction of the query's content words (whole words only).
- * The embedding is included on that same scale. Callers drop anything below strictness.
- */
-export function relevanceScore(query: string, item: MemoryHit) {
+export const LEXICAL_GATE = 0.34;
+export const VECTOR_GATE = 0.82;
+export const WEAK_BEST = 0.55;
+export const SCORE_GAP = 0.12;
+export const SCORE_RATIO = 0.85;
+
+export type ScoreParts = { lexical: number; vector: number; combined: number; gated: boolean };
+
+/** Word overlap plus embedding. A mid-range cosine with no shared content words does not pass. */
+export function relevanceParts(query: string, item: MemoryHit): ScoreParts {
   const tokens = contentTokens(query);
   const hay = new Set(
     contentTokens(
@@ -64,10 +85,20 @@ export function relevanceScore(query: string, item: MemoryHit) {
     )
   );
   const vector = clamp01(Number(item.vectorScore) || 0);
-  if (!tokens.length) return vector;
-  const matched = tokens.filter((token) => hay.has(token)).length;
-  const lexical = matched / tokens.length;
-  return clamp01(Math.max(lexical, vector));
+  const lexical = tokens.length ? tokens.filter((token) => hay.has(token)).length / tokens.length : 0;
+  const combined = clamp01(0.55 * lexical + 0.45 * (lexical >= LEXICAL_GATE ? Math.max(vector, lexical) : vector));
+  const gated = lexical >= LEXICAL_GATE || vector >= VECTOR_GATE;
+  return { lexical, vector, combined: Number(combined.toFixed(4)), gated };
+}
+
+/**
+ * Final 0–1 score. Callers also require the lexical-or-vector gate.
+ * Overlap is not thrown away when the embedding is weak; a cosine with no overlap stays low.
+ */
+export function relevanceScore(query: string, item: MemoryHit) {
+  const parts = relevanceParts(query, item);
+  if (!parts.gated) return 0;
+  return parts.combined;
 }
 
 export function memoryTextKey(value: string) {
@@ -86,7 +117,7 @@ export function memoryFactKey(item: { subject?: string; predicate?: string; obje
   return `${subject}|${predicate}|${object}`;
 }
 
-/** Keep memories at or above strictness, drop near-duplicates, then cap the list. */
+/** Keep gated memories at or above strictness, drop near-duplicates, then stop at a score gap. topK is a maximum. */
 export function selectMemories<T extends MemoryHit>(
   query: string,
   items: T[],
@@ -98,28 +129,45 @@ export function selectMemories<T extends MemoryHit>(
   if (!topK) return [] as T[];
 
   const scored = items.map((item, index) => {
-    let relevance = relevanceScore(query, item);
-    if (aboutUser && item.source === 'profile' && strictness > 0) relevance = Math.max(relevance, strictness);
-    return { item, relevance, index };
+    const parts = relevanceParts(query, item);
+    let relevance = parts.gated ? parts.combined : 0;
+    let keep = parts.gated && (strictness <= 0 || relevance >= strictness);
+    if (aboutUser && item.source === 'profile') {
+      relevance = Math.max(relevance, Math.max(strictness, WEAK_BEST));
+      keep = true;
+    }
+    return { item, relevance, lexical: parts.lexical, index, keep };
   });
-  const kept = scored.filter(({ relevance }) => strictness <= 0 || relevance >= strictness);
+  const kept = scored.filter((row) => row.keep);
   kept.sort((a, b) => b.relevance - a.relevance || a.index - b.index);
 
   const seenId = new Set<string>();
   const seenText = new Set<string>();
   const seenSpo = new Set<string>();
-  const out: T[] = [];
-  for (const { item, relevance } of kept) {
-    const id = String(item.id || '');
+  const deduped: typeof kept = [];
+  for (const row of kept) {
+    const id = String(row.item.id || '');
     if (id && seenId.has(id)) continue;
-    const text = memoryTextKey(item.text);
+    const text = memoryTextKey(row.item.text);
     if (text && seenText.has(text)) continue;
-    const spo = memoryFactKey(item);
+    const spo = memoryFactKey(row.item);
     if (spo && seenSpo.has(spo)) continue;
     if (id) seenId.add(id);
     if (text) seenText.add(text);
     if (spo) seenSpo.add(spo);
-    out.push({ ...item, score: Number(relevance.toFixed(4)) });
+    deduped.push(row);
+  }
+  if (!deduped.length) return [] as T[];
+  const best = deduped[0].relevance;
+  const lexicalKeeper = deduped[0].lexical >= LEXICAL_GATE && best >= strictness;
+  if (best < WEAK_BEST && !lexicalKeeper && !(aboutUser && deduped[0].item.source === 'profile')) return [] as T[];
+
+  const out: T[] = [];
+  for (const row of deduped) {
+    const close = best - row.relevance <= SCORE_GAP + 1e-9 && row.relevance + 1e-9 >= best * SCORE_RATIO;
+    const profileKeep = aboutUser && row.item.source === 'profile';
+    if (!close && !profileKeep) break;
+    out.push({ ...row.item, score: Number(row.relevance.toFixed(4)), vectorScore: row.item.vectorScore });
     if (out.length >= topK) break;
   }
   return out;

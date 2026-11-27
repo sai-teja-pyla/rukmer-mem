@@ -64,8 +64,8 @@ export async function requestJson(url: string, init?: RequestInit, opts: Request
       }
     }
 
-    const warming = res.status === 503 && data.error === 'warming_up';
-    const retryable = !res.ok && (method === 'GET' ? isTransientStatus(res.status) : warming);
+    const loading = res.status === 503 && (data.error === 'warming_up' || data.ready === false || /still loading|warming/i.test(String(data.error || '')));
+    const retryable = !res.ok && (method === 'GET' ? isTransientStatus(res.status) : loading);
     if (retryable && transient < maxRetries) {
       await wait(retryDelayMs(transient, res.headers.get('Retry-After')));
       transient += 1;
@@ -75,8 +75,8 @@ export async function requestJson(url: string, init?: RequestInit, opts: Request
     if (!res.ok) {
       const message = !parsed
         ? `Memory engine ${res.status}`
-        : data.error === 'warming_up'
-          ? 'Memory is still warming up. Try again.'
+        : loading
+          ? 'Memory is still loading. Try again.'
           : data.error || `Memory engine ${res.status}`;
       throw new Error(typeof message === 'string' ? message : `Memory engine ${res.status}`);
     }

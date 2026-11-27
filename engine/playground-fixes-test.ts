@@ -17,12 +17,12 @@ delete process.env.ANTHROPIC_API_KEY;
 delete process.env.XAI_API_KEY;
 delete process.env.GROK_API_KEY;
 
-const { selectMemories } = await import('./relevance.js');
+const { needsMemory, selectMemories } = await import('./relevance.js');
 const { completeChat, keyFor, missingKeyMessage, providerStatus } = await import('./router.js');
 const { MEMORY_TOOLS } = await import('./tools.js');
 const { MCP_INSTRUCTIONS, CHATGPT_OPENAPI } = await import('./mcp.js');
 const { homeTag } = await import('./tenancy.js');
-const { commitImportantMemory, graphPayload, ingestDocument, ingestPayload, keptRequests, listDocuments, listTags, searchMemory } = await import('./pipeline.js');
+const { commitImportantMemory, graphPayload, ingestDocument, ingestPayload, keptRequests, listDocuments, listTags, rememberTranscript, searchMemory } = await import('./pipeline.js');
 const { buildMemoryInjection } = await import('./inject.js');
 const { upsertFacts } = await import('./facts.js');
 const { pickReadyModel } = await import('../src/services/providerKeys.js');
@@ -94,6 +94,7 @@ check(
     (collapsedTitle[titleStem.length] === undefined || collapsedTitle[titleStem.length] === ' ')
 );
 check('short thread title stays whole', threadTitle('What coffee do I like?') === 'What coffee do I like?');
+check('script paste is not the thread title', !/script|alert/i.test(threadTitle('<script>alert(1)</script> What is the capital of Mars?')));
 check(
   'later sends keep the thread title',
   titleAfterSend({ title: readableTitle, messages: [{ role: 'user' }] }, 'A totally different second question') === readableTitle
@@ -304,7 +305,27 @@ async function searchV4(q: string) {
 const bakeHttp = await searchV4(bake);
 const cityHttp = await searchV4(cityQuery);
 const lisbonHttp = await searchV4('Lisbon');
+const logged = await fetch(`http://127.0.0.1:${port}/v3/requests`, { headers: { 'x-rukmer-user': 'cityuser' } });
+const loggedBody = await logged.json();
+const liveFetch = globalThis.fetch;
+globalThis.fetch = (async (url: RequestInfo | URL, init?: RequestInit) => {
+  if (String(url).includes('generativelanguage.googleapis.com')) {
+    return new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text: 'Hello.' }] } }] }), { status: 200, headers: { 'content-type': 'application/json' } });
+  }
+  return liveFetch(url, init);
+}) as typeof fetch;
+const chatLog = await liveFetch(`http://127.0.0.1:${port}/v1/chat/completions`, {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json', 'x-rukmer-user': 'cityuser', 'x-rukmer-memory': 'off' },
+  body: JSON.stringify({ model: 'gemini-3.8-flash', messages: [{ role: 'user', content: 'hello' }], containerTag: cityTag }),
+});
+await chatLog.text();
+globalThis.fetch = liveFetch;
+const loggedAfter = await fetch(`http://127.0.0.1:${port}/v3/requests`, { headers: { 'x-rukmer-user': 'cityuser' } });
+const loggedAfterBody = await loggedAfter.json();
 server.close();
+check('logged search appears for the signed-in user', logged.status === 200 && (loggedBody.requests || []).some((row: { type?: string; path?: string }) => row.type === 'search' && row.path === '/v4/search'));
+check('logged chat appears for the signed-in user', (loggedAfterBody.requests || []).some((row: { type?: string; path?: string }) => row.type === 'chat' && String(row.path || '').includes('chat')));
 check('v4 search accepts the playground settings', bakeHttp.status === 200 && cityHttp.status === 200 && lisbonHttp.status === 200);
 check('chat and v4 search match for sourdough', sameIds(bakeInjected.retrieved.matches, bakeHttp.matches));
 check('chat and v4 search match for city', sameIds(cityRows, cityHttp.matches));
@@ -384,6 +405,84 @@ coffeeReq.headers = { ...coffeeReq.headers, 'x-rukmer-memory': 'off' };
 let offBody: any = null;
 await completeChat(coffeeReq as any, { status() { return this; }, json(payload: any) { offBody = payload; return this; } } as any);
 check('memory off explains empty citations', offBody?.rukmer?.citations?.length === 0 && offBody?.rukmer?.debug?.reason === 'memory off');
+
+check('mongolia does not need memory', needsMemory("what's the capital of Mongolia?") === false);
+check('australia prefix does not need memory', needsMemory("Nori test: what's the capital of Australia?") === false);
+check('thanks does not need memory', needsMemory('thanks') === false && needsMemory('hello') === false);
+check('personal questions still need memory', needsMemory('What city do I like?') && needsMemory('What coffee do I prefer?') && needsMemory('What do you know about me?') && needsMemory('Lisbon') && needsMemory('favourite city'));
+const padded = selectMemories(
+  "what's the capital of Mongolia?",
+  [
+    { id: 'lisbon', text: 'User likes the city of Lisbon', vectorScore: 0.74 },
+    { id: 'coffee', text: 'Nori prefers black coffee', vectorScore: 0.66 },
+    { id: 'dump', text: 'Prior grocery list and a train ticket from last spring', vectorScore: 0.71, source: 'gemini-router' },
+  ],
+  { strictness: 0.4, topK: 10 }
+);
+check('mid cosine without overlap stays out', padded.length === 0);
+const noiseTag = homeTag('noiseuser');
+await ingestDocument({ title: 'Lisbon', text: 'User likes the city of Lisbon', containerTag: noiseTag, source: 'memory', actorId: 'noiseuser', extract: false });
+await ingestDocument({ title: 'Coffee', text: 'Nori prefers black coffee', containerTag: noiseTag, source: 'memory', actorId: 'noiseuser', extract: false });
+await ingestDocument({
+  title: 'Prior chat',
+  text: 'User: what is the capital?\n\nAgreed: The capital of Mongolia is Ulaanbaatar.',
+  containerTag: noiseTag,
+  source: 'gemini-router',
+  actorId: 'noiseuser',
+  extract: false,
+});
+const noiseQuery = "what's the capital of Mongolia?";
+const noiseSearch = await searchMemory(noiseQuery, { containerTag: noiseTag, actorId: 'noiseuser', topK: 10, strictness: 0.4 });
+const noiseInjected = await buildMemoryInjection(noiseQuery, noiseTag, { topK: 10, strictness: 0.4, actorId: 'noiseuser' });
+const noiseBlob = `${JSON.stringify(noiseSearch.matches)} ${noiseInjected.injection}`;
+check('mongolia search stays at zero', noiseSearch.matches.length === 0 && noiseSearch.skipReason === 'no-memory-needed');
+check('mongolia injection skips the store', !/lisbon|coffee|ulaanbaatar/i.test(noiseBlob) && noiseInjected.retrieved.matches.length === 0);
+const australia = await searchMemory("Nori test: what's the capital of Australia?", { containerTag: noiseTag, actorId: 'noiseuser', topK: 10, strictness: 0.4 });
+check('australia search stays at zero', australia.matches.length === 0);
+
+const beforeDump = listDocuments(noiseTag, 'noiseuser').map((doc) => doc.id);
+globalThis.fetch = (async (url: RequestInfo | URL, init?: RequestInit) => {
+  if (String(url).includes('generativelanguage.googleapis.com')) {
+    return new Response(
+      JSON.stringify({ candidates: [{ content: { parts: [{ text: 'The capital of Mongolia is Ulaanbaatar. It is a long factual reply.' }] } }] }),
+      { status: 200, headers: { 'content-type': 'application/json' } }
+    );
+  }
+  return originalFetch(url, init);
+}) as typeof fetch;
+await completeChat(
+  {
+    body: {
+      model: 'gemini-3.8-flash',
+      messages: [{ role: 'user', content: noiseQuery }],
+      containerTag: noiseTag,
+      memoriesRetrieved: 10,
+      matchStrictness: 0.4,
+    },
+    headers: { 'x-rukmer-memory': 'on', 'x-container-tag': noiseTag },
+    memoryUser: { uid: 'noiseuser' },
+    params: {},
+  } as any,
+  { status() { return this; }, json() { return this; } } as any
+);
+const afterDump = listDocuments(noiseTag, 'noiseuser');
+check(
+  'assistant answer is not stored',
+  afterDump.length === beforeDump.length && !afterDump.some((doc) => /Ulaanbaatar/i.test(`${doc.title} ${doc.preview}`) && !beforeDump.includes(doc.id))
+);
+check('chat does not create a router memory', !afterDump.some((doc) => doc.source === 'gemini-router' && !beforeDump.includes(doc.id)));
+
+const milkTag = homeTag('milkuser');
+const milkMessages = [
+  { role: 'user', content: 'Remember that I prefer oat milk' },
+  { role: 'assistant', content: 'You prefer oat milk, and that paraphrase should not become its own memory.' },
+];
+const firstMilk = await rememberTranscript({ containerTag: milkTag, source: 'conversation', actorId: 'milkuser', messages: milkMessages });
+const secondMilk = await rememberTranscript({ containerTag: milkTag, source: 'conversation', actorId: 'milkuser', messages: milkMessages });
+const milkDocs = listDocuments(milkTag, 'milkuser');
+check('oat milk is stored once', firstMilk.skipped !== true && milkDocs.length === 1 && secondMilk.skipped === true);
+check('assistant paraphrase is not its own memory', !milkDocs.some((doc) => /paraphrase|should not become/i.test(`${doc.title} ${doc.preview} ${doc.originalText || ''}`)));
+
 globalThis.fetch = originalFetch;
 delete process.env.GEMINI_API_KEY;
 

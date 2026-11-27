@@ -5,7 +5,8 @@ import { engine } from '../../services/engineClient';
 import { countMemories } from '../../services/memoryCount';
 import { homeTag as makeHomeTag } from '../../services/tenancy';
 import { useMemoryResource } from '../../hooks/useMemoryResource';
-import { GraphCountLabel, GraphStatus, graphDataText, graphView, nodeLabel } from './memoryStates';
+import { graphAutoSelect, GraphCountLabel, GraphStatus, graphDataText, graphView, nodeLabel } from './memoryStates';
+import { spaceLabel as labelSpace, type SpaceRef } from '../../services/spaceLabel';
 import { ScopeFilter, type MemoryScope } from '../../components/console/ScopeFilter';
 import type { UserProfile } from '../../types';
 
@@ -289,6 +290,7 @@ export default function MemoryGraphPage() {
   const graph = resource.data?.graph || EMPTY_GRAPH;
   const tagRows = resource.data?.tags || [];
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [teams, setTeams] = useState<SpaceRef[]>([]);
   const [space, setSpace] = useState('all');
   const [menuOpen, setMenuOpen] = useState(false);
   const [view, setView] = useState({ x: 0, y: 0, k: 1 });
@@ -337,7 +339,11 @@ export default function MemoryGraphPage() {
   }, [memories, documents, hub?.id]);
 
   useEffect(() => {
-    if (dismissed.current || selectedId) return;
+    engine.teams().then((out) => setTeams(out.teams || [])).catch(() => setTeams([]));
+  }, []);
+
+  useEffect(() => {
+    if (!graphAutoSelect || dismissed.current || selectedId) return;
     if (orbit[0]) setSelectedId(orbit[0].id);
   }, [orbit, selectedId]);
 
@@ -351,7 +357,7 @@ export default function MemoryGraphPage() {
     [graph.edges, placed]
   );
   const memoryCount = countMemories(tagRows, space);
-  const spaceLabel = space === 'all' ? 'All Spaces' : space;
+  const spaceName = labelSpace(space, { homeTag, teams }).label;
   const hasPlot = orbit.length > 0 || !!hub;
   const loadPhase = graphView(resource.phase, memoryCount, hasPlot);
 
@@ -515,7 +521,7 @@ export default function MemoryGraphPage() {
             <Eye size={14} />
           </span>
           <span className="flex-1 min-w-0">
-            <span className="block text-[13.5px] font-medium truncate">{spaceLabel}</span>
+            <span className="block text-[13.5px] font-medium truncate">{spaceName}</span>
             <GraphCountLabel phase={loadPhase} count={memoryCount} />
           </span>
           <ChevronDown size={16} className={`graph-muted shrink-0 transition-transform ${menuOpen ? 'rotate-180' : ''}`} />
@@ -526,8 +532,8 @@ export default function MemoryGraphPage() {
               All Spaces
             </button>
             {spaces.map((tag) => (
-              <button key={tag} type="button" onClick={() => chooseSpace(tag)} className="graph-hover w-full text-left px-3 py-1.5 text-[13px] truncate">
-                {tag}
+              <button key={tag} type="button" title={tag} onClick={() => chooseSpace(tag)} className="graph-hover w-full text-left px-3 py-1.5 text-[13px] truncate">
+                {labelSpace(tag, { homeTag, teams }).label}
               </button>
             ))}
           </div>
@@ -583,7 +589,9 @@ export default function MemoryGraphPage() {
               <div className="mt-4 space-y-3">
                 <div>
                   <p className="text-[10px] tracking-[0.14em] graph-faint">SPACE</p>
-                  <p className="text-[13px] break-all mt-0.5">{selected.containerTag || hub?.containerTag || '—'}</p>
+                  <p className="text-[13px] break-all mt-0.5" title={selected.containerTag || hub?.containerTag || ''}>
+                    {labelSpace(selected.containerTag || hub?.containerTag || '', { homeTag, teams }).label}
+                  </p>
                 </div>
                 <div>
                   <p className="text-[10px] tracking-[0.14em] graph-faint">VERSION</p>
@@ -601,7 +609,10 @@ export default function MemoryGraphPage() {
                     {formatDate(selected.createdAt)}
                   </span>
                 ) : null}
-                <span className="truncate"># {selected.id}</span>
+                <span className="min-w-0">
+                  <span className="block truncate">{selected.label && selected.label !== 'Note' ? selected.label : String(selected.text || selected.originalText || 'Memory').replace(/\s+/g, ' ').trim().slice(0, 80)}</span>
+                  <span className="block truncate text-[10px] graph-faint" title={selected.id}>{selected.id}</span>
+                </span>
               </div>
             </div>
           </>
