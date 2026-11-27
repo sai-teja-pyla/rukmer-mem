@@ -1,4 +1,6 @@
 import React, { Suspense, lazy, useState, useEffect, useLayoutEffect } from 'react';
+import { QueryClientProvider } from '@tanstack/react-query';
+import { queryClient } from './queryClient';
 import { BrowserRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom'; 
 import { auth } from './firebase';
 import { onAuthStateChanged, User as FirebaseUser } from 'firebase/auth';
@@ -56,9 +58,11 @@ function ConsoleGate({ user, authLoading }: { user: UserProfile | null; authLoad
 
 export default function App() {
   return (
-    <UserSettingsProvider>
-      <AppRoutes />
-    </UserSettingsProvider>
+    <QueryClientProvider client={queryClient}>
+      <UserSettingsProvider>
+        <AppRoutes />
+      </UserSettingsProvider>
+    </QueryClientProvider>
   );
 }
 

@@ -1,0 +1,16 @@
+{
+  "name": "rukmer",
+  "version": "0.1.0",
+  "private": false,
+  "type": "module",
+  "description": "Set up Rukmer Memory in a project and call the API.",
+  "bin": {
+    "rukmer": "./dist/cli.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json"
+  },
+  "devDependencies": {
+    "typescript": "^5.8.3"
+  }
+}

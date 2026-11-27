@@ -178,7 +178,7 @@ export default function ConsoleLayout({ user, restoring = false }: ConsoleLayout
     return () => {
       stop = true;
     };
-  }, [user.uid, location.pathname]);
+  }, [user.uid]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {

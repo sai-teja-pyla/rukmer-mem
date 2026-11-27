@@ -177,17 +177,23 @@ export async function bootMemoryEngine() {
     startRetentionLoop();
     pruneJunkMemory();
     applyDecay();
-    const remaining = getState().triples.filter(isUsefulFact).length;
-    if (remaining < 2) {
-      for (const doc of getState().documents.filter((d) => !d.forgotten && d.source !== 'conversation').slice(0, 8)) {
-        const graph = await extractGraph(doc.text.slice(0, 4000));
-        upsertFacts(doc.containerTag, graph.triples || [], doc.text.slice(0, 240));
-      }
-    }
     void syncStoredKeys().catch((err) => console.warn('api key sync skipped', (err as Error).message));
     void warmFactEmbeddings().catch(() => undefined);
     const snapshot = stats();
     engineReady = true;
+    const remaining = getState().triples.filter(isUsefulFact).length;
+    if (remaining < 2) {
+      void (async () => {
+        try {
+          for (const doc of getState().documents.filter((d) => !d.forgotten && d.source !== 'conversation').slice(0, 8)) {
+            const graph = await extractGraph(doc.text.slice(0, 4000));
+            upsertFacts(doc.containerTag, graph.triples || [], doc.text.slice(0, 240));
+          }
+        } catch (err) {
+          console.warn('graph backfill skipped', (err as Error).message);
+        }
+      })();
+    }
     return snapshot;
   } catch (err) {
     engineReady = false;
@@ -825,6 +831,23 @@ export function mountMemoryEngine(app: Express) {
     try {
       if (req.body?.confirm !== 'reset') return res.status(400).json({ error: 'Confirm with {"confirm":"reset"}' });
       res.json(resetMine(uidOf(req)));
+    } catch (e: any) {
+      fail(res, e);
+    }
+  });
+
+  app.get('/v3/requests/setup-status', async (req, res) => {
+    try {
+      privateNoStore(res);
+      const uid = uidOf(req);
+      const keys = await keysFor(uid);
+      const created = keys.map((key) => key.createdAt).filter(Boolean).sort();
+      const first = getState()
+        .requests.filter((row) => row.ownerUid === uid)
+        .map((row) => row.at)
+        .filter(Boolean)
+        .sort()[0] || null;
+      res.json({ hasKey: keys.length > 0, keyCreatedAt: created[0] || null, firstRequestAt: first });
     } catch (e: any) {
       fail(res, e);
     }

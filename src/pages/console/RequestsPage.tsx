@@ -102,12 +102,12 @@ export default function RequestsPage() {
       <div className="grid md:grid-cols-3 gap-3 mb-3">
         <Panel className="p-4 min-h-[120px]">
           <p className="text-[11px] tracking-[0.12em] text-zinc-500 mb-6">BY TYPE</p>
-          <p className="text-[22px] text-zinc-200">{total} <span className="text-[13px] text-zinc-500">requests</span></p>
+          <p className="text-[22px] text-zinc-200">{phase === 'loading' ? '—' : total} <span className="text-[13px] text-zinc-500">requests</span></p>
           <p className="text-[12px] text-zinc-500 mt-2">{phase === 'loading' ? 'Loading requests…' : phase === 'error' ? 'Could not load requests' : requestTypeLines(byType)}</p>
         </Panel>
         <Panel className="p-4 min-h-[120px]">
           <p className="text-[11px] tracking-[0.12em] text-zinc-500 mb-6">2XX RESPONSES</p>
-          <p className="text-[22px] text-zinc-200">{ok}</p>
+          <p className="text-[22px] text-zinc-200">{phase === 'loading' ? '—' : ok}</p>
         </Panel>
         <Panel className="p-4 min-h-[120px]">
           <p className="text-[11px] tracking-[0.12em] text-zinc-500 mb-6">AVG SEARCH LATENCY</p>

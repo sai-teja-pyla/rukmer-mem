@@ -19,14 +19,19 @@ function waitForAuth() {
   return firstAuthUser;
 }
 
+let tokenCache: { uid: string; token: string; expiresAt: number } | null = null;
+
 async function authHeaders(forceToken = false) {
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
   const user = (await waitForAuth()) || auth.currentUser;
   if (user) {
     try {
-      headers.Authorization = `Bearer ${await user.getIdToken(forceToken)}`;
+      const fresh = forceToken || !tokenCache || tokenCache.uid !== user.uid || Date.now() >= tokenCache.expiresAt - 60000;
+      const token = fresh ? await user.getIdToken(forceToken) : tokenCache!.token;
+      if (fresh) tokenCache = { uid: user.uid, token, expiresAt: Date.now() + 3540000 };
+      headers.Authorization = `Bearer ${token}`;
     } catch {
-      /* token refresh can fail while signed out */
+      tokenCache = null;
     }
     headers['x-rukmer-user'] = user.uid;
   }
@@ -77,6 +82,7 @@ export const engine = {
   insights: () => req('/v3/insights'),
   jobs: () => req('/v3/jobs'),
   requests: () => req('/v3/requests'),
+  setupStatus: () => req('/v3/requests/setup-status'),
   keys: () => req('/v3/keys'),
   createKey: (name: string) => req('/v3/keys', { method: 'POST', body: JSON.stringify({ name }) }),
   revokeKey: (id: string) => req(`/v3/keys/${encodeURIComponent(id)}`, { method: 'DELETE' }),

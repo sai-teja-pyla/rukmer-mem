@@ -32,8 +32,6 @@ export default function UserInsightsPage() {
 
   useEffect(() => {
     load();
-    const t = setInterval(load, 8000);
-    return () => clearInterval(t);
   }, []);
 
   const memories = data?.memories ?? 0;

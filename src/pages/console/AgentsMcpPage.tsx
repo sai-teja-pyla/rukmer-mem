@@ -151,7 +151,7 @@ export default function AgentsMcpPage() {
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 px-4 py-3.5 border-b border-white/[0.06]">
           <div>
             <p className="text-[13.5px] text-zinc-100">MCP URL</p>
-            <p className="text-[12.5px] text-zinc-500">Paste this in Cursor, Claude Code, or Codex. There is no npm package named rukmer.</p>
+            <p className="text-[12.5px] text-zinc-500">Paste this in Cursor, Claude Code, or Codex. Or run <span className="text-zinc-300">npx rukmer setup</span> in the project.</p>
           </div>
           <button
             type="button"

@@ -6,14 +6,14 @@ import { engine } from '../../services/engineClient';
 export default function ApiKeysPage() {
   const [open, setOpen] = useState(false);
   const [name, setName] = useState('');
-  const [created, setCreated] = useState<any[]>([]);
+  const [created, setCreated] = useState<any[] | null>(null);
   const [secret, setSecret] = useState('');
   const [check, setCheck] = useState('');
   const [checkMsg, setCheckMsg] = useState('');
   const [error, setError] = useState('');
 
   useEffect(() => {
-    engine.keys().then((d) => setCreated(d.keys || [])).catch(() => {});
+    engine.keys().then((d) => setCreated(d.keys || [])).catch(() => setCreated([]));
   }, []);
 
   return (
@@ -56,7 +56,9 @@ export default function ApiKeysPage() {
       <Panel>
         <TableHead cols={['API KEY', 'SCOPE', 'CREATED', 'LAST USED', 'EXPIRES']} />
         <div className="relative min-h-[320px]">
-          {created.length === 0 ? (
+          {created === null ? (
+            <p className="px-4 py-8 text-[13px] text-zinc-400">Loading keys…</p>
+          ) : created.length === 0 ? (
             <EmptyState
               icon={<KeyRound size={18} />}
               title="No API keys yet"
@@ -74,7 +76,7 @@ export default function ApiKeysPage() {
             />
           ) : (
             <div className="overflow-x-auto">
-              {created.map((k) => (
+              {(created || []).map((k) => (
                 <div key={k.id || k.prefix} className="grid grid-cols-5 min-w-[560px] px-4 py-3 text-[13px] text-zinc-300 border-t border-white/[0.06] items-center">
                   <span className="font-mono">{k.name ? `${k.name} · ${k.prefix}` : k.prefix}</span>
                   <span>Full</span>
@@ -134,7 +136,7 @@ export default function ApiKeysPage() {
                 onClick={async () => {
                   try {
                     const rec = await engine.createKey(name || 'Untitled');
-                    setCreated((p) => [rec, ...p]);
+                    setCreated((p) => [rec, ...(p || [])]);
                     setSecret(rec.secret || '');
                     setName('');
                     setError('');

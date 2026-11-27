@@ -285,7 +285,7 @@ export default function MemoryGraphPage() {
         tags: (tags.tags || []) as { tag: string; memories: number }[],
       };
     },
-    { enabled: !!homeTag, refreshMs: 8000, reloadKey: memoryScope }
+    { enabled: !!homeTag, reloadKey: memoryScope }
   );
   const graph = resource.data?.graph || EMPTY_GRAPH;
   const tagRows = resource.data?.tags || [];
@@ -297,12 +297,6 @@ export default function MemoryGraphPage() {
   const dismissed = useRef(false);
   const drag = useRef<{ px: number; py: number; x: number; y: number } | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    const onFocus = () => resource.reload();
-    window.addEventListener('focus', onFocus);
-    return () => window.removeEventListener('focus', onFocus);
-  }, [resource.reload]);
 
   useEffect(() => {
     if (!menuOpen) return;
