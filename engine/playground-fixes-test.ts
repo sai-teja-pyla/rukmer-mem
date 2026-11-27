@@ -19,7 +19,7 @@ delete process.env.GROK_API_KEY;
 
 const { needsMemory, selectMemories } = await import('./relevance.js');
 const { looksLikeDurableFact } = await import('./quality.js');
-const { currentModel } = await import('./models.js');
+const { currentModel, MODEL_CATALOG } = await import('./models.js');
 const { runMemoryTool } = await import('./tools.js');
 const { openPlaygroundSession } = await import('../src/pages/console/playgroundSession.js');
 const { completeChat, keyFor, missingKeyMessage, providerStatus } = await import('./router.js');
@@ -64,6 +64,104 @@ check('I like espresso is durable', looksLikeDurableFact('I like espresso') === 
 check('thanks is not a durable fact', looksLikeDurableFact('Thanks that was helpful') === false);
 check('a coffee question is not stored', looksLikeDurableFact('What coffee do I prefer today?') === false);
 check('legacy model ids map forward', currentModel('gpt-4o-mini') === 'gpt-6.2-astra' && currentModel('gemini-3.8-flash') === 'gemini-4-hydrogen' && currentModel('claude-sonnet-4-5') === 'claude-sonnet-5-5' && currentModel('grok-3-mini') === 'grok-4.7');
+
+const officialIds = [
+  'gemini-4-hydrogen',
+  'gemini-4-carbon',
+  'gemini-3.5-flash-lite',
+  'gpt-6.2-astra',
+  'gpt-6.2-sol',
+  'claude-sonnet-5-5',
+  'claude-haiku-5-5',
+  'claude-opus-5-5',
+  'grok-4.7',
+];
+check(
+  'catalog ids are the official set',
+  MODEL_CATALOG.map((model) => model.id).join(',') === officialIds.join(',') &&
+    MODEL_CATALOG.every((model) => model.label && !/agentic/i.test(model.label))
+);
+check('official ids resolve to themselves', officialIds.every((id) => currentModel(id) === id));
+const legacyMap: Record<string, string> = {
+  'gemini-3.8-flash': 'gemini-4-hydrogen',
+  'gemini-2.5-flash': 'gemini-4-hydrogen',
+  'gemini-2.5-pro': 'gemini-4-hydrogen',
+  'gemini-flash-latest': 'gemini-4-hydrogen',
+  'gpt-4o': 'gpt-6.2-astra',
+  'gpt-4o-mini': 'gpt-6.2-astra',
+  'gpt-4.1': 'gpt-6.2-astra',
+  'gpt-5': 'gpt-6.2-astra',
+  'gpt-5.6-sol': 'gpt-6.2-sol',
+  'claude-sonnet-4-5': 'claude-sonnet-5-5',
+  'claude-sonnet-4-5-20250929': 'claude-sonnet-5-5',
+  'claude-3-5-sonnet-latest': 'claude-sonnet-5-5',
+  'claude-3-5-haiku-latest': 'claude-haiku-5-5',
+  'claude-haiku-4-5-20251001': 'claude-haiku-5-5',
+  'claude-opus-4-5': 'claude-opus-5-5',
+  'claude-opus-4-5-20251101': 'claude-opus-5-5',
+  'grok-3': 'grok-4.7',
+  'grok-3-mini': 'grok-4.7',
+  'grok-4-0709': 'grok-4.7',
+};
+check(
+  'expanded legacy ids map to a current official id',
+  Object.entries(legacyMap).every(([from, to]) => currentModel(from) === to && officialIds.includes(to))
+);
+
+const playgroundSource = fs.readFileSync(new URL('../src/pages/console/PlaygroundPage.tsx', import.meta.url), 'utf8');
+const scopeSource = fs.readFileSync(new URL('../src/components/console/ScopeFilter.tsx', import.meta.url), 'utf8');
+const themeSource = fs.readFileSync(new URL('../src/index.css', import.meta.url), 'utf8');
+check(
+  'playground options are official labels only',
+  playgroundSource.includes('MODEL_CATALOG') &&
+    !playgroundSource.includes('Gemini 4 Hydrogen Agentic') &&
+    !playgroundSource.includes("{memoryMode === 'agentic' ? 'Agentic' : 'Auto'} <ChevronDown")
+);
+check('needs api key hint is no longer pale amber', !playgroundSource.includes('text-amber-200/90') && playgroundSource.includes('needs-key'));
+check(
+  'composer pins send on one row',
+  playgroundSource.includes('flex flex-nowrap items-center gap-2 px-2.5 pb-2 min-w-0') &&
+    playgroundSource.includes('ml-auto shrink-0') &&
+    !playgroundSource.includes('flex flex-wrap items-center gap-2 px-2.5 pb-2')
+);
+check(
+  'model menu stays inside the viewport',
+  playgroundSource.includes('max-w-[calc(100vw-2rem)]') &&
+    playgroundSource.includes('Math.min(300, window.innerWidth - 32)') &&
+    playgroundSource.includes('data-composer')
+);
+check(
+  'scope filter fits a 280px drawer',
+  scopeSource.includes('w-full') &&
+    scopeSource.includes('min-w-0') &&
+    scopeSource.includes("all: 'All'") &&
+    scopeSource.includes("private: 'Personal'") &&
+    scopeSource.includes("team: 'Org'") &&
+    scopeSource.includes('aria-label={FULL[scope]}') &&
+    scopeSource.includes('title={FULL[scope]}') &&
+    scopeSource.includes('{SHORT[scope]}') &&
+    !scopeSource.includes('>Search all spaces<') &&
+    !scopeSource.includes('>Organizations<')
+);
+function contrast(hex: string, background: string) {
+  const lum = (value: string) => {
+    const channels = [0, 2, 4].map((index) => {
+      const channel = parseInt(value.slice(index, index + 2), 16) / 255;
+      return channel <= 0.03928 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4;
+    });
+    return 0.2126 * channels[0] + 0.7152 * channels[1] + 0.0722 * channels[2];
+  };
+  const lighter = Math.max(lum(hex), lum(background));
+  const darker = Math.min(lum(hex), lum(background));
+  return (lighter + 0.05) / (darker + 0.05);
+}
+const darkHint = themeSource.match(/\.needs-key \{[^}]*color:\s*(#[0-9a-fA-F]{6})/)?.[1] || '';
+const lightHint = themeSource.match(/\.theme-light \.needs-key \{[^}]*color:\s*(#[0-9a-fA-F]{6})/)?.[1] || '';
+check(
+  'needs api key contrast meets WCAG AA',
+  contrast(darkHint.replace('#', ''), '161618') >= 4.5 && contrast(lightHint.replace('#', ''), 'ffffff') >= 4.5,
+  `dark=${darkHint} light=${lightHint}`
+);
 check('a fresh playground visit starts a new chat', (() => {
   const opened = openPlaygroundSession([{ id: 'old', title: 'Yesterday', updatedAt: '', messages: [{ role: 'user', text: 'I like espresso' }] }]);
   return opened.active.messages.length === 0 && opened.history.length === 1 && opened.history[0].id === 'old';

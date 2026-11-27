@@ -23,7 +23,7 @@ import type { UserProfile } from '../../types';
 import { homeTag as makeHomeTag } from '../../services/tenancy';
 import { spaceLabel, type SpaceRef } from '../../services/spaceLabel';
 import { openPlaygroundSession } from './playgroundSession';
-import { currentModel } from '../../../engine/models';
+import { currentModel, MODEL_CATALOG, type ModelChoice } from '../../../engine/models';
 
 type MemoryMode = 'agentic' | 'auto';
 type Retrieval = 'hybrid' | 'semantic' | 'keyword';
@@ -70,16 +70,7 @@ function newThread(): Thread {
   return { id: `chat_${Date.now()}`, title: 'New chat', updatedAt: new Date().toISOString(), messages: [] };
 }
 
-const MODELS = [
-  { id: 'gemini-4-hydrogen', label: 'Gemini 4 Hydrogen', provider: 'gemini', vendor: 'Gemini' },
-  { id: 'gemini-4-carbon', label: 'Gemini 4 Carbon', provider: 'gemini', vendor: 'Gemini' },
-  { id: 'gemini-3.5-flash-lite', label: 'Gemini 3.5 Flash Lite', provider: 'gemini', vendor: 'Gemini' },
-  { id: 'gpt-6.2-astra', label: 'GPT 6.2 Astra', provider: 'openai', vendor: 'OpenAI' },
-  { id: 'claude-sonnet-5-5', label: 'Claude Sonnet 5.5', provider: 'anthropic', vendor: 'Anthropic' },
-  { id: 'claude-haiku-5-5', label: 'Claude Haiku 5.5', provider: 'anthropic', vendor: 'Anthropic' },
-  { id: 'claude-opus-5-5', label: 'Claude Opus 5.5', provider: 'anthropic', vendor: 'Anthropic' },
-  { id: 'grok-4.7', label: 'Grok 4.7', provider: 'grok', vendor: 'xAI' },
-] as const;
+const MODELS: ModelChoice[] = MODEL_CATALOG;
 type Mode = 'chat' | 'search';
 const SOURCES = ['All sources', 'Documents', 'Conversations', 'Apps'];
 const SUGGESTIONS = [
@@ -220,7 +211,7 @@ export default function PlaygroundPage() {
   const [mode, setMode] = useState<Mode>('chat');
   const [memoryMode, setMemoryMode] = useState<MemoryMode>('agentic');
   const [input, setInput] = useState('');
-  const [model, setModel] = useState<(typeof MODELS)[number]>(() => {
+  const [model, setModel] = useState<ModelChoice>(() => {
     const stored = loadProviderKeys();
     const ready: Record<string, boolean> = {};
     for (const candidate of MODELS) ready[candidate.provider] = !!stored[candidate.provider];
@@ -257,7 +248,7 @@ export default function PlaygroundPage() {
   const messagesRef = useRef<HTMLDivElement>(null);
   const stickRef = useRef(true);
   const modelMenuRef = useRef<HTMLDivElement>(null);
-  const [modelBox, setModelBox] = useState<{ left: number; maxHeight: number; top?: number; bottom?: number } | null>(null);
+  const [modelBox, setModelBox] = useState<{ left: number; width: number; maxHeight: number; top?: number; bottom?: number } | null>(null);
   const [threads, setThreads] = useState<Thread[]>(() => {
     const opened = openPlaygroundSession(loadThreads(user.uid), new URLSearchParams(window.location.search).get('thread') || '');
     return [opened.active as Thread, ...opened.history.filter((item) => item.id !== opened.active.id) as Thread[]];
@@ -321,22 +312,28 @@ export default function PlaygroundPage() {
   };
 
   useEffect(() => {
-    if (!modelOpen) return;
+    if (!modelOpen) {
+      setModelBox(null);
+      return;
+    }
     const place = () => {
       const el = modelBtnRef.current;
       if (!el) return;
       const rect = el.getBoundingClientRect();
+      const composer = el.closest('[data-composer]');
+      const bounds = composer ? composer.getBoundingClientRect() : rect;
       const gap = 6;
-      const width = 224;
-      const left = Math.max(8, Math.min(rect.left, window.innerWidth - width - 8));
-      const spaceAbove = Math.max(0, rect.top - 8);
-      const spaceBelow = Math.max(0, window.innerHeight - rect.bottom - 8);
-      const openUp = spaceAbove >= 180 || spaceAbove > spaceBelow;
-      const maxHeight = Math.max(120, Math.min(320, (openUp ? spaceAbove : spaceBelow) - gap));
+      const width = Math.min(300, window.innerWidth - 32);
+      const left = Math.max(16, Math.min(rect.left, window.innerWidth - width - 16));
+      const spaceAbove = Math.max(0, bounds.top - 8);
+      const spaceBelow = Math.max(0, window.innerHeight - bounds.bottom - 8);
+      const openUp = spaceAbove >= 140 || spaceAbove >= spaceBelow;
+      const room = Math.max(0, (openUp ? spaceAbove : spaceBelow) - gap);
+      const maxHeight = Math.min(320, Math.round(window.innerHeight * 0.45), room);
       setModelBox(
         openUp
-          ? { left, maxHeight, bottom: window.innerHeight - rect.top + gap }
-          : { left, maxHeight, top: rect.bottom + gap }
+          ? { left, width, maxHeight, bottom: window.innerHeight - bounds.top + gap }
+          : { left, width, maxHeight, top: bounds.bottom + gap }
       );
     };
     place();
@@ -674,8 +671,8 @@ export default function PlaygroundPage() {
         </p>
       </div>
 
-      <div className="flex-1 min-h-0 grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_300px] gap-3 overflow-hidden">
-        <section className="min-h-0 h-full rounded-2xl border border-white/[0.07] bg-[#111113] flex flex-col overflow-hidden">
+      <div className="flex-1 min-h-0 grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_300px] max-xl:auto-rows-max gap-3 overflow-y-auto xl:overflow-hidden">
+        <section className="xl:min-h-0 xl:h-full rounded-2xl border border-white/[0.07] bg-[#111113] flex flex-col overflow-hidden">
           <div className="flex flex-col gap-2 px-3 sm:px-4 pt-3 pb-2">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div className="inline-flex rounded-lg border border-white/[0.08] bg-[#0c0c0e] p-0.5">
@@ -894,7 +891,7 @@ export default function PlaygroundPage() {
             )}
           </div>
 
-          <div className="px-4 pb-3 pt-1">
+          <div className="shrink-0 px-4 pb-3 pt-1">
             {mode === 'chat' && providerPhase === 'error' && (
               <div className="mb-2 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-white/10 bg-white/[0.04] px-3 py-2 text-[12.5px] text-zinc-200">
                 <span>Couldn't check model keys. {providerError} Retry.</span>
@@ -906,11 +903,11 @@ export default function PlaygroundPage() {
             {sendHint ? <p className="mb-2 text-[12.5px] text-zinc-300">{sendHint}</p> : null}
             {mode === 'search' && searchNote ? <p className="mb-2 text-[12.5px] text-zinc-300">{searchNote}</p> : null}
             {chatBlocked && (
-              <div className="mb-2 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-amber-300/25 bg-amber-400/10 px-3 py-2 text-[12.5px] text-amber-100">
-                <span>No model key yet. Add one in Settings → Advanced or use Search mode</span>
+              <div className="key-banner mb-2 flex flex-nowrap items-center justify-between gap-2 rounded-lg border border-amber-300/25 bg-amber-400/10 px-3 py-2 text-[12.5px] text-amber-100">
+                <span className="min-w-0">No model key yet. Add one in Settings → Advanced or use Search mode</span>
                 <Link
                   to="/settings/advanced"
-                  className="h-7 px-2.5 rounded-md bg-amber-200 text-[#1c1917] text-[12px] font-medium inline-flex items-center"
+                  className="shrink-0 h-7 px-2.5 rounded-md bg-amber-200 text-[#1c1917] text-[12px] font-medium inline-flex items-center"
                 >
                   Add key
                 </Link>
@@ -922,7 +919,7 @@ export default function PlaygroundPage() {
                 I found a related memory in your {spaceHint.spaceKind === 'personal' ? 'Personal' : spaceHint.spaceLabel} space, which isn&apos;t active here. Switch to that space to use it{spaceHint.requiresConfirmation ? ', or ask me to copy it into this Organization space' : ''}.
               </p>
             ) : null}
-            <div className="shrink-0 sticky bottom-0 rounded-xl border border-white/[0.09] bg-[#0c0c0e] pb-[env(safe-area-inset-bottom)]">
+            <div data-composer className="shrink-0 sticky bottom-0 z-20 rounded-xl border border-white/[0.09] bg-[#0c0c0e] pb-[env(safe-area-inset-bottom)]">
               <div className="px-3 pt-2.5 pb-1 text-[12.5px] text-zinc-500">
                 {!tag
                   ? mode === 'chat'
@@ -949,8 +946,8 @@ export default function PlaygroundPage() {
                 placeholder={mode === 'chat' ? '' : 'Enter a query'}
                 className="w-full bg-transparent px-3 text-base md:text-[13.5px] text-zinc-200 outline-none resize-none min-h-[44px]"
               />
-              <div className="flex flex-wrap items-center gap-2 px-2.5 pb-2">
-                <div>
+              <div className="flex flex-nowrap items-center gap-2 px-2.5 pb-2 min-w-0">
+                <div className="min-w-0 flex-1 overflow-hidden">
                   <button
                     ref={modelBtnRef}
                     type="button"
@@ -959,70 +956,84 @@ export default function PlaygroundPage() {
                       setModelOpen((v) => !v);
                     }}
                     disabled={mode === 'search'}
-                    className="h-7 px-2 rounded-md text-[12.5px] text-zinc-200 hover:bg-white/[0.04] inline-flex items-center gap-1 disabled:opacity-60"
+                    className="max-w-full min-w-0 h-7 px-2 rounded-md text-[12.5px] text-zinc-200 hover:bg-white/[0.04] inline-flex items-center gap-1 disabled:opacity-60"
                     aria-expanded={modelOpen}
                     aria-haspopup="listbox"
                     title={mode === 'search' ? 'Search does not use a model' : model.label}
                   >
-                    {mode === 'search' ? 'Model unused' : model.label}
-                    <span className="text-zinc-500 text-[11px] inline-flex items-center gap-0.5">
-                      {memoryMode === 'agentic' ? 'Agentic' : 'Auto'} <ChevronDown size={12} />
-                    </span>
+                    <span className="truncate">{mode === 'search' ? 'Model unused' : model.label}</span>
+                    <ChevronDown size={12} className="shrink-0 text-zinc-500" />
                   </button>
                   {modelOpen && modelBox && (
                     <div
                       ref={modelMenuRef}
                       role="listbox"
-                      style={{ top: modelBox.top, bottom: modelBox.bottom, left: modelBox.left, maxHeight: modelBox.maxHeight }}
-                      className="fixed z-50 w-56 overflow-y-auto rounded-lg border border-white/[0.08] bg-[#161618] p-1 shadow-xl"
+                      style={{ top: modelBox.top, bottom: modelBox.bottom, left: modelBox.left, width: modelBox.width, maxHeight: modelBox.maxHeight }}
+                      className="fixed z-[60] max-w-[calc(100vw-2rem)] overflow-y-auto rounded-lg border border-white/[0.08] bg-[#161618] p-1 shadow-xl"
                     >
                       {MODELS.map((m) => {
                         const ready = providerReady(m.provider);
+                        const rowClass = `w-full text-left px-2.5 py-1.5 text-[12.5px] rounded-md text-zinc-200 ${
+                          ready ? 'hover:bg-white/[0.06]' : ''
+                        } ${m.id === model.id ? 'bg-white/[0.06]' : ''}`;
+                        if (!ready) {
+                          return (
+                            <div key={m.id} role="option" aria-selected={false} className={rowClass}>
+                              {m.label}
+                              <Link
+                                to="/settings/advanced"
+                                className="needs-key mt-0.5 block font-medium underline whitespace-nowrap"
+                                onClick={() => setModelOpen(false)}
+                              >
+                                Needs API key · Settings → Advanced
+                              </Link>
+                            </div>
+                          );
+                        }
                         return (
                           <button
                             key={m.id}
                             type="button"
                             role="option"
                             aria-selected={m.id === model.id}
-                            aria-disabled={!ready}
                             onClick={() => {
-                              if (!ready) return;
                               setModel(m);
                               setModelOpen(false);
                             }}
-                            className={`w-full text-left px-2.5 py-1.5 text-[12.5px] rounded-md text-zinc-200 ${
-                              ready ? 'hover:bg-white/[0.06]' : 'opacity-70 cursor-not-allowed'
-                            } ${m.id === model.id ? 'bg-white/[0.06]' : ''}`}
+                            className={rowClass}
                           >
                             {m.label}
-                            {ready ? (
-                              <span className="block text-[10px] text-zinc-500">Ready</span>
-                            ) : (
-                              <span className="block text-[10px] text-amber-200/90">
-                                Needs API key ·{' '}
-                                <Link to="/settings/advanced" className="underline" onClick={() => setModelOpen(false)}>
-                                  Settings → Advanced
-                                </Link>
-                              </span>
-                            )}
+                            <span className="block text-[11px] text-zinc-500">Ready</span>
                           </button>
                         );
                       })}
                     </div>
                   )}
                 </div>
-                <div className="flex-1" />
+                <button
+                  type="button"
+                  aria-label={memoryMode === 'agentic' ? 'Memory mode, Agentic' : 'Memory mode, Auto'}
+                  title={memoryMode === 'agentic' ? 'Agentic' : 'Auto'}
+                  onClick={() => setMemoryMode((mode) => (mode === 'agentic' ? 'auto' : 'agentic'))}
+                  className="shrink-0 h-7 w-7 sm:w-auto sm:px-2 rounded-md text-[12px] text-zinc-400 border border-white/[0.08] inline-flex items-center justify-center"
+                >
+                  <span className="hidden sm:inline">{memoryMode === 'agentic' ? 'Agentic' : 'Auto'}</span>
+                  <Sparkles size={13} className="sm:hidden" />
+                </button>
+                <div className="ml-auto shrink-0 flex items-center gap-1">
                 <button
                   onClick={() => setCompare((v) => !v)}
-                  className={`h-7 px-2 rounded-md text-[12px] inline-flex items-center gap-1 ${
+                  title="Compare without memory"
+                  aria-label="Compare without memory"
+                  className={`h-7 w-7 shrink-0 rounded-md text-[12px] inline-flex items-center justify-center ${
                     compare ? 'text-blue-300 bg-blue-500/10' : 'text-zinc-500 hover:text-zinc-300'
                   }`}
                 >
-                  <Split size={13} /> <span className="hidden sm:inline">Compare without memory</span><span className="sm:hidden">Compare</span>
+                  <Split size={13} />
                 </button>
                 <button
                   onClick={() => setKeysOpen(true)}
-                  className="h-7 w-7 rounded-md text-zinc-500 hover:text-zinc-300 flex items-center justify-center"
+                  className="h-7 w-7 shrink-0 rounded-md text-zinc-500 hover:text-zinc-300 flex items-center justify-center"
                   title="Provider API keys"
                 >
                   <Plug size={14} />
@@ -1037,7 +1048,7 @@ export default function PlaygroundPage() {
                   aria-disabled={!canSend}
                   title={sendTitle}
                   aria-label={sendTitle}
-                  className={`h-7 w-7 rounded-md flex items-center justify-center ${
+                  className={`h-7 w-7 shrink-0 rounded-md flex items-center justify-center ${
                     canSend
                       ? 'bg-[#2563eb] hover:bg-[#1d4ed8] text-white'
                       : 'bg-[#2563eb]/40 text-white/80 cursor-not-allowed'
@@ -1045,6 +1056,7 @@ export default function PlaygroundPage() {
                 >
                   <ArrowUp size={14} />
                 </button>
+                </div>
               </div>
             </div>
 
@@ -1070,13 +1082,13 @@ export default function PlaygroundPage() {
             </div>
 
             {messages.length === 0 && mode === 'chat' && (
-              <div className="mt-3 flex flex-wrap gap-2">
+              <div className="mt-3 flex flex-nowrap gap-2 overflow-x-auto">
                 {SUGGESTIONS.map((s) => (
                   <button
                     key={s}
                     onClick={() => send(s)}
                     disabled={chatBlocked}
-                    className="h-8 px-3 rounded-full border border-white/[0.08] bg-[#0c0c0e] text-[12.5px] text-zinc-300 hover:bg-white/[0.04] inline-flex items-center gap-2 disabled:opacity-50"
+                    className="shrink-0 h-8 px-3 rounded-full border border-white/[0.08] bg-[#0c0c0e] text-[12.5px] text-zinc-300 hover:bg-white/[0.04] inline-flex items-center gap-2 disabled:opacity-50"
                   >
                     <Search size={12} className="text-zinc-500" />
                     {s}
@@ -1087,7 +1099,7 @@ export default function PlaygroundPage() {
           </div>
         </section>
 
-        <aside className="min-h-0 xl:min-h-0 rounded-2xl border border-white/[0.07] bg-[#111113] flex flex-col overflow-hidden">
+        <aside className="xl:min-h-0 rounded-2xl border border-white/[0.07] bg-[#111113] flex flex-col overflow-hidden">
           <div className="flex items-center justify-between px-4 py-3">
             <h2 className="text-[14.5px] font-medium text-white">Memory settings</h2>
             <button onClick={reset} className="text-[12.5px] text-zinc-500 hover:text-zinc-300 inline-flex items-center gap-1">

@@ -32,6 +32,7 @@ import { upsertFacts } from './facts.js';
 import { extractGraph, hasLlm } from './llm.js';
 import { isUsefulFact, pruneJunkMemory } from './quality.js';
 import { buildMemoryInjection, closeInjectSession } from './inject.js';
+import { MODEL_CATALOG } from './models.js';
 import { completeChat, providerStatus, routeAnthropic, routeGemini, routeGrok, routeOpenAI } from './router.js';
 import { MEMORY_TOOLS, runMemoryTool } from './tools.js';
 import { CHATGPT_OPENAPI, handleMcp } from './mcp.js';
@@ -611,16 +612,11 @@ export function mountMemoryEngine(app: Express) {
     const configured = providerStatus();
     res.json({
       object: 'list',
-      data: [
-        { id: 'gemini-4-hydrogen', owned_by: 'google', configured: configured.gemini },
-        { id: 'gemini-4-carbon', owned_by: 'google', configured: configured.gemini },
-        { id: 'gemini-3.5-flash-lite', owned_by: 'google', configured: configured.gemini },
-        { id: 'gpt-6.2-astra', owned_by: 'openai', configured: configured.openai },
-        { id: 'claude-sonnet-5-5', owned_by: 'anthropic', configured: configured.anthropic },
-        { id: 'claude-haiku-5-5', owned_by: 'anthropic', configured: configured.anthropic },
-        { id: 'claude-opus-5-5', owned_by: 'anthropic', configured: configured.anthropic },
-        { id: 'grok-4.7', owned_by: 'xai', configured: configured.grok },
-      ],
+      data: MODEL_CATALOG.map((model) => ({
+        id: model.id,
+        owned_by: model.provider === 'gemini' ? 'google' : model.provider === 'grok' ? 'xai' : model.provider,
+        configured: configured[model.provider],
+      })),
     });
   });
 
