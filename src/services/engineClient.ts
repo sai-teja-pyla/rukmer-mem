@@ -83,7 +83,22 @@ export const engine = {
   jobs: () => req('/v3/jobs'),
   requests: () => req('/v3/requests'),
   setupStatus: () => req('/v3/requests/setup-status'),
-  keys: () => req('/v3/keys'),
+  agents: () => req('/v4/agents'),
+  patchKey: (id: string, body: { readOnly?: boolean; containerTags?: string[] }) =>
+    req(`/v3/keys/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(body) }),
+  requestConnector: (body: { tool: string; useCase: string }) =>
+    req('/v4/connectors/request', { method: 'POST', body: JSON.stringify(body) }),
+  entities: (query = '') => req(`/v4/entities${query}`),
+  keys: (params?: { name?: string; source?: string; creator?: string }) => {
+    const q = new URLSearchParams();
+    if (params?.name) q.set('name', params.name);
+    if (params?.source) q.set('source', params.source);
+    if (params?.creator) q.set('creator', params.creator);
+    const suffix = q.toString() ? `?${q}` : '';
+    return req(`/v3/keys${suffix}`);
+  },
+  patchAgent: (id: string, body: { readOnly?: boolean; containerTags?: string[] }) =>
+    req(`/v3/keys/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(body) }),
   createKey: (name: string) => req('/v3/keys', { method: 'POST', body: JSON.stringify({ name }) }),
   revokeKey: (id: string) => req(`/v3/keys/${encodeURIComponent(id)}`, { method: 'DELETE' }),
   verifyKey: (secret: string) => req('/v3/keys/verify', { method: 'POST', body: JSON.stringify({ secret }) }),

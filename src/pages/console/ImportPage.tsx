@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { useOutletContext } from 'react-router-dom';
 import { Upload, Zap, Plus } from 'lucide-react';
-import { PageHeader, DocLink, Panel, PrimaryButton, GhostButton, Skeleton } from '../../components/console/ui';
+import { PageHeader, DocLink, Panel, PrimaryButton, GhostButton, Skeleton, StatusBadge } from '../../components/console/ui';
 import { engine } from '../../services/engineClient';
 import type { UserProfile } from '../../types';
 import { homeTag as makeHomeTag } from '../../services/tenancy';
@@ -494,7 +494,7 @@ export default function ImportPage() {
                       <p className="text-[12px] text-zinc-400 mt-1 whitespace-pre-wrap break-words">Saved as: {d.originalText}</p>
                     ) : null}
                     <p className="text-[11px] text-zinc-500">
-                      {d.folder || d.source} · {d.chars || 0} chars · {d.createdAt ? new Date(d.createdAt).toLocaleString() : 'just now'}
+                      {d.folder || d.source} · {d.chars || 0} chars · {d.createdAt ? new Date(d.createdAt).toLocaleString() : 'just now'} · <StatusBadge status={d.processingStatus} reason={d.memoryStatusReason} />
                     </p>
                     <p className="text-[11px] text-blue-300/80 mt-1">{open ? 'Open' : 'Click to open'}</p>
                   </button>

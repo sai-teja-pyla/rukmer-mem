@@ -50,6 +50,7 @@ export type SearchOpts = {
   since?: string;
   until?: string;
   topic?: string;
+  sessionId?: string;
 };
 
 function scopedChunks(tag?: string | null, includeForgotten = false) {
@@ -112,7 +113,7 @@ async function attachChunks(doc: DocRec, text: string) {
   });
 }
 
-async function extractInto(tag: string, text: string, gov?: DocRec['gov'], originalText = '') {
+async function extractInto(tag: string, text: string, gov?: DocRec['gov'], originalText = '', docId = '') {
   const state = getState();
   const graph = await extractGraph(text.slice(0, 8000));
   for (const e of graph.entities || []) {
@@ -121,7 +122,8 @@ async function extractInto(tag: string, text: string, gov?: DocRec['gov'], origi
     if (state.entities.some((x) => x.containerTag === tag && x.name.toLowerCase() === name.toLowerCase())) continue;
     state.entities.push({ id: uid('ent'), containerTag: tag, name, type: e.type || 'topic' });
   }
-  upsertFacts(tag, graph.triples || [], text.slice(0, 240), gov, originalText || text);
+  const stamped = gov ? { ...gov, sourceRef: gov.sourceRef || docId || undefined } : gov;
+  upsertFacts(tag, graph.triples || [], text.slice(0, 240), stamped, originalText || text);
   deriveFacts(tag);
 }
 
@@ -143,6 +145,7 @@ export async function ingestDocument(input: {
   extraction?: string;
   originalText?: string;
   durable?: boolean;
+  deferExtract?: boolean;
 }) {
   const raw = sanitizePlain(input.text, 200000).trim();
   if (!raw) throw Object.assign(new Error('Empty document'), { status: 400 });
@@ -206,7 +209,7 @@ export async function ingestDocument(input: {
         if (chunk.gov) chunk.gov.deletedAt = new Date().toISOString();
       }
       const chunks = await attachChunks(existing, text);
-      if (input.task !== 'rag' && input.extract !== false) await extractInto(tag, text, existing.gov, existing.originalText || text);
+      if (input.task !== 'rag' && input.extract !== false) await extractInto(tag, text, existing.gov, existing.originalText || text, existing.id);
       state.jobs.push({
         id: uid('job'),
         status: 'done',
@@ -245,19 +248,60 @@ export async function ingestDocument(input: {
     scope: scopeFromTag(tag),
     gov: gov ? { ...gov } : undefined,
   };
+  doc.processingStatus = 'queued';
   const chunks = await attachChunks(doc, text);
+  doc.processingStatus = 'searchable';
   state.documents.push(doc);
-
-  if (input.task !== 'rag' && input.extract !== false) await extractInto(tag, text, doc.gov, doc.originalText || text);
-
-  state.jobs.push({
+  const skipExtract = input.task === 'rag' || input.extract === false;
+  const job = {
     id: uid('job'),
-    status: 'done',
+    status: skipExtract ? 'done' : 'searchable',
     message: `Ingested ${doc.title} (${chunks.length} chunks)`,
     at: new Date().toISOString(),
     ownerUid: uidFromTag(tag),
     containerTag: tag,
-  });
+  };
+  const finishExtract = async () => {
+    if (skipExtract) {
+      doc.processingStatus = 'done';
+      doc.memoryStatusReason = 'Extraction skipped';
+      job.status = 'done';
+      return;
+    }
+    const before = getState().triples.filter((row) => row.containerTag === tag).length;
+    try {
+      await extractInto(tag, text, doc.gov, doc.originalText || text, doc.id);
+      const after = getState().triples.filter((row) => row.containerTag === tag).length;
+      doc.processingStatus = 'done';
+      doc.memoryStatusReason = after > before ? '' : 'No durable facts found';
+      job.status = 'done';
+      if (doc.memoryStatusReason) job.message = doc.memoryStatusReason;
+    } catch {
+      doc.processingStatus = 'searchable';
+      doc.memoryStatusReason = 'Extraction failed';
+      job.status = 'error';
+      job.message = 'Extraction failed';
+    }
+  };
+  if (input.deferExtract && !skipExtract) {
+    const slow = setTimeout(() => {
+      if (doc.processingStatus === 'searchable') {
+        doc.memoryStatusReason = doc.memoryStatusReason || 'Taking longer than usual';
+        job.message = 'Taking longer than usual';
+      }
+    }, 30000);
+    slow.unref?.();
+    setImmediate(() => {
+      void finishExtract().finally(() => {
+        clearTimeout(slow);
+        if (doc.processingStatus === 'done' && doc.memoryStatusReason === 'Taking longer than usual') doc.memoryStatusReason = '';
+        saveState();
+      });
+    });
+  } else {
+    await finishExtract();
+  }
+  state.jobs.push(job);
   if (actorId) {
     audit({
       actorId,
@@ -415,6 +459,7 @@ export async function ingestPayload(item: {
   teamId?: string;
   memoryKind?: string;
   sourceRef?: string;
+  deferExtract?: boolean;
 }) {
   const title = sanitizeName(item.title || item.name || 'Untitled');
   let text = sanitizePlain(item.text || item.content || '', 200000);
@@ -456,6 +501,7 @@ export async function ingestPayload(item: {
     source: item.source || (mime === 'application/pdf' ? 'pdf' : video ? 'video' : image ? 'image' : 'upload'),
     mime,
     task: item.task,
+    deferExtract: item.deferExtract,
     fileId,
     metadata: sanitizeMeta(item.metadata),
     actorId: item.actorId,
@@ -1045,7 +1091,99 @@ export function readDocument(id: string, uid?: string) {
     folder: folderOf(doc),
     text: String(doc.text || '').slice(0, 20000),
     originalText: doc.originalText || '',
+    processingStatus: doc.processingStatus || 'done',
+    memoryStatusReason: doc.memoryStatusReason || '',
   };
+}
+
+/** degree = distinct neighboring names linked by a latest triple. sourceDocuments are newest first. */
+export function entityCatalog(uid: string) {
+  const state = getState();
+  const tags = new Set(readTagsFor(uid, { scope: 'all' }));
+  const docs = state.documents.filter((doc) => tags.has(doc.containerTag) && canRead(uid, doc) && !doc.forgotten);
+  const byId = new Map(docs.map((doc) => [doc.id, doc]));
+  const triples = state.triples.filter((row) => tags.has(row.containerTag) && canRead(uid, row) && row.isLatest !== false);
+  const neighbors = new Map<string, Set<string>>();
+  const sources = new Map<string, Set<string>>();
+  const link = (left: string, right: string, docId?: string) => {
+    const key = left.trim().toLowerCase();
+    const other = right.trim().toLowerCase();
+    if (!key || !other || key === other) return;
+    const bag = neighbors.get(key) || new Set<string>();
+    bag.add(other);
+    neighbors.set(key, bag);
+    if (docId && byId.has(docId)) {
+      const bagDocs = sources.get(key) || new Set<string>();
+      bagDocs.add(docId);
+      sources.set(key, bagDocs);
+    }
+  };
+  for (const row of triples) {
+    const docId = row.gov?.sourceRef || '';
+    link(row.subject, row.object, docId);
+    link(row.object, row.subject, docId);
+  }
+  return state.entities
+    .filter((entity) => tags.has(entity.containerTag))
+    .map((entity) => {
+      const key = entity.name.trim().toLowerCase();
+      const mentioned = docs.filter((doc) => key.length > 2 && `${doc.title}\n${doc.text}`.toLowerCase().includes(key)).map((doc) => doc.id);
+      const ids = new Set([...(sources.get(key) || []), ...mentioned]);
+      const sourceDocuments = [...ids]
+        .map((id) => byId.get(id))
+        .filter((doc): doc is NonNullable<typeof doc> => !!doc)
+        .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+        .map((doc) => ({ id: doc.id, title: doc.title, createdAt: doc.createdAt, source: doc.source }));
+      return {
+        id: entity.id,
+        name: entity.name,
+        containerTag: entity.containerTag,
+        createdAt: sourceDocuments[0]?.createdAt || '',
+        degree: neighbors.get(key)?.size || 0,
+        sourceDocuments,
+        episodes: sourceDocuments,
+      };
+    });
+}
+
+export function pageStable<T extends { id: string }>(rows: T[], cursor: string, limit: number) {
+  let start = 0;
+  if (cursor) {
+    const id = Buffer.from(cursor, 'base64url').toString('utf8');
+    const idx = rows.findIndex((row) => row.id === id);
+    if (idx < 0) throw Object.assign(new Error('Invalid cursor'), { status: 400 });
+    start = idx + 1;
+  }
+  const items = rows.slice(start, start + limit);
+  const last = items[items.length - 1];
+  const hasMore = start + items.length < rows.length;
+  const nextCursor = hasMore && last ? Buffer.from(last.id).toString('base64url') : null;
+  return { items, nextCursor, hasMore };
+}
+
+export function pageByCursor<T extends { id: string; createdAt?: string }>(rows: T[], cursor: string, limit: number) {
+  const sorted = [...rows].sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')) || b.id.localeCompare(a.id));
+  let start = 0;
+  if (cursor) {
+    let createdAt = '';
+    let id = '';
+    try {
+      const raw = Buffer.from(cursor, 'base64url').toString('utf8');
+      const cut = raw.lastIndexOf('|');
+      createdAt = raw.slice(0, cut);
+      id = raw.slice(cut + 1);
+    } catch {
+      throw Object.assign(new Error('Invalid cursor'), { status: 400 });
+    }
+    const idx = sorted.findIndex((row) => row.id === id && String(row.createdAt || '') === createdAt);
+    if (idx < 0) throw Object.assign(new Error('Invalid cursor'), { status: 400 });
+    start = idx + 1;
+  }
+  const items = sorted.slice(start, start + limit);
+  const last = items[items.length - 1];
+  const hasMore = start + items.length < sorted.length;
+  const nextCursor = hasMore && last ? Buffer.from(`${last.createdAt || ''}|${last.id}`).toString('base64url') : null;
+  return { items, nextCursor, hasMore };
 }
 
 export function listDocuments(containerTag?: string | null, uid?: string) {
@@ -1067,8 +1205,10 @@ export function listDocuments(containerTag?: string | null, uid?: string) {
       fileId: d.fileId,
       chars: (d.text || '').length,
       folder: folderOf(d),
-      preview: String(d.text || '').slice(0, 4000),
+      preview: String(d.text || '').slice(0, 240),
       originalText: d.originalText || '',
+      processingStatus: d.processingStatus || 'done',
+      memoryStatusReason: d.memoryStatusReason || '',
     }));
 }
 
@@ -1213,6 +1353,8 @@ export function graphPayload(containerTag?: string | null, uid?: string, scope: 
         captureType: d.metadata?.capture_type || '',
         containerTag: d.containerTag,
         createdAt: d.createdAt,
+        processingStatus: d.processingStatus || 'done',
+        memoryStatusReason: d.memoryStatusReason || '',
         text: String(d.text || '').slice(0, 4000),
         originalText: d.originalText || '',
         facts: factsAbout(d.title),

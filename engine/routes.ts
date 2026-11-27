@@ -15,6 +15,9 @@ import {
   ingestUrl,
   insights,
   listDocuments,
+  pageByCursor,
+  pageStable,
+  entityCatalog,
   readDocument,
   listTags,
   logRequest,
@@ -28,7 +31,7 @@ import {
 import { upsertFacts } from './facts.js';
 import { extractGraph, hasLlm } from './llm.js';
 import { isUsefulFact, pruneJunkMemory } from './quality.js';
-import { buildMemoryInjection } from './inject.js';
+import { buildMemoryInjection, closeInjectSession } from './inject.js';
 import { completeChat, providerStatus, routeAnthropic, routeGemini, routeGrok, routeOpenAI } from './router.js';
 import { MEMORY_TOOLS, runMemoryTool } from './tools.js';
 import { CHATGPT_OPENAPI, handleMcp } from './mcp.js';
@@ -42,7 +45,7 @@ import { importConnector } from './connectors.js';
 import { applyDecay, buildProfile } from './memory.js';
 import { connectedAppsFor, mountOauth } from './oauth.js';
 import { browserConnectorView, claimBrowserPair, createBrowserPair, forgetBrowserMemories } from './browserConnector.js';
-import { findKey, forgetKey, keysAreDurable, keysFor, rememberKey, syncStoredKeys } from './keys.js';
+import { findKey, forgetKey, keysAreDurable, keysFor, keysVisible, rememberKey, syncStoredKeys } from './keys.js';
 import {
   addTeamMember,
   audit,
@@ -121,23 +124,49 @@ function memoryScope(req: Request) {
   const scope = String(req.body?.scope || req.query?.scope || req.headers['x-rukmer-scope'] || 'all');
   const teamId = String(req.body?.teamId || req.query?.teamId || '');
   const requested = Array.isArray(req.body?.containerTags) ? req.body.containerTags.map(String) : [];
-  return { uid, primary, tags: readTagsFor(uid, { scope, teamId, containerTag: primary, containerTags: requested }) };
+  const tags = readTagsFor(uid, { scope, teamId, containerTag: primary, containerTags: requested });
+  const allowed = req.memoryUser?.via === 'apikey' ? req.memoryUser.containerTags : undefined;
+  return { uid, primary, tags: allowed?.length ? tags.filter((tag) => allowed.includes(tag)) : tags };
+}
+
+function assertKey(req: Request, tag: string, write: boolean) {
+  const user = req.memoryUser;
+  if (!user || user.via !== 'apikey') return;
+  if (write && user.readOnly) throw Object.assign(new Error('Read-only key'), { status: 403 });
+  if (user.containerTags?.length && tag && !user.containerTags.includes(tag)) {
+    throw Object.assign(new Error('Tag is outside this key'), { status: 403 });
+  }
+}
+
+function takeInjectSession(req: Request) {
+  const sessionId = String(req.body?.sessionId || req.body?.threadId || req.headers['x-rukmer-session'] || '');
+  const scope = String(req.body?.scope || req.query?.scope || '');
+  if (req.body && scope !== 'session') {
+    delete req.body.sessionId;
+    delete req.body.threadId;
+  }
+  return sessionId;
 }
 
 function tagOf(req: Request) {
   const uid = uidOf(req);
   const raw = String(req.body?.containerTag || req.query.containerTag || req.headers['x-container-tag'] || '');
+  const allowed = req.memoryUser?.via === 'apikey' ? req.memoryUser.containerTags : undefined;
+  if (raw && allowed?.length && !allowed.includes(raw)) throw Object.assign(new Error('Tag is outside this key'), { status: 403 });
   if (raw.startsWith('tm_')) {
     if (!canAccessTag(uid, raw)) throw Object.assign(new Error('Not a member of this team'), { status: 403 });
+    assertKey(req, raw, false);
     return raw;
   }
-  return resolveScopeTag(uid, {
+  const tag = resolveScopeTag(uid, {
     containerTag: String(req.body?.containerTag || req.query.containerTag || req.headers['x-container-tag'] || ''),
     scope: String(req.body?.scope || req.query.scope || ''),
     sessionId: String(req.body?.sessionId || req.query.sessionId || ''),
     agentId: String(req.body?.agentId || req.query.agentId || ''),
     orgId: String(req.body?.orgId || req.query.orgId || ''),
   });
+  assertKey(req, tag, false);
+  return tag;
 }
 
 let bootRequired = false;
@@ -329,6 +358,7 @@ export function mountMemoryEngine(app: Express) {
     try {
       const { title, text, content, url, source, mime, task, pdfBase64, imageBase64, videoBase64, metadata } = req.body || {};
       const tag = tagOf(req);
+      assertKey(req, tag, true);
       if (url) {
         const out = await ingestUrl(String(url), tag, task);
         return res.json(out);
@@ -345,6 +375,7 @@ export function mountMemoryEngine(app: Express) {
         source: source || 'api',
         containerTag: tag,
         task,
+        deferExtract: true,
         actorId: uidOf(req),
         visibility: req.body?.visibility || (req.body?.scope === 'team' ? 'team' : undefined),
         teamId: req.body?.teamId,
@@ -410,6 +441,7 @@ export function mountMemoryEngine(app: Express) {
     try {
       const doc = readDocument(String(req.params.id || ''), uidOf(req));
       if (!doc) return res.status(404).json({ error: 'Document not found' });
+      assertKey(req, String(doc.containerTag || ''), false);
       res.json(doc);
     } catch (e: any) {
       fail(res, e);
@@ -420,8 +452,11 @@ export function mountMemoryEngine(app: Express) {
     try {
       const uid = uidOf(req);
       const explicit = String(req.body?.containerTag || req.query?.containerTag || req.headers['x-container-tag'] || '');
-      const documents = explicit ? listDocuments(tagOf(req), uid) : memoryScope(req).tags.flatMap((tag) => listDocuments(tag, uid));
-      res.json({ documents, tags: listTags(uid), homeTag: homeTag(uid) });
+      const scoped = memoryScope(req);
+      const documents = explicit ? listDocuments(scoped.primary, uid) : scoped.tags.flatMap((tag) => listDocuments(tag, uid));
+      const limit = Math.min(200, Math.max(1, Number(req.body?.limit || 50)));
+      const page = pageByCursor(documents, String(req.body?.cursor || ''), limit);
+      res.json({ documents: page.items, items: page.items, tags: listTags(uid), homeTag: homeTag(uid), nextCursor: page.nextCursor, hasMore: page.hasMore });
     } catch (e: any) {
       fail(res, e);
     }
@@ -524,6 +559,7 @@ export function mountMemoryEngine(app: Express) {
 
   app.post('/v4/inject', async (req, res) => {
     try {
+      const sessionId = takeInjectSession(req);
       const q = sanitizePlain(req.body?.query || req.body?.prompt || '', 2000);
       const scoped = memoryScope(req);
       const out = await buildMemoryInjection(q, scoped.primary, {
@@ -534,8 +570,20 @@ export function mountMemoryEngine(app: Express) {
         actorId: scoped.uid,
         purpose: 'inject',
         containerTags: scoped.tags,
+        sessionId,
       });
       res.json(out);
+    } catch (e: any) {
+      fail(res, e);
+    }
+  });
+
+  app.post('/v4/sessions/close', (req, res) => {
+    try {
+      const sessionId = takeInjectSession(req);
+      const scoped = memoryScope(req);
+      closeInjectSession(scoped.uid, scoped.primary, sessionId);
+      res.json({ ok: true });
     } catch (e: any) {
       fail(res, e);
     }
@@ -547,7 +595,10 @@ export function mountMemoryEngine(app: Express) {
     try {
       const name = String(req.body?.name || req.body?.tool || '');
       const args = req.body?.arguments || req.body?.args || {};
-      const out = await runMemoryTool(name, args, uidOf(req));
+      const out = await runMemoryTool(name, args, uidOf(req), {
+        readOnly: req.memoryUser?.readOnly,
+        containerTags: req.memoryUser?.containerTags,
+      });
       res.json(out);
     } catch (e: any) {
       fail(res, e);
@@ -592,8 +643,10 @@ export function mountMemoryEngine(app: Express) {
 
   app.post('/v4/remember', async (req, res) => {
     try {
+      const tag = tagOf(req);
+      assertKey(req, tag, true);
       const out = await rememberTranscript({
-        containerTag: tagOf(req),
+        containerTag: tag,
         source: req.body?.source || 'api',
         messages: req.body?.messages || [],
         title: req.body?.title,
@@ -745,7 +798,20 @@ export function mountMemoryEngine(app: Express) {
       const uid = uidOf(req);
       const requested = String(req.query.containerTag || '').trim();
       const scope = String(req.query.scope || 'all');
-      res.json(graphPayload(requested ? tagOf(req) : undefined, uid, scope === 'private' || scope === 'team' ? scope : 'all'));
+      const payload = graphPayload(requested ? tagOf(req) : undefined, uid, scope === 'private' || scope === 'team' ? scope : 'all');
+      const catalog = new Map(entityCatalog(uid).map((entity) => [entity.id, entity]));
+      payload.nodes = payload.nodes.map((node) => {
+        const extra = catalog.get(node.id);
+        return extra ? { ...node, degree: extra.degree, sourceDocuments: extra.sourceDocuments } : node;
+      });
+      if (String(req.query.sort || '') === 'degree') {
+        const docs = payload.nodes.filter((node) => node.kind === 'document');
+        const rest = payload.nodes
+          .filter((node) => node.kind !== 'document')
+          .sort((a, b) => Number(b.degree || 0) - Number(a.degree || 0) || String(a.label || '').localeCompare(String(b.label || '')));
+        payload.nodes = [...docs, ...rest];
+      }
+      res.json(payload);
     } catch (e: any) {
       fail(res, e);
     }
@@ -754,6 +820,8 @@ export function mountMemoryEngine(app: Express) {
   app.delete('/v4/memories', (req, res) => {
     try {
       const id = String(req.body?.id || req.query.id || '');
+      const doc = readDocument(id, uidOf(req));
+      if (doc) assertKey(req, doc.containerTag, true);
       res.json(forgetById(id, uidOf(req)));
     } catch (e: any) {
       fail(res, e);
@@ -762,7 +830,9 @@ export function mountMemoryEngine(app: Express) {
 
   app.post('/v4/memories/forget-matching', (req, res) => {
     try {
-      res.json(forgetMatching(String(req.body?.query || ''), tagOf(req), !!req.body?.dryRun, uidOf(req)));
+      const tag = tagOf(req);
+      assertKey(req, tag, true);
+      res.json(forgetMatching(String(req.body?.query || ''), tag, !!req.body?.dryRun, uidOf(req)));
     } catch (e: any) {
       fail(res, e);
     }
@@ -856,15 +926,34 @@ export function mountMemoryEngine(app: Express) {
   app.get('/v3/keys', async (req, res) => {
     try {
       const uid = uidOf(req);
-      const keys = await keysFor(uid);
+      await keysFor(uid);
+      const nameQ = String(req.query.name || '').toLowerCase();
+      const sourceQ = String(req.query.source || '');
+      const creatorQ = String(req.query.creator || '').toLowerCase();
+      const rows = keysVisible(uid).filter(({ key }) => {
+        if (nameQ && !key.name.toLowerCase().includes(nameQ)) return false;
+        if (sourceQ && (key.source || (key.connector ? 'oauth' : 'console')) !== sourceQ) return false;
+        const who = `${key.createdBy?.email || ''} ${key.createdBy?.name || ''} ${key.createdBy?.uid || key.ownerUid || ''}`.toLowerCase();
+        if (creatorQ && !who.includes(creatorQ)) return false;
+        return true;
+      });
       res.json({
-        keys: keys.map((k) => ({
-          id: k.id,
-          name: k.name,
-          prefix: k.prefix,
-          createdAt: k.createdAt,
-          lastUsed: k.lastUsed,
+        keys: rows.map(({ key, canRevoke }) => ({
+          id: key.id,
+          name: key.name,
+          prefix: key.prefix,
+          createdAt: key.createdAt,
+          lastUsed: key.lastUsed,
           expires: 'Never',
+          source: key.source || (key.connector ? 'oauth' : 'console'),
+          createdBy: key.createdBy || { uid: key.ownerUid || '' },
+          connector: key.connector || '',
+          readOnly: key.readOnly === true,
+          containerTags: key.containerTags || [],
+          teamId: key.teamId || '',
+          orgId: key.orgId || '',
+          scope: key.readOnly ? 'Read-only' : key.containerTags?.length ? key.containerTags.join(', ') : 'Full',
+          canRevoke,
         })),
       });
     } catch (e: any) {
@@ -889,9 +978,11 @@ export function mountMemoryEngine(app: Express) {
   app.delete('/v3/keys/:id', async (req, res) => {
     try {
       const uid = uidOf(req);
-      const owned = await keysFor(uid);
-      const rec = owned.find((k) => k.id === req.params.id);
-      if (!rec) return res.status(404).json({ error: 'Key not found' });
+      const visible = keysVisible(uid);
+      const row = visible.find((item) => item.key.id === req.params.id);
+      if (!row) return res.status(404).json({ error: 'Key not found' });
+      if (!row.canRevoke) return res.status(403).json({ error: 'Cannot revoke this key' });
+      const rec = row.key;
       await forgetKey(rec.hash);
       audit({ actorId: uid, action: 'retain', memoryId: String(req.params.id), tenantId: homeTag(uid), detail: 'api-key-revoked result=ok' });
       await persistNow();
@@ -913,6 +1004,11 @@ export function mountMemoryEngine(app: Express) {
         createdAt: new Date().toISOString(),
         lastUsed: null,
         ownerUid,
+        source: 'console',
+        createdBy: { uid: ownerUid, email: req.memoryUser?.email, name: req.memoryUser?.name },
+        teamId: String(req.body?.teamId || ''),
+        orgId: String(req.body?.orgId || ''),
+        readOnly: false,
       };
       await rememberKey(rec);
       audit({ actorId: ownerUid, action: 'retain', memoryId: rec.id, tenantId: homeTag(ownerUid), detail: 'api-key-created result=ok' });
@@ -1056,6 +1152,141 @@ export function mountMemoryEngine(app: Express) {
       const tag = tagOf(req);
       const triples = getState().triples.filter((t) => t.containerTag === tag);
       res.json({ path: shortestPath(triples, String(req.query.from || ''), String(req.query.to || ''), tag) });
+    } catch (e: any) {
+      fail(res, e);
+    }
+  });
+
+  app.get('/v4/memories', (req, res) => {
+    try {
+      privateNoStore(res);
+      const uid = uidOf(req);
+      const tag = String(req.query.containerTag || '');
+      if (tag) assertKey(req, tag, false);
+      const rows = (tag ? listDocuments(tag, uid) : listDocuments(undefined, uid)).map((doc) => ({
+        ...doc,
+        text: doc.preview,
+        kind: doc.source,
+        docId: doc.id,
+      }));
+      const limit = Math.min(200, Math.max(1, Number(req.query.limit || 50)));
+      const page = pageByCursor(rows, String(req.query.cursor || ''), limit);
+      res.json({ memories: page.items, items: page.items, nextCursor: page.nextCursor, hasMore: page.hasMore });
+    } catch (e: any) {
+      fail(res, e);
+    }
+  });
+
+  app.get('/v4/entities', (req, res) => {
+    try {
+      privateNoStore(res);
+      const uid = uidOf(req);
+      const tag = String(req.query.containerTag || '');
+      if (tag) assertKey(req, tag, false);
+      let rows = entityCatalog(uid);
+      if (tag) rows = rows.filter((row) => row.containerTag === tag);
+      const limit = Math.min(200, Math.max(1, Number(req.query.limit || 50)));
+      const byDegree = String(req.query.sort || '') === 'degree';
+      if (byDegree) rows = [...rows].sort((a, b) => b.degree - a.degree || a.name.localeCompare(b.name) || a.id.localeCompare(b.id));
+      const page = byDegree ? pageStable(rows, String(req.query.cursor || ''), limit) : pageByCursor(rows, String(req.query.cursor || ''), limit);
+      res.json({ entities: page.items, items: page.items, nextCursor: page.nextCursor, hasMore: page.hasMore });
+    } catch (e: any) {
+      fail(res, e);
+    }
+  });
+
+  app.get('/v4/chunks', (req, res) => {
+    try {
+      privateNoStore(res);
+      const uid = uidOf(req);
+      const docId = String(req.query.docId || '');
+      const doc = readDocument(docId, uid);
+      if (!doc) return res.status(404).json({ error: 'Document not found' });
+      assertKey(req, doc.containerTag, false);
+      const rows = getState().chunks.filter((chunk) => chunk.docId === docId && !chunk.forgotten);
+      const limit = Math.min(200, Math.max(1, Number(req.query.limit || 50)));
+      const page = pageByCursor(rows, String(req.query.cursor || ''), limit);
+      res.json({ chunks: page.items.map((chunk) => ({ id: chunk.id, docId: chunk.docId, text: chunk.text.slice(0, 240), createdAt: chunk.createdAt })), items: page.items, nextCursor: page.nextCursor, hasMore: page.hasMore });
+    } catch (e: any) {
+      fail(res, e);
+    }
+  });
+
+  app.get('/v4/agents', (req, res) => {
+    try {
+      privateNoStore(res);
+      const groups: Record<string, string> = {
+        cursor: 'coding',
+        'claude-code': 'coding',
+        codex: 'coding',
+        cli: 'coding',
+        browser: 'personal',
+        mcp: 'personal',
+        claude: 'chat',
+        chatgpt: 'chat',
+        grok: 'chat',
+        gemini: 'chat',
+      };
+      const agents = keysVisible(uidOf(req))
+        .map(({ key }) => key)
+        .filter((key) => key.connector)
+        .map((key) => ({
+          id: key.id,
+          name: key.name,
+          connector: key.connector,
+          group: groups[key.connector || ''] || 'personal',
+          source: key.source || 'oauth',
+          createdAt: key.createdAt,
+          lastUsed: key.lastUsed,
+          readOnly: key.readOnly === true,
+          containerTags: key.containerTags || [],
+          createdBy: key.createdBy || { uid: key.ownerUid || '' },
+        }));
+      res.json({ agents });
+    } catch (e: any) {
+      fail(res, e);
+    }
+  });
+
+  app.patch('/v3/keys/:id', async (req, res) => {
+    try {
+      const uid = uidOf(req);
+      const row = keysVisible(uid).find((item) => item.key.id === req.params.id);
+      if (!row) return res.status(404).json({ error: 'Key not found' });
+      if (!row.canRevoke && row.key.ownerUid !== uid) return res.status(403).json({ error: 'Cannot edit this key' });
+      if (typeof req.body?.readOnly === 'boolean') row.key.readOnly = req.body.readOnly;
+      if (Array.isArray(req.body?.containerTags)) row.key.containerTags = req.body.containerTags.map(String);
+      await persistNow();
+      res.json({ ok: true, id: row.key.id, readOnly: row.key.readOnly === true, containerTags: row.key.containerTags || [] });
+    } catch (e: any) {
+      fail(res, e);
+    }
+  });
+
+  app.get('/v3/requests/:id', (req, res) => {
+    try {
+      privateNoStore(res);
+      const uid = uidOf(req);
+      const row = getState().requests.find((item) => item.id === req.params.id && (!item.ownerUid || item.ownerUid === uid));
+      if (!row) return res.status(404).json({ error: 'Request not found' });
+      res.json(row);
+    } catch (e: any) {
+      fail(res, e);
+    }
+  });
+
+  app.post('/v4/connectors/request', async (req, res) => {
+    try {
+      const actor = uidOf(req);
+      const tool = sanitizePlain(req.body?.tool, 80);
+      const useCase = sanitizePlain(req.body?.useCase, 500);
+      if (!tool || !useCase) return res.status(400).json({ error: 'tool and useCase are required' });
+      const row = { id: uid('creq'), at: new Date().toISOString(), uid: actor, email: req.memoryUser?.email || '', tool, useCase };
+      const state = getState();
+      state.connectorRequests = state.connectorRequests || [];
+      state.connectorRequests.unshift(row);
+      await persistNow();
+      res.json({ ok: true, id: row.id });
     } catch (e: any) {
       fail(res, e);
     }

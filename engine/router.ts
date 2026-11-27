@@ -186,6 +186,11 @@ async function runOpenAICompat(opts: {
 }
 
 export async function completeChat(req: Request, res: Response) {
+  const sessionId = String(req.body?.sessionId || req.body?.threadId || req.headers['x-rukmer-session'] || '');
+  if (req.body && String(req.body.scope || '') !== 'session') {
+    delete req.body.sessionId;
+    delete req.body.threadId;
+  }
   const tag = tagOf(req);
   const model = String(req.body?.model || 'gemini-3.8-flash');
   const provider = providerFromModel(model);
@@ -217,6 +222,7 @@ export async function completeChat(req: Request, res: Response) {
       actorId: uid,
       purpose: 'chat',
       containerTags: tags,
+      sessionId,
     });
     messages = injectOpenAIMessages(rawMessages, mem.injection, mem.system);
   }
@@ -315,6 +321,11 @@ export async function completeChat(req: Request, res: Response) {
       tokensInjected: Number(mem?.tokensInjected || 0),
       skipReason,
       citations,
+      prefixHash: mem?.prefixHash || '',
+      fullHash: mem?.fullHash || '',
+      reusedMemoryIds: mem?.reusedMemoryIds || [],
+      newMemoryIds: mem?.newMemoryIds || [],
+      prefixChars: mem?.prefixChars || 0,
       ...(!isProduction() && citations.length === 0 && emptyReason ? { debug: { reason: emptyReason } } : {}),
     },
   });

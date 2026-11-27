@@ -147,6 +147,11 @@ export default function ConsoleLayout({ user, restoring = false }: ConsoleLayout
   const searchRequest = useRef(0);
   const [menuOpen, setMenuOpen] = useState(false);
   const [navOpen, setNavOpen] = useState(false);
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  const [paletteQuery, setPaletteQuery] = useState('');
+  const [paletteIndex, setPaletteIndex] = useState(0);
+  const [paletteDocs, setPaletteDocs] = useState<{ id: string; title: string }[]>([]);
+  const [paletteTags, setPaletteTags] = useState<string[]>([]);
   const searchRef = useRef<HTMLInputElement>(null);
   const homeTag = makeHomeTag(user.uid);
 
@@ -184,8 +189,7 @@ export default function ConsoleLayout({ user, restoring = false }: ConsoleLayout
     const onKey = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
         e.preventDefault();
-        setNavOpen(true);
-        searchRef.current?.focus();
+        setPaletteOpen((open) => !open);
       }
     };
     window.addEventListener('keydown', onKey);
@@ -277,6 +281,59 @@ export default function ConsoleLayout({ user, restoring = false }: ConsoleLayout
     return () => window.clearTimeout(timer);
   }, [query, homeTag, memoryScope]);
 
+  useEffect(() => {
+    if (!paletteOpen) return;
+    const timer = window.setTimeout(() => {
+      engine.listDocs().then((out) => setPaletteDocs((out.documents || []).map((doc: { id: string; title?: string }) => ({ id: doc.id, title: doc.title || 'Untitled' })))).catch(() => setPaletteDocs([]));
+      engine.tags().then((out) => setPaletteTags((out.tags || []).map((row: { tag: string }) => row.tag))).catch(() => setPaletteTags([]));
+    }, 180);
+    return () => window.clearTimeout(timer);
+  }, [paletteOpen, paletteQuery]);
+
+  const paletteItems = useMemo(() => {
+    const q = paletteQuery.trim().toLowerCase();
+    const go = [...nav, ...settingsNav]
+      .filter((item) => item.to && item.label)
+      .filter((item) => !q || String(item.label).toLowerCase().includes(q))
+      .map((item) => ({ id: `go-${item.to}`, label: String(item.label), hint: 'Go to', to: String(item.to) }));
+    const docs = paletteDocs
+      .filter((doc) => !q || doc.title.toLowerCase().includes(q))
+      .slice(0, 6)
+      .map((doc) => ({ id: `doc-${doc.id}`, label: doc.title, hint: 'Document', to: `/import?doc=${encodeURIComponent(doc.id)}` }));
+    const tags = paletteTags
+      .filter((tag) => !q || tag.toLowerCase().includes(q))
+      .slice(0, 6)
+      .map((tag) => ({ id: `tag-${tag}`, label: tag, hint: 'Container tag', to: `/container-tags?tag=${encodeURIComponent(tag)}` }));
+    const request = /^req_[0-9a-f]+$/i.test(paletteQuery.trim())
+      ? [{ id: paletteQuery.trim(), label: paletteQuery.trim(), hint: 'Request', to: `/requests?id=${encodeURIComponent(paletteQuery.trim())}` }]
+      : [];
+    let recent: { id: string; label: string; hint: string; to: string }[] = [];
+    try {
+      recent = JSON.parse(localStorage.getItem('rukmer.palette.recent') || '[]');
+    } catch {
+      recent = [];
+    }
+    recent = recent.filter((item) => !q || item.label.toLowerCase().includes(q)).slice(0, 5).map((item) => ({ ...item, hint: 'Recent' }));
+    const create = !q || 'create api key'.includes(q) || q.includes('key')
+      ? [{ id: 'create-key', label: 'Create API key', hint: 'Quick action', to: '/api-keys?create=1' }]
+      : [];
+    return [...request, ...go, ...docs, ...tags, ...recent, ...create];
+  }, [paletteQuery, paletteDocs, paletteTags]);
+
+  const choosePalette = (item: { id: string; label: string; hint: string; to: string }) => {
+    const prior = (() => {
+      try {
+        return JSON.parse(localStorage.getItem('rukmer.palette.recent') || '[]');
+      } catch {
+        return [];
+      }
+    })();
+    localStorage.setItem('rukmer.palette.recent', JSON.stringify([{ id: item.id, label: item.label, to: item.to }, ...prior.filter((row: { id: string }) => row.id !== item.id)].slice(0, 8)));
+    setPaletteOpen(false);
+    setPaletteQuery('');
+    navigate(item.to);
+  };
+
   const isImmersive =
     location.pathname.startsWith('/playground') || location.pathname.startsWith('/memory-graph');
 
@@ -290,15 +347,11 @@ export default function ConsoleLayout({ user, restoring = false }: ConsoleLayout
           <Search size={14} className="text-zinc-500 shrink-0" />
           <input
             ref={searchRef}
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
+            value={paletteQuery}
+            readOnly
+            onFocus={() => setPaletteOpen(true)}
+            onClick={() => setPaletteOpen(true)}
             placeholder="Search..."
-            onKeyDown={(e) => {
-              if (e.key !== 'Escape') return;
-              e.preventDefault();
-              if (query) setQuery('');
-              else setNavOpen(false);
-            }}
             className="bg-transparent text-[13px] w-full outline-none placeholder:text-zinc-600"
           />
           <kbd className="hidden sm:inline text-[10px] text-zinc-500 border border-white/[0.08] rounded px-1 py-[1px] font-medium leading-none">
@@ -566,6 +619,50 @@ export default function ConsoleLayout({ user, restoring = false }: ConsoleLayout
           )}
         </main>
       </div>
+      {paletteOpen ? (
+        <div className="fixed inset-0 z-[80] bg-black/50 flex items-start justify-center pt-[12vh]" onClick={() => setPaletteOpen(false)}>
+          <div className="w-[min(560px,92vw)] rounded-xl bg-[#161618] border border-white/[0.08] p-2" onClick={(e) => e.stopPropagation()} role="dialog" aria-label="Command palette">
+            <input
+              autoFocus
+              value={paletteQuery}
+              onChange={(e) => {
+                setPaletteQuery(e.target.value);
+                setPaletteIndex(0);
+              }}
+              placeholder="Go to a page, document, tag, or request"
+              className="w-full h-10 bg-transparent px-3 text-[14px] outline-none"
+              onKeyDown={(e) => {
+                if (e.key === 'Escape') setPaletteOpen(false);
+                if (e.key === 'ArrowDown') {
+                  e.preventDefault();
+                  setPaletteIndex((index) => Math.min(paletteItems.length - 1, index + 1));
+                }
+                if (e.key === 'ArrowUp') {
+                  e.preventDefault();
+                  setPaletteIndex((index) => Math.max(0, index - 1));
+                }
+                if (e.key === 'Enter' && paletteItems[paletteIndex]) {
+                  e.preventDefault();
+                  choosePalette(paletteItems[paletteIndex]);
+                }
+              }}
+            />
+            <div className="max-h-80 overflow-auto">
+              {paletteItems.map((item, index) => (
+                <button
+                  key={`${item.hint}-${item.id}`}
+                  className={`w-full text-left px-3 py-2 text-[13px] rounded-md flex items-center justify-between ${index === paletteIndex ? 'bg-white/[0.08] text-zinc-100' : 'text-zinc-300'}`}
+                  onMouseEnter={() => setPaletteIndex(index)}
+                  onClick={() => choosePalette(item)}
+                >
+                  <span>{item.label}</span>
+                  <span className="text-[11px] text-zinc-500">{item.hint}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

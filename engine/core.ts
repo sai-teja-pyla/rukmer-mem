@@ -39,6 +39,8 @@ export interface DocRec {
   metadata?: Record<string, string>;
   scope?: MemoryScope;
   gov?: MemoryGov;
+  processingStatus?: 'queued' | 'searchable' | 'done';
+  memoryStatusReason?: string;
 }
 
 export interface ChunkRec {
@@ -122,6 +124,12 @@ export interface ApiKeyRec {
   lastUsed: string | null;
   ownerUid?: string;
   connector?: string;
+  source?: 'console' | 'oauth' | 'cli' | 'mcp' | 'plugin';
+  createdBy?: { uid: string; email?: string; name?: string };
+  orgId?: string;
+  teamId?: string;
+  readOnly?: boolean;
+  containerTags?: string[];
 }
 
 export interface RequestRec {
@@ -150,6 +158,13 @@ export interface OauthCodeRec {
   method: string;
   exp: number;
   label?: string;
+  connector?: string;
+  teamId?: string;
+  orgId?: string;
+  readOnly?: boolean;
+  containerTags?: string[];
+  scope?: string;
+  createdBy?: { uid: string; email?: string; name?: string };
 }
 
 export interface OauthRefreshRec {
@@ -273,6 +288,7 @@ export interface EngineState {
   redactionPolicies: RedactionPolicyRec[];
   audit: AuditRec[];
   erasures: ErasureRec[];
+  connectorRequests?: { id: string; at: string; uid: string; email?: string; tool: string; useCase: string }[];
   rev: number;
 }
 
@@ -302,6 +318,7 @@ function empty(): EngineState {
     redactionPolicies: [],
     audit: [],
     erasures: [],
+    connectorRequests: [],
     rev: 0,
   };
 }
@@ -691,6 +708,7 @@ function shapeState() {
   state.redactionPolicies = state.redactionPolicies || [];
   state.audit = state.audit || [];
   state.erasures = state.erasures || [];
+  state.connectorRequests = state.connectorRequests || [];
   state.documents = state.documents || [];
   state.chunks = state.chunks || [];
   state.entities = state.entities || [];

@@ -1,20 +1,29 @@
 import React, { useEffect, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { KeyRound, Plus, X } from 'lucide-react';
 import { PageHeader, DocLink, Panel, EmptyState, TableHead, PrimaryButton } from '../../components/console/ui';
 import { engine } from '../../services/engineClient';
 
 export default function ApiKeysPage() {
-  const [open, setOpen] = useState(false);
+  const [params] = useSearchParams();
+  const [open, setOpen] = useState(params.get('create') === '1');
   const [name, setName] = useState('');
   const [created, setCreated] = useState<any[] | null>(null);
   const [secret, setSecret] = useState('');
   const [check, setCheck] = useState('');
   const [checkMsg, setCheckMsg] = useState('');
   const [error, setError] = useState('');
+  const [nameQ, setNameQ] = useState('');
+  const [sourceQ, setSourceQ] = useState('');
+  const [creatorQ, setCreatorQ] = useState('');
+
+  const load = () => {
+    engine.keys({ name: nameQ, source: sourceQ, creator: creatorQ }).then((d) => setCreated(d.keys || [])).catch(() => setCreated([]));
+  };
 
   useEffect(() => {
-    engine.keys().then((d) => setCreated(d.keys || [])).catch(() => setCreated([]));
-  }, []);
+    load();
+  }, [nameQ, sourceQ, creatorQ]);
 
   return (
     <div className="max-w-[1100px] mx-auto">
@@ -53,8 +62,19 @@ export default function ApiKeysPage() {
         {error && <p className="text-[12px] text-red-300 mt-2">{error}</p>}
       </Panel>
 
+      <div className="flex flex-wrap gap-2 mb-3">
+        <input value={nameQ} onChange={(e) => setNameQ(e.target.value)} placeholder="Name" className="h-8 px-2 rounded-lg border border-white/[0.08] bg-[#0c0c0e] text-[12px]" />
+        <select value={sourceQ} onChange={(e) => setSourceQ(e.target.value)} className="h-8 px-2 rounded-lg border border-white/[0.08] bg-[#0c0c0e] text-[12px] text-zinc-300">
+          <option value="">All sources</option>
+          <option value="console">console</option>
+          <option value="oauth">oauth</option>
+          <option value="cli">cli</option>
+          <option value="mcp">mcp</option>
+        </select>
+        <input value={creatorQ} onChange={(e) => setCreatorQ(e.target.value)} placeholder="Creator" className="h-8 px-2 rounded-lg border border-white/[0.08] bg-[#0c0c0e] text-[12px]" />
+      </div>
       <Panel>
-        <TableHead cols={['API KEY', 'SCOPE', 'CREATED', 'LAST USED', 'EXPIRES']} />
+        <TableHead cols={['API KEY', 'SOURCE', 'CREATOR', 'SCOPE', 'CREATED', 'LAST USED', 'REVOKE']} />
         <div className="relative min-h-[320px]">
           {created === null ? (
             <p className="px-4 py-8 text-[13px] text-zinc-400">Loading keys…</p>
@@ -77,16 +97,18 @@ export default function ApiKeysPage() {
           ) : (
             <div className="overflow-x-auto">
               {(created || []).map((k) => (
-                <div key={k.id || k.prefix} className="grid grid-cols-5 min-w-[560px] px-4 py-3 text-[13px] text-zinc-300 border-t border-white/[0.06] items-center">
-                  <span className="font-mono">{k.name ? `${k.name} · ${k.prefix}` : k.prefix}</span>
-                  <span>Full</span>
+                <div key={k.id || k.prefix} className="grid grid-cols-7 min-w-[760px] px-4 py-3 text-[13px] text-zinc-300 border-t border-white/[0.06] items-center">
+                  <span className="font-mono truncate">{k.name ? `${k.name} · ${k.prefix}` : k.prefix}</span>
+                  <span>{k.source || 'console'}</span>
+                  <span className="truncate">{k.createdBy?.email || k.createdBy?.name || k.createdBy?.uid || '—'}</span>
+                  <span>{k.scope || (k.readOnly ? 'Read-only' : 'Full')}</span>
                   <span>{k.createdAt ? new Date(k.createdAt).toLocaleDateString() : 'Just now'}</span>
                   <span>{k.lastUsed || '—'}</span>
                   <button
                     type="button"
                     className="text-left text-[12px] text-red-300 hover:text-red-200"
                     onClick={async () => {
-                      if (!k.id) return;
+                      if (!k.id || k.canRevoke === false) return;
                       if (!window.confirm(`Revoke ${k.name || k.prefix}?`)) return;
                       try {
                         await engine.revokeKey(k.id);

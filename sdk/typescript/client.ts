@@ -30,6 +30,35 @@ export class RukmerClient {
     return this.call('/v4/inject', { query, ...extra });
   }
 
+  injectStable(query: string, opts: { sessionId?: string; threadId?: string } & Record<string, unknown> = {}) {
+    return this.call('/v4/inject', { query, ...opts });
+  }
+
+  listDocuments(opts: { cursor?: string; limit?: number; containerTag?: string } = {}) {
+    return this.call('/v3/documents/list', { cursor: opts.cursor || '', limit: opts.limit ?? 50, containerTag: opts.containerTag });
+  }
+
+  listMemories(opts: { cursor?: string; limit?: number; containerTag?: string } = {}) {
+    const q = new URLSearchParams();
+    if (opts.cursor) q.set('cursor', opts.cursor);
+    q.set('limit', String(opts.limit ?? 50));
+    if (opts.containerTag) q.set('containerTag', opts.containerTag);
+    return this.call(`/v4/memories?${q}`, undefined, 'GET');
+  }
+
+  listChunks(opts: { docId: string; cursor?: string; limit?: number }) {
+    const q = new URLSearchParams({ docId: opts.docId, limit: String(opts.limit ?? 50) });
+    if (opts.cursor) q.set('cursor', opts.cursor);
+    return this.call(`/v4/chunks?${q}`, undefined, 'GET');
+  }
+
+  listEntities(opts: { cursor?: string; limit?: number; sort?: string; containerTag?: string } = {}) {
+    const q = new URLSearchParams({ limit: String(opts.limit ?? 50), sort: opts.sort || 'degree' });
+    if (opts.cursor) q.set('cursor', opts.cursor);
+    if (opts.containerTag) q.set('containerTag', opts.containerTag);
+    return this.call(`/v4/entities?${q}`, undefined, 'GET');
+  }
+
   private async call(path: string, body?: unknown, method = 'POST') {
     const headers: Record<string, string> = { 'Content-Type': 'application/json' };
     if (this.opts.apiKey) headers.Authorization = `Bearer ${this.opts.apiKey}`;

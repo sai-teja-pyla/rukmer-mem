@@ -1,4 +1,5 @@
 import { getState, mergeRemoteApiKeys, sha, type ApiKeyRec, type OauthRefreshRec } from './core.js';
+import { listMyTeams } from './teams.js';
 
 const COLLECTION = 'rukmerApiKeys';
 
@@ -25,6 +26,12 @@ function asRec(hash: string, data: Partial<ApiKeyRec>): ApiKeyRec {
     lastUsed: data.lastUsed ? String(data.lastUsed) : null,
     ownerUid: String(data.ownerUid || ''),
     connector: data.connector ? String(data.connector) : undefined,
+    source: data.source,
+    createdBy: data.createdBy,
+    orgId: data.orgId,
+    teamId: data.teamId,
+    readOnly: data.readOnly === true,
+    containerTags: Array.isArray(data.containerTags) ? data.containerTags.map(String) : undefined,
   };
 }
 
@@ -45,6 +52,12 @@ export async function rememberKey(rec: ApiKeyRec) {
     lastUsed: rec.lastUsed,
     ownerUid: rec.ownerUid || '',
     connector: rec.connector || '',
+    source: rec.source || '',
+    createdBy: rec.createdBy || null,
+    orgId: rec.orgId || '',
+    teamId: rec.teamId || '',
+    readOnly: rec.readOnly === true,
+    containerTags: rec.containerTags || [],
   });
 }
 
@@ -125,6 +138,22 @@ export async function consumeRefresh(hash: string) {
   const firestore = await db();
   if (firestore) await firestore.collection('rukmerOauthRefresh').doc(hash).delete().catch(() => undefined);
   return rec;
+}
+
+export function keysVisible(actor: string) {
+  const teams = listMyTeams(actor).teams;
+  const adminTeams = teams.filter((team) => (team.members || []).some((member) => member.uid === actor && (member.role === 'owner' || member.role === 'admin')));
+  const adminIds = new Set(adminTeams.map((team) => team.id));
+  const adminOrgs = new Set(adminTeams.map((team) => team.orgId).filter(Boolean));
+  return getState().apiKeys.filter((key) => {
+    if (key.ownerUid === actor) return true;
+    if (key.teamId && adminIds.has(key.teamId)) return true;
+    if (key.orgId && adminOrgs.has(key.orgId)) return true;
+    return false;
+  }).map((key) => ({
+    key,
+    canRevoke: key.ownerUid === actor || (!!key.teamId && adminIds.has(key.teamId)) || (!!key.orgId && adminOrgs.has(String(key.orgId))),
+  }));
 }
 
 export async function syncStoredKeys() {

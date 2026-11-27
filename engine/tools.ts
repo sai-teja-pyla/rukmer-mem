@@ -1,3 +1,4 @@
+import { getState } from './core.js';
 import { commitImportantMemory, listAuthoredMemories, searchMemory } from './pipeline.js';
 import { TOOL_ALLOWLIST } from './security.js';
 import { readTagsFor } from './spaces.js';
@@ -46,10 +47,14 @@ export const MEMORY_TOOLS = [
   },
 ];
 
-export async function runMemoryTool(name: string, args: any, uid?: string) {
+export async function runMemoryTool(name: string, args: any, uid?: string, access?: { readOnly?: boolean; containerTags?: string[] }) {
   if (!uid) throw Object.assign(new Error('Sign in required'), { status: 401 });
   if (!TOOL_ALLOWLIST.includes(name as (typeof TOOL_ALLOWLIST)[number])) {
     throw Object.assign(new Error('Tool is not allowed'), { status: 403 });
+  }
+  if (access?.readOnly && name !== 'searchMemories') throw Object.assign(new Error('Read-only key'), { status: 403 });
+  if (access?.containerTags?.length && args?.containerTag && !access.containerTags.includes(String(args.containerTag))) {
+    throw Object.assign(new Error('Tag is outside this key'), { status: 403 });
   }
   const scope = args?.scope === 'private' || args?.scope === 'team' || args?.scope === 'all' ? args.scope : 'all';
   if (name === 'searchMemories') {
@@ -65,7 +70,7 @@ export async function runMemoryTool(name: string, args: any, uid?: string) {
       });
     }
     const tags = readTagsFor(uid, { scope: scope === 'private' || scope === 'team' ? scope : 'all', teamId: args?.teamId, containerTag: args?.containerTag });
-    return searchMemory(query, {
+    const found = await searchMemory(query, {
       containerTag: tags[0] || homeTag(uid),
       containerTags: tags,
       topK: 8,
@@ -77,11 +82,22 @@ export async function runMemoryTool(name: string, args: any, uid?: string) {
       until: args?.until,
       topic: args?.topic,
     });
+    const docs = new Map(getState().documents.map((doc) => [doc.id, doc]));
+    const matches = (found.matches || []).map((match) => {
+      const doc = docs.get(String(match.docId || match.id || ''));
+      return {
+        ...match,
+        processingStatus: doc?.processingStatus || 'done',
+        memoryStatusReason: doc?.memoryStatusReason || '',
+      };
+    });
+    const pending = matches.some((match) => match.processingStatus !== 'done');
+    return { ...found, matches, memoryExtraction: pending ? 'in_progress' : 'complete' };
   }
   if (name === 'addMemory') {
     const writeScope = args?.scope === 'team' ? 'team' : 'private';
     const requested = String(args?.containerTag || '').trim();
-    return commitImportantMemory({
+    const saved = await commitImportantMemory({
       title: args?.title,
       text: String(args?.text || ''),
       containerTag: requested && ownsTag(uid, requested) ? requested : homeTag(uid),
@@ -90,6 +106,13 @@ export async function runMemoryTool(name: string, args: any, uid?: string) {
       scope: writeScope,
       teamId: args?.teamId,
     });
+    const status = saved.document?.processingStatus || (saved.skipped ? 'done' : 'searchable');
+    return {
+      ...saved,
+      processingStatus: status,
+      memoryStatusReason: saved.document?.memoryStatusReason || '',
+      memoryExtraction: status === 'done' ? 'complete' : 'in_progress',
+    };
   }
   throw new Error(`Unknown memory tool ${name}`);
 }
