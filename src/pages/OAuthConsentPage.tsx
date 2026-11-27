@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { engine } from '../services/engineClient';
 
@@ -7,8 +7,15 @@ export default function OAuthConsentPage() {
   const navigate = useNavigate();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
-  const client = params.get('client_id') || 'unknown client';
+  const [readOnly, setReadOnly] = useState(params.get('scope') === 'memory:read');
+  const [tags, setTags] = useState<string[]>([]);
+  const [picked, setPicked] = useState<string[]>([]);
+  const client = params.get('connector') || params.get('client') || params.get('client_id') || 'unknown client';
   const redirect = params.get('redirect_uri') || '';
+
+  useEffect(() => {
+    engine.tags().then((out) => setTags((out.tags || []).map((row: { tag: string }) => row.tag))).catch(() => setTags([]));
+  }, []);
 
   const allow = async () => {
     setBusy(true);
@@ -21,6 +28,10 @@ export default function OAuthConsentPage() {
         code_challenge: params.get('code_challenge'),
         code_challenge_method: params.get('code_challenge_method'),
         browser: params.get('browser'),
+        connector: params.get('connector') || params.get('client'),
+        readOnly,
+        containerTags: picked,
+        scope: readOnly ? 'memory:read' : 'memory',
       });
       if (out.redirect) {
         window.location.assign(out.redirect);
@@ -43,6 +54,21 @@ export default function OAuthConsentPage() {
             ? 'The Rukmer browser extension wants to save pages you choose and search your private memory.'
             : `${client} wants to search and save durable facts in your private Rukmer space. Allow once. ChatGPT, Gemini, Claude, and Grok then use this memory going forward. They cannot import old website threads.`}
         </p>
+        <p className="text-[13px] text-zinc-200 mb-2">Connecting {client}</p>
+        <label className="flex items-center gap-2 text-[13px] text-zinc-300 mb-3">
+          <input type="checkbox" checked={readOnly} onChange={(e) => setReadOnly(e.target.checked)} />
+          Read only
+        </label>
+        {tags.length > 0 ? (
+          <div className="mb-3 max-h-28 overflow-auto text-[12px] text-zinc-400">
+            {tags.map((tag) => (
+              <label key={tag} className="flex items-center gap-2 py-0.5">
+                <input type="checkbox" checked={picked.includes(tag)} onChange={() => setPicked((cur) => cur.includes(tag) ? cur.filter((item) => item !== tag) : [...cur, tag])} />
+                {tag}
+              </label>
+            ))}
+          </div>
+        ) : null}
         {redirect && <p className="text-[11px] font-mono text-zinc-500 break-all mb-4">{redirect}</p>}
         {error && <p className="text-[13px] text-red-400 mb-3">{error}</p>}
         <div className="flex gap-2">

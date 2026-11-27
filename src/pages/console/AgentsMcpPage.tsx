@@ -1,8 +1,52 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
+import { engine } from '../../services/engineClient';
 import { Link } from 'react-router-dom';
 import { Bot, Copy, Check } from 'lucide-react';
 import { PageHeader, DocLink, Panel, EmptyState, TableHead, PrimaryButton, Toggle } from '../../components/console/ui';
 import { mcpUrl as liveMcpUrl } from '../../services/aiConnectors';
+
+function ConnectedAgents() {
+  const [rows, setRows] = useState<any[] | null>(null);
+  const load = () => engine.agents().then((out) => setRows(out.agents || [])).catch(() => setRows([]));
+  useEffect(() => { load(); }, []);
+  if (!rows) return <p className="px-4 py-6 text-[13px] text-zinc-500">Loading agents…</p>;
+  if (!rows.length) {
+    return (
+      <EmptyState
+        icon={<Bot size={18} />}
+        title="No agents connected yet"
+        body="Agents appear here with their key, device, and access."
+      />
+    );
+  }
+  const groups = ['coding', 'chat', 'personal'];
+  return (
+    <div>
+      {groups.map((group) => {
+        const items = rows.filter((row) => row.group === group);
+        if (!items.length) return null;
+        return (
+          <div key={group}>
+            <p className="px-4 pt-3 text-[11px] uppercase tracking-wide text-zinc-500">{group}</p>
+            {items.map((row) => (
+              <div key={row.id} className="grid grid-cols-5 gap-2 px-4 py-2 text-[12.5px] text-zinc-300 border-t border-white/[0.05]">
+                <span>{row.name || row.connector}</span>
+                <span>{row.readOnly ? 'Read-only' : row.containerTags?.length ? row.containerTags.join(', ') : 'Full'}</span>
+                <span>{row.connector}</span>
+                <span>{row.createdAt ? new Date(row.createdAt).toLocaleDateString() : '—'}</span>
+                <span className="flex items-center gap-2">
+                  {row.lastUsed ? new Date(row.lastUsed).toLocaleDateString() : '—'}
+                  <button className="text-zinc-500" onClick={() => engine.patchKey(row.id, { readOnly: !row.readOnly }).then(load)}>access</button>
+                  <button className="text-zinc-500" onClick={() => engine.revokeKey(row.id).then(load)}>disconnect</button>
+                </span>
+              </div>
+            ))}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
 
 type AgentId = 'claude' | 'cursor' | 'codex';
 
@@ -123,19 +167,7 @@ export default function AgentsMcpPage() {
       <p className="text-[14px] font-medium text-zinc-200 mb-2">Connected</p>
       <Panel className="mb-8">
         <TableHead cols={['AGENT', 'ACCESS', 'DEVICE', 'CREATED', 'LAST ACTIVE']} />
-        <EmptyState
-          icon={<Bot size={18} />}
-          title="No agents connected yet"
-          body="Agents appear here with their key, device, and access."
-          action={
-            <button
-              onClick={() => copy('plugin', pluginCmd)}
-              className="h-8 px-3 rounded-lg border border-white/[0.1] text-[12.5px] text-zinc-300 font-mono inline-flex items-center gap-2"
-            >
-              $ {pluginCmd} {copied === 'plugin' ? <Check size={12} /> : <Copy size={12} />}
-            </button>
-          }
-        />
+        <ConnectedAgents />
       </Panel>
 
       <p className="text-[14px] font-medium text-zinc-200">In your agents</p>

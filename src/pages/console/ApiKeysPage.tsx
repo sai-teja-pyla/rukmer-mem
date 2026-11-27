@@ -1,10 +1,12 @@
 import React, { useEffect, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { KeyRound, Plus, X } from 'lucide-react';
 import { PageHeader, DocLink, Panel, EmptyState, TableHead, PrimaryButton } from '../../components/console/ui';
 import { engine } from '../../services/engineClient';
 
 export default function ApiKeysPage() {
-  const [open, setOpen] = useState(false);
+  const [params] = useSearchParams();
+  const [open, setOpen] = useState(params.get('create') === '1');
   const [name, setName] = useState('');
   const [created, setCreated] = useState<any[] | null>(null);
   const [secret, setSecret] = useState('');
@@ -79,7 +81,7 @@ export default function ApiKeysPage() {
               {(created || []).map((k) => (
                 <div key={k.id || k.prefix} className="grid grid-cols-5 min-w-[560px] px-4 py-3 text-[13px] text-zinc-300 border-t border-white/[0.06] items-center">
                   <span className="font-mono">{k.name ? `${k.name} · ${k.prefix}` : k.prefix}</span>
-                  <span>Full</span>
+                  <span>{k.scope || (k.readOnly ? 'Read-only' : 'Full')}</span>
                   <span>{k.createdAt ? new Date(k.createdAt).toLocaleDateString() : 'Just now'}</span>
                   <span>{k.lastUsed || '—'}</span>
                   <button

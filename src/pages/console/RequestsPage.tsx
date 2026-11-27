@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { Activity } from 'lucide-react';
 import { PageHeader, DocLink, Panel, EmptyState } from '../../components/console/ui';
 import { engine } from '../../services/engineClient';
@@ -12,6 +13,8 @@ function inRange(at: string, range: '24h' | '7d') {
 }
 
 export default function RequestsPage() {
+  const [params] = useSearchParams();
+  const focusId = params.get('id') || '';
   const [data, setData] = useState<any>({ requests: [], byType: {}, ok: 0, avgMs: 0 });
   const [phase, setPhase] = useState<'loading' | 'ready' | 'error'>('loading');
   const [error, setError] = useState('');
@@ -128,7 +131,7 @@ export default function RequestsPage() {
         ) : (
           <div>
             {rows.map((r: any) => (
-              <div key={r.id} className="grid grid-cols-5 px-4 py-2.5 text-[12.5px] text-zinc-400 border-t border-white/[0.06]">
+              <div key={r.id} className={`grid grid-cols-5 px-4 py-2.5 text-[12.5px] text-zinc-400 border-t border-white/[0.06] ${focusId && focusId === r.id ? 'bg-white/[0.06]' : ''}`}>
                 <span>{r.method}</span>
                 <span className="text-zinc-200">{r.path}</span>
                 <span>{r.status}</span>

@@ -3,7 +3,18 @@ import { findKey, touchKey } from './keys.js';
 import { sanitizeUid } from './tenancy.js';
 import { mcpUnauthorized } from './oauth.js';
 
-export type MemoryUser = { uid: string; via: 'firebase' | 'apikey' | 'dev'; email?: string; emailVerified?: boolean };
+export type MemoryUser = {
+  uid: string;
+  via: 'firebase' | 'apikey' | 'dev';
+  email?: string;
+  emailVerified?: boolean;
+  name?: string;
+  readOnly?: boolean;
+  containerTags?: string[];
+  teamId?: string;
+  orgId?: string;
+  keyId?: string;
+};
 
 declare global {
   namespace Express {
@@ -101,23 +112,33 @@ async function verifyFirebase(token: string): Promise<TokenCheck> {
   return toolkit.status === 'unavailable' && admin.status === 'unavailable' ? admin : toolkit;
 }
 
-async function uidFromApiKey(token: string) {
+async function keyUser(token: string): Promise<MemoryUser | null> {
   const raw = token.trim();
-  if (!raw.startsWith('rk_live_')) return '';
+  if (!raw.startsWith('rk_live_')) return null;
   const rec = await findKey(raw);
-  if (!rec) return '';
+  if (!rec) return null;
   const uid = sanitizeUid(rec.ownerUid || '');
-  if (!uid) return '';
+  if (!uid) return null;
   void touchKey(rec.hash);
-  return uid;
+  return {
+    uid,
+    via: 'apikey',
+    email: rec.createdBy?.email,
+    name: rec.createdBy?.name,
+    readOnly: rec.readOnly === true,
+    containerTags: rec.containerTags?.length ? rec.containerTags : undefined,
+    teamId: rec.teamId,
+    orgId: rec.orgId,
+    keyId: rec.id,
+  };
 }
 
 export async function resolveIdentity(req: Request): Promise<MemoryUser> {
   const token = extractAccessToken(req);
   if (token.startsWith('rk_live_')) {
-    const uid = await uidFromApiKey(token);
-    if (!uid) throw Object.assign(new Error('Invalid API key'), { status: 401 });
-    return { uid, via: 'apikey' };
+    const user = await keyUser(token);
+    if (!user) throw Object.assign(new Error('Invalid API key'), { status: 401 });
+    return user;
   }
   if (token && token.split('.').length === 3) {
     const verified = await verifyFirebase(token);

@@ -147,6 +147,7 @@ export default function ConsoleLayout({ user, restoring = false }: ConsoleLayout
   const searchRequest = useRef(0);
   const [menuOpen, setMenuOpen] = useState(false);
   const [navOpen, setNavOpen] = useState(false);
+  const [palette, setPalette] = useState('');
   const searchRef = useRef<HTMLInputElement>(null);
   const homeTag = makeHomeTag(user.uid);
 
@@ -184,8 +185,7 @@ export default function ConsoleLayout({ user, restoring = false }: ConsoleLayout
     const onKey = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
         e.preventDefault();
-        setNavOpen(true);
-        searchRef.current?.focus();
+        setPalette((cur) => (cur === 'open' ? '' : 'open'));
       }
     };
     window.addEventListener('keydown', onKey);
@@ -566,6 +566,55 @@ export default function ConsoleLayout({ user, restoring = false }: ConsoleLayout
           )}
         </main>
       </div>
+      {palette ? (
+        <div className="fixed inset-0 z-[80] bg-black/50 flex items-start justify-center pt-[12vh]" onClick={() => setPalette('')}>
+          <div className="w-[min(560px,92vw)] rounded-xl bg-[#161618] border border-white/[0.08] p-2" onClick={(e) => e.stopPropagation()}>
+            <input
+              autoFocus
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Jump to a page or memory"
+              className="w-full h-10 bg-transparent px-3 text-[14px] outline-none"
+              onKeyDown={(e) => {
+                if (e.key === 'Escape') setPalette('');
+              }}
+            />
+            {[
+              ['Overview', '/overview'],
+              ['Requests', '/requests'],
+              ['API keys', '/api-keys?create=1'],
+              ['Agents', '/agents'],
+              ['Connectors', '/connectors'],
+              ['Graph', '/memory-graph'],
+            ]
+              .filter((row) => row[0].toLowerCase().includes(query.toLowerCase()))
+              .map((row) => (
+                <button
+                  key={row[1]}
+                  className="w-full text-left px-3 py-2 text-[13px] text-zinc-200 hover:bg-white/[0.05] rounded-md"
+                  onClick={() => {
+                    setPalette('');
+                    navigate(row[1]);
+                  }}
+                >
+                  {row[0]}
+                </button>
+              ))}
+            {memories.slice(0, 6).map((hit) => (
+              <button
+                key={hit.id}
+                className="w-full text-left px-3 py-2 text-[13px] text-zinc-400 hover:bg-white/[0.05] rounded-md"
+                onClick={() => {
+                  setPalette('');
+                  navigate(`/requests?id=${encodeURIComponent(hit.id)}`);
+                }}
+              >
+                {hit.title || hit.text}
+              </button>
+            ))}
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

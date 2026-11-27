@@ -1,3 +1,4 @@
+import crypto from 'crypto';
 import { buildProfile, bucketFor } from './memory.js';
 import { isProfileQuestion, needsMemory, selectMemories, type MemoryHit } from './relevance.js';
 import type { SearchOpts } from './pipeline.js';
@@ -123,7 +124,7 @@ export async function buildMemoryInjection(query: string, containerTag: string, 
       occurredAt: prior.occurredAt || null,
     };
   });
-  const ranked = [...chosen].sort((a, b) => Number(b.score || 0) - Number(a.score || 0));
+  const ranked = [...chosen].sort((a, b) => String((a as { createdAt?: string }).createdAt || '').localeCompare(String((b as { createdAt?: string }).createdAt || '')) || String(a.id).localeCompare(String(b.id)));
   let profileText = '';
   if (aboutUser) profileText = profile.staticText || '';
   else profileText = ranked.filter((hit) => hit.source === 'profile').map((hit) => hit.text).join('\n');
@@ -135,7 +136,16 @@ export async function buildMemoryInjection(query: string, containerTag: string, 
   if (profileText && estimateTokens(profileText) > TOKEN_BUDGET) profileText = profileText.slice(0, TOKEN_BUDGET * 4);
   if (!kept.length && !aboutUser) profileText = '';
   retrieved.matches = retrieved.matches.filter((match) => kept.some((hit) => hit.id === match.id));
-  const chunks = kept.map((hit, i) => `[${i + 1}] (${hit.title || hit.source || 'memory'}) ${hit.text.slice(0, 420)}`).join('\n');
+  const sessionId = String(opts.sessionId || '');
+  const stable = applySession(sessionId, opts.actorId || '', tag, kept.map((hit) => ({
+    id: String(hit.id),
+    title: hit.title || hit.source || 'memory',
+    text: String(hit.text || '').slice(0, 420),
+    createdAt: String((hit as { createdAt?: string }).createdAt || ''),
+  })));
+  const chunks = stable.rows.map((hit) => `[${hit.n}] (${hit.title}) ${hit.text}`).join('\n');
+  const prior = stable.rows.filter((hit) => !stable.newIds.includes(hit.id));
+  const prefix = memoryBlock(profileText, prior.map((hit) => `[${hit.n}] (${hit.title}) ${hit.text}`).join('\n'));
   const injection = memoryBlock(profileText, chunks);
   const tokensInjected = estimateTokens(injection);
   const scores = retrieved.matches.map((match) => Number(match.score) || 0);
@@ -149,7 +159,41 @@ export async function buildMemoryInjection(query: string, containerTag: string, 
     containerTag: tag,
     tokensInjected,
     skipReason,
+    prefixHash: shaText(prefix),
+    fullHash: shaText(injection),
+    reusedMemoryIds: prior.map((hit) => hit.id),
+    newMemoryIds: stable.newIds,
+    prefixChars: prefix.length,
   };
+}
+
+type SessionRow = { id: string; title: string; text: string; createdAt: string; n: number };
+const injectSessions = new Map<string, { at: number; rows: SessionRow[] }>();
+
+function shaText(value: string) {
+  return crypto.createHash('sha256').update(value).digest('hex');
+}
+
+function applySession(sessionId: string, actor: string, tag: string, hits: { id: string; title: string; text: string; createdAt: string }[]) {
+  const fresh = hits.filter((hit) => hit.id);
+  if (!sessionId) {
+    const rows = fresh.map((hit, index) => ({ ...hit, n: index + 1 }));
+    return { rows, newIds: rows.map((hit) => hit.id) };
+  }
+  const key = `${actor}|${tag}|${sessionId}`;
+  const now = Date.now();
+  for (const [id, row] of injectSessions) if (now - row.at > 30 * 60 * 1000) injectSessions.delete(id);
+  const prev = injectSessions.get(key);
+  const rows = prev ? prev.rows.map((row) => ({ ...row })) : [];
+  const seen = new Set(rows.map((row) => row.id));
+  const added = fresh.filter((hit) => !seen.has(hit.id)).sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id));
+  const newIds: string[] = [];
+  for (const hit of added) {
+    rows.push({ ...hit, n: rows.length + 1 });
+    newIds.push(hit.id);
+  }
+  injectSessions.set(key, { at: now, rows });
+  return { rows, newIds };
 }
 
 export function injectOpenAIMessages(messages: ChatMessage[], injection: string, systemLead: string) {

@@ -46,10 +46,14 @@ export const MEMORY_TOOLS = [
   },
 ];
 
-export async function runMemoryTool(name: string, args: any, uid?: string) {
+export async function runMemoryTool(name: string, args: any, uid?: string, access?: { readOnly?: boolean; containerTags?: string[] }) {
   if (!uid) throw Object.assign(new Error('Sign in required'), { status: 401 });
   if (!TOOL_ALLOWLIST.includes(name as (typeof TOOL_ALLOWLIST)[number])) {
     throw Object.assign(new Error('Tool is not allowed'), { status: 403 });
+  }
+  if (access?.readOnly && name !== 'searchMemories') throw Object.assign(new Error('Read-only key'), { status: 403 });
+  if (access?.containerTags?.length && args?.containerTag && !access.containerTags.includes(String(args.containerTag))) {
+    throw Object.assign(new Error('Tag is outside this key'), { status: 403 });
   }
   const scope = args?.scope === 'private' || args?.scope === 'team' || args?.scope === 'all' ? args.scope : 'all';
   if (name === 'searchMemories') {

@@ -83,6 +83,12 @@ export const engine = {
   jobs: () => req('/v3/jobs'),
   requests: () => req('/v3/requests'),
   setupStatus: () => req('/v3/requests/setup-status'),
+  agents: () => req('/v4/agents'),
+  patchKey: (id: string, body: { readOnly?: boolean; containerTags?: string[] }) =>
+    req(`/v3/keys/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(body) }),
+  requestConnector: (body: { tool: string; useCase: string }) =>
+    req('/v4/connectors/request', { method: 'POST', body: JSON.stringify(body) }),
+  entities: (query = '') => req(`/v4/entities${query}`),
   keys: () => req('/v3/keys'),
   createKey: (name: string) => req('/v3/keys', { method: 'POST', body: JSON.stringify({ name }) }),
   revokeKey: (id: string) => req(`/v3/keys/${encodeURIComponent(id)}`, { method: 'DELETE' }),

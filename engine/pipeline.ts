@@ -50,6 +50,7 @@ export type SearchOpts = {
   since?: string;
   until?: string;
   topic?: string;
+  sessionId?: string;
 };
 
 function scopedChunks(tag?: string | null, includeForgotten = false) {
@@ -143,6 +144,7 @@ export async function ingestDocument(input: {
   extraction?: string;
   originalText?: string;
   durable?: boolean;
+  deferExtract?: boolean;
 }) {
   const raw = sanitizePlain(input.text, 200000).trim();
   if (!raw) throw Object.assign(new Error('Empty document'), { status: 400 });
@@ -245,14 +247,34 @@ export async function ingestDocument(input: {
     scope: scopeFromTag(tag),
     gov: gov ? { ...gov } : undefined,
   };
+  doc.processingStatus = 'queued';
   const chunks = await attachChunks(doc, text);
+  doc.processingStatus = 'searchable';
   state.documents.push(doc);
-
-  if (input.task !== 'rag' && input.extract !== false) await extractInto(tag, text, doc.gov, doc.originalText || text);
+  const skipExtract = input.task === 'rag' || input.extract === false;
+  const finishExtract = async () => {
+    if (skipExtract) {
+      doc.processingStatus = 'done';
+      doc.memoryStatusReason = 'Extraction skipped';
+      return;
+    }
+    const before = getState().triples.filter((row) => row.containerTag === tag).length;
+    try {
+      await extractInto(tag, text, doc.gov, doc.originalText || text);
+      const after = getState().triples.filter((row) => row.containerTag === tag).length;
+      doc.processingStatus = 'done';
+      doc.memoryStatusReason = after > before ? '' : 'No durable facts found';
+    } catch {
+      doc.processingStatus = 'searchable';
+      doc.memoryStatusReason = 'Extraction failed';
+    }
+  };
+  if (input.deferExtract) void finishExtract().finally(() => saveState());
+  else await finishExtract();
 
   state.jobs.push({
     id: uid('job'),
-    status: 'done',
+    status: doc.processingStatus || 'done',
     message: `Ingested ${doc.title} (${chunks.length} chunks)`,
     at: new Date().toISOString(),
     ownerUid: uidFromTag(tag),
@@ -415,6 +437,7 @@ export async function ingestPayload(item: {
   teamId?: string;
   memoryKind?: string;
   sourceRef?: string;
+  deferExtract?: boolean;
 }) {
   const title = sanitizeName(item.title || item.name || 'Untitled');
   let text = sanitizePlain(item.text || item.content || '', 200000);
@@ -456,6 +479,7 @@ export async function ingestPayload(item: {
     source: item.source || (mime === 'application/pdf' ? 'pdf' : video ? 'video' : image ? 'image' : 'upload'),
     mime,
     task: item.task,
+    deferExtract: item.deferExtract,
     fileId,
     metadata: sanitizeMeta(item.metadata),
     actorId: item.actorId,
@@ -1045,7 +1069,86 @@ export function readDocument(id: string, uid?: string) {
     folder: folderOf(doc),
     text: String(doc.text || '').slice(0, 20000),
     originalText: doc.originalText || '',
+    processingStatus: doc.processingStatus || 'done',
+    memoryStatusReason: doc.memoryStatusReason || '',
   };
+}
+
+export function entityCatalog(uid: string) {
+  const state = getState();
+  const tags = new Set(readTagsFor(uid, { scope: 'all' }));
+  const docs = state.documents.filter((doc) => tags.has(doc.containerTag) && canRead(uid, doc) && !doc.forgotten);
+  const triples = state.triples.filter((row) => tags.has(row.containerTag) && canRead(uid, row));
+  const neighbors = new Map<string, Set<string>>();
+  const link = (left: string, right: string) => {
+    const key = left.trim().toLowerCase();
+    const other = right.trim().toLowerCase();
+    if (!key || !other || key === other) return;
+    const bag = neighbors.get(key) || new Set<string>();
+    bag.add(other);
+    neighbors.set(key, bag);
+  };
+  for (const row of triples) {
+    link(row.subject, row.object);
+    link(row.object, row.subject);
+  }
+  return state.entities
+    .filter((entity) => tags.has(entity.containerTag))
+    .map((entity) => {
+      const key = entity.name.trim().toLowerCase();
+      const sourceDocuments = docs
+        .filter((doc) => `${doc.title}\n${doc.text}`.toLowerCase().includes(key))
+        .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+        .map((doc) => ({ id: doc.id, title: doc.title, createdAt: doc.createdAt, source: doc.source }));
+      return {
+        id: entity.id,
+        name: entity.name,
+        containerTag: entity.containerTag,
+        createdAt: sourceDocuments[0]?.createdAt || '',
+        degree: neighbors.get(key)?.size || 0,
+        sourceDocuments,
+      };
+    });
+}
+
+export function pageStable<T extends { id: string }>(rows: T[], cursor: string, limit: number) {
+  let start = 0;
+  if (cursor) {
+    const id = Buffer.from(cursor, 'base64url').toString('utf8');
+    const idx = rows.findIndex((row) => row.id === id);
+    if (idx < 0) throw Object.assign(new Error('Invalid cursor'), { status: 400 });
+    start = idx + 1;
+  }
+  const items = rows.slice(start, start + limit);
+  const last = items[items.length - 1];
+  const hasMore = start + items.length < rows.length;
+  const nextCursor = hasMore && last ? Buffer.from(last.id).toString('base64url') : null;
+  return { items, nextCursor, hasMore };
+}
+
+export function pageByCursor<T extends { id: string; createdAt?: string }>(rows: T[], cursor: string, limit: number) {
+  const sorted = [...rows].sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')) || b.id.localeCompare(a.id));
+  let start = 0;
+  if (cursor) {
+    let createdAt = '';
+    let id = '';
+    try {
+      const raw = Buffer.from(cursor, 'base64url').toString('utf8');
+      const cut = raw.lastIndexOf('|');
+      createdAt = raw.slice(0, cut);
+      id = raw.slice(cut + 1);
+    } catch {
+      throw Object.assign(new Error('Invalid cursor'), { status: 400 });
+    }
+    const idx = sorted.findIndex((row) => row.id === id && String(row.createdAt || '') === createdAt);
+    if (idx < 0) throw Object.assign(new Error('Invalid cursor'), { status: 400 });
+    start = idx + 1;
+  }
+  const items = sorted.slice(start, start + limit);
+  const last = items[items.length - 1];
+  const hasMore = start + items.length < sorted.length;
+  const nextCursor = hasMore && last ? Buffer.from(`${last.createdAt || ''}|${last.id}`).toString('base64url') : null;
+  return { items, nextCursor, hasMore };
 }
 
 export function listDocuments(containerTag?: string | null, uid?: string) {
@@ -1067,8 +1170,10 @@ export function listDocuments(containerTag?: string | null, uid?: string) {
       fileId: d.fileId,
       chars: (d.text || '').length,
       folder: folderOf(d),
-      preview: String(d.text || '').slice(0, 4000),
+      preview: String(d.text || '').slice(0, 240),
       originalText: d.originalText || '',
+      processingStatus: d.processingStatus || 'done',
+      memoryStatusReason: d.memoryStatusReason || '',
     }));
 }
 

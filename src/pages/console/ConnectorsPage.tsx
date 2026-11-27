@@ -387,6 +387,44 @@ function GmailConnectCard() {
   );
 }
 
+function ConnectorAsk() {
+  const [open, setOpen] = useState(false);
+  const [tool, setTool] = useState('');
+  const [useCase, setUseCase] = useState('');
+  const [note, setNote] = useState('');
+  return (
+    <div className="pt-1">
+      <button type="button" className="text-[12.5px] text-zinc-300 underline" onClick={() => setOpen(true)}>
+        Request a connector
+      </button>
+      {open ? (
+        <div className="mt-2 space-y-2">
+          <input value={tool} onChange={(e) => setTool(e.target.value)} placeholder="Tool" className="w-full h-8 px-2 rounded-md bg-[#0c0c0e] border border-white/[0.08] text-[12px]" />
+          <input value={useCase} onChange={(e) => setUseCase(e.target.value)} placeholder="What you need it for" className="w-full h-8 px-2 rounded-md bg-[#0c0c0e] border border-white/[0.08] text-[12px]" />
+          <button
+            type="button"
+            className="h-8 px-3 rounded-md bg-[#2563eb] text-[12px] text-white"
+            onClick={() =>
+              engine
+                .requestConnector({ tool, useCase })
+                .then(() => {
+                  setNote('Request saved');
+                  setOpen(false);
+                })
+                .catch((e) => setNote(e.message || 'Could not save the request'))
+            }
+          >
+            Send
+          </button>
+          {note ? <p className="text-[12px] text-zinc-400">{note}</p> : null}
+        </div>
+      ) : note ? (
+        <p className="text-[12px] text-zinc-400">{note}</p>
+      ) : null}
+    </div>
+  );
+}
+
 export default function ConnectorsPage() {
   const [tab, setTab] = useState<'ai' | 'all' | Kind>('ai');
   const [q, setQ] = useState('');
@@ -528,6 +566,7 @@ export default function ConnectorsPage() {
             {copied === 'mcpk' ? <Check size={12} /> : <Copy size={12} />} Copy MCP URL
           </button>
         </div>
+        <ConnectorAsk />
         <p className="text-[11px] font-mono text-zinc-500 break-all">{keyed}</p>
         {connectNote && (
           <p className="text-[12px] text-emerald-400" role="status">

@@ -17,6 +17,7 @@
     "team-brain": "tsx engine/team-brain-test.ts",
     "graph-routes": "tsx engine/graph-routes-test.ts",
     "request-log": "tsx engine/request-log-test.ts",
+    "tier1-upgrades": "tsx engine/tier1-upgrades-test.ts",
     "memory-load": "tsx src/pages/console/memory-load.test.tsx",
     "extension-tests": "tsx extension/src/lib/extension.test.ts",
     "server": "nodemon --exec tsx server.ts",

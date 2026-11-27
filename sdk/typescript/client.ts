@@ -30,6 +30,26 @@ export class RukmerClient {
     return this.call('/v4/inject', { query, ...extra });
   }
 
+  injectStable(query: string, sessionId: string, extra: Record<string, unknown> = {}) {
+    return this.call('/v4/inject', { query, sessionId, ...extra });
+  }
+
+  listDocuments(cursor = '', limit = 50) {
+    return this.call('/v3/documents/list', { cursor, limit });
+  }
+
+  listMemories(cursor = '', limit = 50) {
+    return this.call(`/v4/memories?cursor=${encodeURIComponent(cursor)}&limit=${limit}`, undefined, 'GET');
+  }
+
+  listChunks(docId: string, cursor = '', limit = 50) {
+    return this.call(`/v4/chunks?docId=${encodeURIComponent(docId)}&cursor=${encodeURIComponent(cursor)}&limit=${limit}`, undefined, 'GET');
+  }
+
+  listEntities(cursor = '', limit = 50, sort = 'degree') {
+    return this.call(`/v4/entities?cursor=${encodeURIComponent(cursor)}&limit=${limit}&sort=${sort}`, undefined, 'GET');
+  }
+
   private async call(path: string, body?: unknown, method = 'POST') {
     const headers: Record<string, string> = { 'Content-Type': 'application/json' };
     if (this.opts.apiKey) headers.Authorization = `Bearer ${this.opts.apiKey}`;

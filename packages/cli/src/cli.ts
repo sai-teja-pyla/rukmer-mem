@@ -1,5 +1,7 @@
 #!/usr/bin/env node
+import crypto from 'crypto';
 import fs from 'fs';
+import http from 'http';
 import path from 'path';
 import readline from 'readline';
 import { RukmerClient } from './client.js';
@@ -88,6 +90,7 @@ Options:
   console.log(`rukmer <command>
 
 Commands:
+  login     Sign in through the browser and save a key
   setup     Write RUKMER_API_KEY and wire MCP
   search    Search memory
   add       Save a note
@@ -95,6 +98,48 @@ Commands:
 
 Run rukmer setup --help for setup flags.
 `);
+}
+
+async function login(flags: Flags) {
+  const url = (flags.url || 'https://app.rukmer.com').replace(/\/$/, '');
+  const verifier = crypto.randomBytes(32).toString('base64url');
+  const challenge = crypto.createHash('sha256').update(verifier).digest('base64url');
+  const state = crypto.randomBytes(12).toString('hex');
+  const server = http.createServer();
+  const secret = await new Promise<string>((resolve, reject) => {
+    server.listen(0, '127.0.0.1', () => {
+      const port = (server.address() as { port: number }).port;
+      const redirect = `http://127.0.0.1:${port}/callback`;
+      const authorize = new URL(`${url}/oauth/authorize`);
+      authorize.searchParams.set('redirect_uri', redirect);
+      authorize.searchParams.set('state', state);
+      authorize.searchParams.set('code_challenge', challenge);
+      authorize.searchParams.set('code_challenge_method', 'S256');
+      authorize.searchParams.set('connector', 'cli');
+      console.log(`Open ${authorize.toString()}`);
+      server.on('request', async (req, res) => {
+        const incoming = new URL(req.url || '/', redirect);
+        if (incoming.searchParams.get('state') !== state) {
+          res.end('State mismatch');
+          return;
+        }
+        const code = incoming.searchParams.get('code') || '';
+        const token = await fetch(`${url}/oauth/token`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ grant_type: 'authorization_code', code, redirect_uri: redirect, code_verifier: verifier }),
+        });
+        const data = (await token.json()) as { access_token?: string };
+        res.end('Rukmer is connected. You can close this tab.');
+        server.close();
+        if (!data.access_token) reject(new Error('Login did not return a key'));
+        else resolve(data.access_token);
+      });
+    });
+  });
+  const envName = detectEnvFile(process.cwd());
+  upsertEnv(path.join(process.cwd(), envName), { RUKMER_API_KEY: secret, RUKMER_URL: url });
+  console.log(`Saved ${envName}`);
 }
 
 async function setup(flags: Flags) {
@@ -124,6 +169,7 @@ async function main() {
     help(false);
     return;
   }
+  if (flags.command === 'login') return login(flags);
   if (flags.command === 'setup') return setup(flags);
   const client = new RukmerClient({
     baseUrl: flags.url || process.env.RUKMER_URL || 'https://app.rukmer.com',
