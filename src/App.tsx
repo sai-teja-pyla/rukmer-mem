@@ -28,6 +28,7 @@ const ContainerTagsPage = lazy(() => import('./pages/console/ContainerTagsPage')
 const MemoryGraphPage = lazy(() => import('./pages/console/MemoryGraphPage'));
 const ConnectorsPage = lazy(() => import('./pages/console/ConnectorsPage'));
 const ImportPage = lazy(() => import('./pages/console/ImportPage'));
+const MemoriesPage = lazy(() => import('./pages/console/MemoriesPage'));
 const ApiKeysPage = lazy(() => import('./pages/console/ApiKeysPage'));
 const AgentsMcpPage = lazy(() => import('./pages/console/AgentsMcpPage'));
 const RequestsPage = lazy(() => import('./pages/console/RequestsPage'));
@@ -145,6 +146,7 @@ function AppRoutes() {
           <Route path="/memory-graph" element={<MemoryGraphPage />} />
           <Route path="/connectors" element={<ConnectorsPage />} />
           <Route path="/import" element={<ImportPage />} />
+          <Route path="/memories" element={<MemoriesPage />} />
           <Route path="/api-keys" element={<ApiKeysPage />} />
           <Route path="/agents-mcp" element={<AgentsMcpPage />} />
           <Route path="/requests" element={<RequestsPage />} />

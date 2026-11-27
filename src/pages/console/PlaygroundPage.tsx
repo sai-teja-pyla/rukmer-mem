@@ -424,9 +424,9 @@ export default function PlaygroundPage() {
       aggregate,
       include,
       compareWithoutMemory: compare,
-      prompt: input || null,
+      prompt: input.trim() || submitted || null,
     }),
-    [mode, memoryMode, model, tag, memoryScope, source, useProfile, retrieved, strictness, rerank, retrieval, rewrite, aggregate, include, compare, input]
+    [mode, memoryMode, model, tag, memoryScope, source, useProfile, retrieved, strictness, rerank, retrieval, rewrite, aggregate, include, compare, input, submitted]
   );
 
   const requestPreview = useMemo(() => {
@@ -881,7 +881,7 @@ export default function PlaygroundPage() {
                     ? 'Pick a container tag below to start'
                     : 'Enter a query, then pick a container tag'
                   : mode === 'chat'
-                    ? `Ask anything — memory from ${tag} is used`
+                    ? `Ask anything — memory from ${spaceLabel(tag, { homeTag: mine, teams }).label} is used`
                     : 'Search your memories'}
               </div>
               <textarea

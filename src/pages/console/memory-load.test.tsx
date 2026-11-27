@@ -128,7 +128,8 @@ const populatedHtml = renderToStaticMarkup(<TagRows tags={populated.tags} />);
 check(
   'a populated 200 renders the tag data',
   resourceView('ready', populated.tags.length) === 'ready' &&
-    populatedHtml.includes('u_khNHseed') &&
+    populatedHtml.includes('Personal') &&
+    !populatedHtml.includes('>u_khNHseed<') &&
     populatedHtml.includes('>2<') &&
     populatedHtml.includes('>4<') &&
     populatedHtml.includes('Gmail') &&

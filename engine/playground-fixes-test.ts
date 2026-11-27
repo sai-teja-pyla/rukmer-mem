@@ -22,7 +22,7 @@ const { completeChat, keyFor, missingKeyMessage, providerStatus } = await import
 const { MEMORY_TOOLS } = await import('./tools.js');
 const { MCP_INSTRUCTIONS, CHATGPT_OPENAPI } = await import('./mcp.js');
 const { homeTag } = await import('./tenancy.js');
-const { commitImportantMemory, graphPayload, ingestDocument, ingestPayload, keptRequests, listDocuments, listTags, rememberTranscript, searchMemory } = await import('./pipeline.js');
+const { commitImportantMemory, graphPayload, ingestDocument, ingestPayload, keptRequests, listDocuments, listTags, rememberTranscript, searchMemory, usageEvent } = await import('./pipeline.js');
 const { buildMemoryInjection } = await import('./inject.js');
 const { upsertFacts } = await import('./facts.js');
 const { pickReadyModel } = await import('../src/services/providerKeys.js');
@@ -439,6 +439,25 @@ check('mongolia search stays at zero', noiseSearch.matches.length === 0 && noise
 check('mongolia injection skips the store', !/lisbon|coffee|ulaanbaatar/i.test(noiseBlob) && noiseInjected.retrieved.matches.length === 0);
 const australia = await searchMemory("Nori test: what's the capital of Australia?", { containerTag: noiseTag, actorId: 'noiseuser', topK: 10, strictness: 0.4 });
 check('australia search stays at zero', australia.matches.length === 0);
+const phraseTag = homeTag('phraseuser');
+await ingestDocument({
+  title: 'Lisbon tea',
+  text: 'Nori keeps a private note about jasmine tea in Lisbon.',
+  containerTag: phraseTag,
+  source: 'memory',
+  actorId: 'phraseuser',
+  extract: false,
+});
+const phrase = await searchMemory('jasmine tea in Lisbon', {
+  containerTag: phraseTag,
+  actorId: 'phraseuser',
+  topK: 5,
+  strictness: 0.4,
+  retrieval: 'keyword',
+});
+check('a titled note is found by its phrase', phrase.matches.some((hit) => /jasmine tea/i.test(hit.text)));
+check('console polls are not usage', usageEvent('GET', '/v3/tags').record === false && usageEvent('GET', '/v4/graph').record === false);
+check('search posts stay in usage', usageEvent('POST', '/v4/search').record === true && usageEvent('POST', '/v4/search').type === 'search');
 
 const beforeDump = listDocuments(noiseTag, 'noiseuser').map((doc) => doc.id);
 globalThis.fetch = (async (url: RequestInfo | URL, init?: RequestInit) => {

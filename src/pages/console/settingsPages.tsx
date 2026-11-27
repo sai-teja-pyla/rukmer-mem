@@ -5,6 +5,7 @@ import { PageHeader, DocLink, Panel, Row, Toggle, PrimaryButton, GhostButton, Co
 import type { UserProfile } from '../../types';
 import { loadProviderKeys, saveProviderKeys, type ProviderKeys } from '../../services/providerKeys';
 import { engine } from '../../services/engineClient';
+import { spaceLabel } from '../../services/spaceLabel';
 import { auth } from '../../firebase';
 import { signOut } from 'firebase/auth';
 import { useUserSettings } from '../../hooks/useUserSettings';
@@ -584,7 +585,7 @@ function AccountMemberships() {
           <div key={team.id} className="flex items-center justify-between px-4 py-3.5 border-t border-white/[0.06]">
             <div>
               <p className="text-[13.5px] text-zinc-200">{team.name}</p>
-              <p className="text-[12px] text-zinc-500">{team.orgId || team.tag}</p>
+              <p className="text-[12px] text-zinc-500">{spaceLabel(team.orgId || team.tag || '').label}</p>
             </div>
             <span className="text-[11px] tracking-[0.1em] text-zinc-500">{(team.members || []).length} members</span>
           </div>
