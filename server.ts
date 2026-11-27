@@ -13,7 +13,7 @@ import poolImport from './backend/config/db.js';
 import axios from 'axios';
 import { google } from 'googleapis';
 import { VertexAI, HarmCategory, HarmBlockThreshold } from '@google-cloud/vertexai';
-import { oauth2Client, GOOGLE_SCOPES } from './backend/config/googleConfig.js';
+import { createGoogleOAuth } from './backend/config/googleConfig.js';
 
 const pool = poolImport as any; 
 import { Storage } from '@google-cloud/storage';
@@ -28,9 +28,10 @@ import { consumeOauthState, firestoreOauthStore, issueOauthState, oauthStateSecr
 import { linesVisibleInChannel, slackAccountForMention } from './engine/channelReply.js';
 import { geminiPrompt } from './engine/llm.js';
 import { searchMemory } from './engine/pipeline.js';
+import { gmailConnectionStatus, gmailFailureResponse, isGmailAuthFailure, mergeGmailTokens, type GmailToken } from './engine/gmailOauth.js';
 import { gmailMemoryCount, saveGmailMessages, type GmailDraft } from './engine/gmailSync.js';
 import { findMemory } from './engine/governance.js';
-import { homeTag } from './engine/tenancy.js';
+import { canAccessTag, homeTag } from './engine/tenancy.js';
 import { isProPlan } from './src/services/plan.js';
 import { Pinecone } from '@pinecone-database/pinecone';
 import { ConfidentialClientApplication, InteractionRequiredAuthError, LogLevel } from '@azure/msal-node';
@@ -1495,43 +1496,72 @@ function gmailPlainText(payload: any): string {
   return '';
 }
 
-async function importRecentGmail(userId: string) {
+async function readGmailToken(userId: string) {
   const tokenDoc = await admin.firestore().collection('userTokens').doc(userId).get();
-  const stored = tokenDoc.data()?.google;
-  if (!stored?.access_token && !stored?.refresh_token) {
-    throw Object.assign(new Error('Gmail is not connected'), { status: 400 });
+  return { data: tokenDoc.data() || {}, gmail: (tokenDoc.data()?.gmail || null) as GmailToken | null };
+}
+
+async function writeGmailToken(userId: string, gmail: GmailToken) {
+  await admin.firestore().collection('userTokens').doc(userId).set({ gmail }, { merge: true });
+}
+
+async function markGmailHealth(userId: string, record: GmailToken, health: 'ok' | 'reconnect_required') {
+  const next = { ...record, health, healthCheckedAt: new Date().toISOString() };
+  await writeGmailToken(userId, next);
+  return next;
+}
+
+async function importRecentGmail(userId: string, spaceTag?: string) {
+  const { gmail: stored } = await readGmailToken(userId);
+  if (!stored?.refresh_token) {
+    throw Object.assign(new Error('Gmail is not connected'), { status: 400, code: 'reconnect_required' });
   }
-  const auth = new google.auth.OAuth2(
-    process.env.GOOGLE_CLIENT_ID,
-    process.env.GOOGLE_CLIENT_SECRET,
-    `${CURRENT_BACKEND_URL}/api/auth/google/callback`
-  );
+  const destination = spaceTag && canAccessTag(userId, spaceTag) ? spaceTag : stored.spaceTag && canAccessTag(userId, stored.spaceTag) ? stored.spaceTag : homeTag(userId);
+  const auth = createGoogleOAuth();
   auth.setCredentials(stored);
   auth.on('tokens', (fresh) => {
-    void admin.firestore().collection('userTokens').doc(userId).set({ google: { ...stored, ...fresh } }, { merge: true });
+    void writeGmailToken(userId, mergeGmailTokens(stored, fresh as GmailToken));
   });
   const gmail = google.gmail({ version: 'v1', auth });
-  const listed = await gmail.users.messages.list({
-    userId: 'me',
-    maxResults: 15,
-    q: 'in:inbox newer_than:30d -category:promotions -category:social',
-  });
+  let ids: string[] = [];
+  let nextHistory = stored.historyId || '';
+  try {
+    if (stored.historyId) {
+      const history = await gmail.users.history.list({ userId: 'me', startHistoryId: stored.historyId, historyTypes: ['messageAdded'], maxResults: 20 });
+      ids = (history.data.history || []).flatMap((row) => (row.messagesAdded || []).map((item) => item.message?.id || '')).filter(Boolean);
+      nextHistory = history.data.historyId || stored.historyId;
+    }
+  } catch (err: any) {
+    if (isGmailAuthFailure(err)) throw err;
+    ids = [];
+  }
+  if (!stored.historyId) {
+    const listed = await gmail.users.messages.list({
+      userId: 'me',
+      maxResults: 15,
+      q: 'in:inbox newer_than:30d -category:promotions -category:social',
+    });
+    ids = (listed.data.messages || []).map((row) => row.id || '').filter(Boolean);
+    const profile = await gmail.users.getProfile({ userId: 'me' });
+    nextHistory = profile.data.historyId || nextHistory;
+  }
   const drafts: GmailDraft[] = [];
-  for (const row of listed.data.messages || []) {
-    if (!row.id) continue;
-    const detail = await gmail.users.messages.get({ userId: 'me', id: row.id, format: 'full' });
+  for (const id of ids.slice(0, 20)) {
+    const detail = await gmail.users.messages.get({ userId: 'me', id, format: 'full' });
     const headers = detail.data.payload?.headers || [];
     const header = (name: string) => headers.find((item) => item.name?.toLowerCase() === name.toLowerCase())?.value || '';
     drafts.push({
-      id: row.id,
-      threadId: detail.data.threadId || row.id,
+      id,
+      threadId: detail.data.threadId || id,
       subject: header('Subject') || '(No subject)',
       from: header('From') || '(Unknown sender)',
       date: header('Date'),
       body: gmailPlainText(detail.data.payload) || detail.data.snippet || '',
     });
   }
-  return saveGmailMessages(userId, drafts);
+  const saved = await saveGmailMessages(userId, drafts, destination);
+  await writeGmailToken(userId, mergeGmailTokens(stored, { historyId: nextHistory, lastSyncedAt: new Date().toISOString(), health: 'ok', healthCheckedAt: new Date().toISOString(), spaceTag: destination }));
+  return saved;
 }
 
 async function beginGoogle(req: any, res: any, type: string) {
@@ -1553,7 +1583,11 @@ async function beginGoogle(req: any, res: any, type: string) {
     return;
   }
   try {
-    const url = oauth2Client.generateAuthUrl({
+    const space = String(req.query.space || '').trim();
+    if (linkType === 'gmail' && space && canAccessTag(userId, space)) {
+      await admin.firestore().collection('userTokens').doc(userId).set({ pendingGmailSpace: space }, { merge: true });
+    }
+    const url = createGoogleOAuth().generateAuthUrl({
       access_type: 'offline',
       prompt: 'consent',
       scope: scopes,
@@ -1569,9 +1603,32 @@ app.get('/api/connectors/gmail', authenticateUser, async (req: any, res: any) =>
   const userId = sessionUid(req, res);
   if (!userId) return;
   try {
-    const tokenDoc = await admin.firestore().collection('userTokens').doc(userId).get();
-    const googleTokens = tokenDoc.data()?.google;
-    res.json({ connected: !!(googleTokens?.refresh_token || googleTokens?.access_token), items: gmailMemoryCount(userId) });
+    const { gmail } = await readGmailToken(userId);
+    let healthOk: boolean | null = gmail?.health === 'ok' ? true : gmail?.health === 'reconnect_required' ? false : null;
+    const freshEnough = gmail?.healthCheckedAt && Date.now() - Date.parse(gmail.healthCheckedAt) < 5 * 60 * 1000;
+    if (gmail?.refresh_token && !freshEnough) {
+      const auth = createGoogleOAuth();
+      auth.setCredentials(gmail);
+      try {
+        await auth.getAccessToken();
+        await markGmailHealth(userId, gmail, 'ok');
+        healthOk = true;
+      } catch (err: any) {
+        if (isGmailAuthFailure(err)) {
+          await markGmailHealth(userId, gmail, 'reconnect_required');
+          healthOk = false;
+        }
+      }
+    }
+    const status = gmailConnectionStatus(gmail || undefined, healthOk);
+    const spaceTag = gmail?.spaceTag && canAccessTag(userId, gmail.spaceTag) ? gmail.spaceTag : homeTag(userId);
+    res.json({
+      ...status,
+      items: gmailMemoryCount(userId),
+      lastSync: gmail?.lastSyncedAt || null,
+      space: { id: spaceTag, label: spaceTag.startsWith('tm_') ? 'Organization' : 'Personal', kind: spaceTag.startsWith('tm_') ? 'team' : 'personal' },
+      error: status.status === 'reconnect_required' ? 'Gmail access expired. Reconnect Gmail to continue syncing mail.' : undefined,
+    });
   } catch (err: any) {
     res.status(500).json({ error: err.message || 'Could not read Gmail' });
   }
@@ -1581,18 +1638,33 @@ app.post('/api/connectors/gmail/sync', authenticateUser, async (req: any, res: a
   const userId = sessionUid(req, res);
   if (!userId) return;
   try {
-    res.json(await importRecentGmail(userId));
+    const space = String(req.body?.containerTag || '').trim();
+    res.json(await importRecentGmail(userId, space));
   } catch (err: any) {
-    res.status(err.status || 500).json({ error: err.message || 'Could not sync Gmail' });
+    if (isGmailAuthFailure(err)) {
+      const { gmail } = await readGmailToken(userId);
+      if (gmail) await markGmailHealth(userId, gmail, 'reconnect_required');
+    }
+    const mapped = gmailFailureResponse(err);
+    res.status(mapped.status).json(mapped.body);
   }
 });
 
 app.post('/api/connectors/gmail/disconnect', authenticateUser, async (req: any, res: any) => {
   const userId = sessionUid(req, res);
   if (!userId) return;
-  await admin.firestore().collection('userTokens').doc(userId).set({ google: admin.firestore.FieldValue.delete() }, { merge: true });
+  const { gmail } = await readGmailToken(userId);
+  const token = gmail?.refresh_token || gmail?.access_token;
+  if (token) {
+    await fetch('https://oauth2.googleapis.com/revoke', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: `token=${encodeURIComponent(token)}`,
+    }).catch(() => undefined);
+  }
+  await admin.firestore().collection('userTokens').doc(userId).set({ gmail: admin.firestore.FieldValue.delete() }, { merge: true });
   await admin.firestore().collection('userConnections').doc(userId).set({ gmail: false }, { merge: true });
-  res.json({ connected: false, items: gmailMemoryCount(userId) });
+  res.json({ connected: false, status: 'disconnected', items: gmailMemoryCount(userId) });
 });
 
 app.get('/api/auth/google', authenticateUser, (req: any, res: any) => beginGoogle(req, res, String(req.query.type || 'gdrive')));
@@ -1611,30 +1683,29 @@ app.get('/api/auth/google/callback', async (req: any, res: any) => {
   const type = linked.type === 'gmail' ? 'gmail' : 'gdrive';
 
   try {
-    const { tokens } = await oauth2Client.getToken(code as string);
-    
-    // Save tokens for future AI use
-    await admin.firestore().collection('userTokens').doc(userId).set({
-      google: tokens 
-    }, { merge: true });
-
-    // Turn on the Green Lights for both
-    await admin.firestore().collection('userConnections').doc(userId).set({
-      [type]: true, // Assuming GDrive/GCS are grouped for your UI
-    }, { merge: true });
-
-    const front = `${IS_PROD ? 'https://app.rukmer.com' : 'http://localhost:5173'}/connectors`;
+    const { tokens } = await createGoogleOAuth().getToken(code as string);
+    const existing = await readGmailToken(userId);
+    const front = `${IS_PROD ? 'https://app.rukmer.com' : 'http://localhost:5173'}/agents-mcp`;
     if (type === 'gmail') {
+      const pending = String(existing.data.pendingGmailSpace || '');
+      const spaceTag = pending && canAccessTag(userId, pending) ? pending : homeTag(userId);
+      const merged = mergeGmailTokens(existing.gmail || undefined, { ...(tokens as GmailToken), spaceTag, scope: tokens.scope || 'https://www.googleapis.com/auth/gmail.readonly' });
+      await writeGmailToken(userId, merged);
+      await admin.firestore().collection('userTokens').doc(userId).set({ pendingGmailSpace: admin.firestore.FieldValue.delete() }, { merge: true });
+      await admin.firestore().collection('userConnections').doc(userId).set({ gmail: true }, { merge: true });
+      if (!merged.refresh_token) return res.redirect(`${front}?gmail=reconnect`);
       try {
-        await importRecentGmail(userId);
-        return res.redirect(`${front}?connection=success&gmail=ok`);
+        await importRecentGmail(userId, spaceTag);
+        return res.redirect(`${front}?gmail=ok`);
       } catch (err: any) {
-        console.warn('⚠️ Gmail sync failed:', err.message);
-        return res.redirect(`${front}?connection=success&gmail=error`);
+        if (isGmailAuthFailure(err)) return res.redirect(`${front}?gmail=reconnect`);
+        return res.redirect(`${front}?gmail=import_error`);
       }
     }
+    await admin.firestore().collection('userTokens').doc(userId).set({ google: tokens }, { merge: true });
+    await admin.firestore().collection('userConnections').doc(userId).set({ [type]: true }, { merge: true });
     getAppContent(userId).catch((e: any) => console.warn('⚠️ Post-Google ingest failed:', e.message));
-    res.redirect(`${front}?connection=success`);
+    res.redirect(`${IS_PROD ? 'https://app.rukmer.com' : 'http://localhost:5173'}/connectors?connection=success`);
   } catch (error) {
     res.redirect(`${IS_PROD ? 'https://app.rukmer.com' : 'http://localhost:5173'}/connectors?error=google_failed`);
   }

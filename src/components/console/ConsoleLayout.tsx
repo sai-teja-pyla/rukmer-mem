@@ -78,7 +78,7 @@ const nav: NavItem[] = [
   { to: '/import', label: 'Import', icon: Download },
   { section: 'DEVELOPER' },
   { to: '/api-keys', label: 'API Keys', icon: KeyRound },
-  { to: '/agents-mcp', label: 'Agents & MCP', icon: Bot },
+  { to: '/agents-mcp', label: 'Apps & MCP', icon: Bot },
   { to: '/requests', label: 'Requests', icon: ScrollText },
   { to: '/insights', label: 'User Insights', icon: UserRound },
   { to: '/settings/general', label: 'Settings', icon: Settings, chevron: true },
