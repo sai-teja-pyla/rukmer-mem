@@ -367,7 +367,7 @@ export default function ConsoleLayout({ user, restoring = false }: ConsoleLayout
           <X size={16} />
         </button>
       </div>
-      <div className="px-3 pb-1">
+      <div className="px-3 pb-1 w-full min-w-0">
         <ScopeFilter value={memoryScope} onChange={setMemoryScope} />
       </div>
 

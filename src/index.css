@@ -118,6 +118,9 @@ body {
   color: #18181b !important;
 }
 .theme-light .text-white { color: #18181b !important; }
+.theme-light [class*="bg-[#1e3a5f]"] {
+  color: #ffffff !important;
+}
 .theme-light .text-zinc-100,
 .theme-light .text-zinc-200 { color: #27272a !important; }
 .theme-light .text-zinc-300 { color: #3f3f46 !important; }
@@ -138,6 +141,23 @@ body {
   color: #ffffff !important;
 }
 .theme-light svg text { fill: #3f3f46; }
+.needs-key {
+  color: #fbbf24;
+  font-size: 12px;
+  font-weight: 500;
+}
+.theme-light .needs-key {
+  color: #92400e;
+}
+.theme-light .key-banner {
+  background: #fef3c7 !important;
+  color: #78350f !important;
+  border-color: #b45309 !important;
+}
+.theme-light .key-banner a {
+  background: #92400e !important;
+  color: #ffffff !important;
+}
 .theme-light input,
 .theme-light textarea,
 .theme-light select {
