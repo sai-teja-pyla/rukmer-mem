@@ -1,5 +1,8 @@
 import React from 'react';
 import { Download, Tag } from 'lucide-react';
+import { spaceLabel, type SpaceRef } from '../../services/spaceLabel';
+
+export const graphAutoSelect = false;
 
 export type LoadPhase = 'loading' | 'error' | 'empty' | 'ready';
 
@@ -96,9 +99,10 @@ export function ContainerTagsStatus({ phase, onRetry }: { phase: 'loading' | 'er
   if (phase === 'loading') {
     return (
       <div className="px-4 py-4 space-y-3" aria-busy="true" data-phase="loading">
-        <div className="animate-pulse rounded-md bg-white/[0.06] h-8 w-full" />
-        <div className="animate-pulse rounded-md bg-white/[0.06] h-8 w-full" />
-        <div className="animate-pulse rounded-md bg-white/[0.06] h-8 w-4/5" />
+        <p className="text-[13px] text-zinc-200">Loading tags…</p>
+        <div className="animate-pulse rounded-md bg-white/[0.14] h-8 w-full" />
+        <div className="animate-pulse rounded-md bg-white/[0.14] h-8 w-full" />
+        <div className="animate-pulse rounded-md bg-white/[0.14] h-8 w-4/5" />
       </div>
     );
   }
@@ -145,20 +149,36 @@ function SourceMarks({ sites }: { sites?: string[] }) {
   );
 }
 
-export function TagRows({ tags }: { tags: TagRow[] }) {
+export function TagRows({ tags, homeTag, teams }: { tags: TagRow[]; homeTag?: string; teams?: SpaceRef[] }) {
   return (
     <div className="overflow-x-auto" data-phase="ready">
-      {tags.map((row) => (
+      {tags.map((row) => {
+        const named = spaceLabel(row.tag, { homeTag, teams });
+        return (
         <div key={row.tag} className="grid grid-cols-4 min-w-[560px] px-4 py-3 text-[13px] text-zinc-300 border-t border-white/[0.06]">
-          <span className="text-zinc-100 inline-flex items-center gap-1.5 flex-wrap">
-            {row.tag}
+          <span className="text-zinc-100 inline-flex items-center gap-1.5 flex-wrap" title={named.raw}>
+            {named.label}
+            {named.label !== named.raw ? <span className="text-[11px] text-zinc-500">{named.raw}</span> : null}
             <SourceMarks sites={row.sites} />
           </span>
           <span>{row.documents ?? 0}</span>
           <span>{row.memories ?? 0}</span>
           <span className="text-zinc-500">{row.activity ? new Date(row.activity).toLocaleString() : '—'}</span>
         </div>
-      ))}
+        );
+      })}
     </div>
   );
+}
+
+export function membershipView(phase: 'loading' | 'error' | 'ready', count: number) {
+  if (phase !== 'ready') return phase;
+  return count > 0 ? 'ready' : 'empty';
+}
+
+export function requestTypeLines(byType: Record<string, number>) {
+  const labels: Record<string, string> = { search: 'Search', chat: 'Chat', ingest: 'Ingest', other: 'Other' };
+  const entries = Object.entries(byType).filter(([, count]) => count > 0);
+  if (!entries.length) return 'No requests in this period';
+  return entries.map(([type, count]) => `${labels[type] || type}: ${count}`).join(' · ');
 }

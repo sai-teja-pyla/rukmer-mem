@@ -553,13 +553,31 @@ export function AdvancedSettingsPage() {
 
 function AccountMemberships() {
   const [teams, setTeams] = useState<any[]>([]);
+  const [phase, setPhase] = useState<'loading' | 'ready' | 'error'>('loading');
+  const load = () => {
+    setPhase('loading');
+    engine
+      .teams()
+      .then((out) => {
+        setTeams(out.teams || []);
+        setPhase('ready');
+      })
+      .catch(() => setPhase('error'));
+  };
   useEffect(() => {
-    engine.teams().then((out) => setTeams(out.teams || [])).catch(() => setTeams([]));
+    load();
   }, []);
   return (
     <Panel className="mb-3">
       <div className="px-4 py-3 text-[13.5px] text-zinc-200">Organizations</div>
-      {teams.length === 0 ? (
+      {phase === 'loading' ? (
+        <p className="px-4 py-3.5 text-[13px] text-zinc-500 border-t border-white/[0.06]">Loading organizations…</p>
+      ) : phase === 'error' ? (
+        <div className="px-4 py-3.5 border-t border-white/[0.06]">
+          <p className="text-[13px] text-zinc-400">Couldn't load organization memberships.</p>
+          <button type="button" onClick={load} className="mt-2 text-[13px] text-blue-300">Retry</button>
+        </div>
+      ) : teams.length === 0 ? (
         <p className="px-4 py-3.5 text-[13px] text-zinc-500 border-t border-white/[0.06]">No organization memberships yet.</p>
       ) : (
         teams.map((team) => (

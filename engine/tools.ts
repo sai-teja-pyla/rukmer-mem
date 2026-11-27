@@ -1,7 +1,7 @@
 import { commitImportantMemory, listAuthoredMemories, searchMemory } from './pipeline.js';
 import { TOOL_ALLOWLIST } from './security.js';
 import { readTagsFor } from './spaces.js';
-import { homeTag } from './tenancy.js';
+import { homeTag, ownsTag } from './tenancy.js';
 
 export const MEMORY_TOOLS = [
   {
@@ -80,10 +80,11 @@ export async function runMemoryTool(name: string, args: any, uid?: string) {
   }
   if (name === 'addMemory') {
     const writeScope = args?.scope === 'team' ? 'team' : 'private';
+    const requested = String(args?.containerTag || '').trim();
     return commitImportantMemory({
       title: args?.title,
       text: String(args?.text || ''),
-      containerTag: homeTag(uid),
+      containerTag: requested && ownsTag(uid, requested) ? requested : homeTag(uid),
       source: 'tool',
       actorId: uid,
       scope: writeScope,

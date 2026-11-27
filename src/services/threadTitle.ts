@@ -1,5 +1,9 @@
 export function threadTitle(value: string, limit = 42) {
-  const collapsed = String(value || '').replace(/\s+/g, ' ').trim();
+  const collapsed = String(value || '')
+    .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
   if (!collapsed) return 'New chat';
   if (collapsed.length <= limit) return collapsed;
   const room = Math.max(1, limit - 1);

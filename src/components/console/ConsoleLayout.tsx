@@ -33,6 +33,7 @@ import type { UserProfile } from '../../types';
 import { useUserSettings } from '../../hooks/useUserSettings';
 import { WHATS_NEW } from '../../content/whatsNew';
 import { engine } from '../../services/engineClient';
+import { withTimeout } from '../../hooks/useMemoryResource';
 import { homeTag as makeHomeTag } from '../../services/tenancy';
 import { Skeleton } from './ui';
 import { ScopeFilter, type MemoryScope } from './ScopeFilter';
@@ -100,6 +101,34 @@ function PageSkeleton() {
       <Skeleton className="h-28 w-full" />
     </div>
   );
+}
+
+function Highlight({ text, query }: { text: string; query: string }) {
+  const source = String(text || '');
+  const needle = query.trim();
+  if (!needle) return <>{source}</>;
+  const lower = source.toLowerCase();
+  const q = needle.toLowerCase();
+  const parts: React.ReactNode[] = [];
+  let from = 0;
+  let guard = 0;
+  while (from < source.length && guard < 20) {
+    const at = lower.indexOf(q, from);
+    if (at < 0) {
+      parts.push(source.slice(from));
+      break;
+    }
+    if (at > from) parts.push(source.slice(from, at));
+    parts.push(
+      <mark key={`${at}-${guard}`} className="bg-amber-300/35 text-inherit rounded-sm">
+        {source.slice(at, at + needle.length)}
+      </mark>
+    );
+    from = at + Math.max(needle.length, 1);
+    guard += 1;
+  }
+  if (from < source.length && guard >= 20) parts.push(source.slice(from));
+  return <>{parts}</>;
 }
 
 export default function ConsoleLayout({ user, restoring = false }: ConsoleLayoutProps) {
@@ -170,13 +199,14 @@ export default function ConsoleLayout({ user, restoring = false }: ConsoleLayout
     return () => window.removeEventListener('keydown', onKey);
   }, [navOpen]);
 
-  const displayName = settings?.displayName || user.name || 'User';
+  const displayName = settings?.displayName || user.name || '';
+  const chipReady = !restoring && !!displayName;
   const initials = displayName
     .split(' ')
     .filter(Boolean)
     .slice(0, 2)
     .map((p) => p[0]?.toUpperCase())
-    .join('') || 'U';
+    .join('');
 
   const isSettings = location.pathname.startsWith('/settings');
   const activeNav = isSettings ? settingsNav : nav;
@@ -215,8 +245,7 @@ export default function ConsoleLayout({ user, restoring = false }: ConsoleLayout
     setMemories([]);
     setMemoryLoading(true);
     const timer = window.setTimeout(() => {
-      engine
-        .search({ query: q, containerTag: homeTag, memoriesRetrieved: 5, scope: memoryScope })
+      withTimeout(engine.search({ query: q, containerTag: homeTag, memoriesRetrieved: 5, scope: memoryScope }))
         .then((out) => {
           if (requestId !== searchRequest.current) return;
           const rows = (out.matches || []).slice(0, 5).flatMap((hit: MemoryHit & { id?: string }) => {
@@ -252,7 +281,10 @@ export default function ConsoleLayout({ user, restoring = false }: ConsoleLayout
   const sidebar = (
     <>
       <div className="px-3 pt-3 pb-2 flex items-center gap-2">
-        <div className="flex-1 flex items-center gap-2 rounded-lg bg-[#141416] border border-white/[0.06] px-2.5 h-[34px]">
+        <div
+          className="flex-1 flex items-center gap-2 rounded-lg bg-[#141416] border border-white/[0.06] px-2.5 h-[34px] cursor-text"
+          onClick={() => searchRef.current?.focus()}
+        >
           <Search size={14} className="text-zinc-500 shrink-0" />
           <input
             ref={searchRef}
@@ -343,10 +375,10 @@ export default function ConsoleLayout({ user, restoring = false }: ConsoleLayout
             ))}
           </div>
         ) : null}
-        {query.trim().length >= 2 && (memoryLoading || memories.length > 0) ? (
+        {query.trim().length >= 2 ? (
           <div className="mt-2">
             <p className="px-2.5 pt-2 pb-1 text-[10px] font-medium tracking-[0.16em] text-zinc-500">Memories</p>
-            {memoryLoading ? <p className="px-2.5 py-1 text-[12px] text-zinc-500">Searching…</p> : null}
+            {memoryLoading ? <p className="px-2.5 py-1 text-[12px] text-zinc-500">Searching…</p> : <p className="px-2.5 py-1 text-[12px] text-zinc-500">{memories.length} {memories.length === 1 ? 'memory' : 'memories'}</p>}
             {memories.map((memory) => (
               <button
                 key={memory.id}
@@ -357,10 +389,10 @@ export default function ConsoleLayout({ user, restoring = false }: ConsoleLayout
                 }}
                 className="w-full text-left px-2.5 py-1.5 rounded-lg mb-[1px] hover:bg-white/[0.04]"
               >
-                <span className="block truncate text-[13px] text-zinc-200">{memory.title || memory.text || 'Memory'}</span>
+                <span className="block truncate text-[13px] text-zinc-200"><Highlight text={memory.title || memory.text || 'Memory'} query={query} /></span>
                 <span className="block truncate text-[11px] text-zinc-500">
                   {memory.space === 'team' ? `Team${memory.authorName ? ` · ${memory.authorName}` : ''}` : memory.source}
-                  {memory.text ? ` · ${memory.text}` : ''}
+                  {memory.text ? <> · <Highlight text={memory.text} query={query} /></> : null}
                 </span>
               </button>
             ))}
@@ -388,10 +420,14 @@ export default function ConsoleLayout({ user, restoring = false }: ConsoleLayout
             onClick={() => setMenuOpen((v) => !v)}
             className="w-full flex items-center gap-2 rounded-lg px-1 py-1 hover:bg-white/[0.04]"
           >
-            <div className="h-7 w-7 rounded-full bg-[#1a1a1e] border border-white/10 flex items-center justify-center text-[10px] font-semibold text-zinc-200">
-              {initials}
-            </div>
-            <span className="flex-1 text-left text-[13px] text-zinc-300 truncate">{displayName}</span>
+            {chipReady ? (
+              <div className="h-7 w-7 rounded-full bg-[#1a1a1e] border border-white/10 flex items-center justify-center text-[10px] font-semibold text-zinc-200">
+                {initials}
+              </div>
+            ) : (
+              <div className="h-7 w-7 rounded-full bg-white/10 animate-pulse" />
+            )}
+            <span className="flex-1 text-left text-[13px] text-zinc-300 truncate">{chipReady ? displayName : <span className="inline-block h-3 w-24 rounded bg-white/10 animate-pulse" />}</span>
             <MoreHorizontal size={16} className="text-zinc-500" />
           </button>
           {menuOpen && (

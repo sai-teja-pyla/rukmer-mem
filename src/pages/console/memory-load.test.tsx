@@ -5,11 +5,16 @@
 import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { requestJson } from '../../services/engineRetry.js';
+import { withTimeout } from '../../hooks/useMemoryResource.js';
+import { importTitle } from '../../services/importTitle.js';
 import {
   ContainerTagsStatus,
   GraphCountLabel,
   GraphStatus,
   TagRows,
+  graphAutoSelect,
+  membershipView,
+  requestTypeLines,
   graphCountText,
   graphView,
   nodeLabel,
@@ -151,6 +156,30 @@ await requestJson('/v3/documents', { method: 'POST', body: '{}' }, {
   wait: noWait,
 }).catch(() => undefined);
 check('a non-idempotent 503 is not retried', posts === 1);
+
+let loadingPosts = 0;
+await requestJson('/v4/search', { method: 'POST', body: '{}' }, {
+  fetchImpl: async () => {
+    loadingPosts += 1;
+    if (loadingPosts < 2) return jsonResponse(503, { error: 'Memory store is still loading', ready: false });
+    return jsonResponse(200, { matches: [] });
+  },
+  wait: noWait,
+}).catch(() => undefined);
+check('a cold store retries search', loadingPosts === 2);
+
+const slow = withTimeout(new Promise((resolve) => setTimeout(resolve, 50)), 10).then(
+  () => false,
+  () => true
+);
+check('a hung load becomes an error', await slow);
+const loadingTags = visible(renderToStaticMarkup(<ContainerTagsStatus phase="loading" onRetry={() => undefined} />));
+check('tags loading says it is loading', loadingTags.includes('Loading tags') && !loadingTags.includes('No container tags yet'));
+check('graph does not auto-open a memory', graphAutoSelect === false);
+check('organizations do not look empty while loading', membershipView('loading', 0) === 'loading' && membershipView('ready', 0) === 'empty');
+check('blank paste is not Untitled', importTitle('', 'First line of the note\nmore') === 'First line of the note' && importTitle('', 'First line of the note') !== 'Untitled');
+const typeLine = requestTypeLines({ search: 2 });
+check('request types are not a raw object', typeLine === 'Search: 2' && !typeLine.includes('{'));
 
 if (failures.length) {
   console.error(`\n${failures.length} memory load check(s) failed`);

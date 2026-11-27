@@ -133,11 +133,12 @@ export default function DocsPage() {
             <h2 className={`text-2xl font-bold mb-4 ${theme.header}`}>Playground</h2>
             <p>Chat and Search use the same container tag and the same memories. They do different jobs.</p>
             <ul className="list-disc pl-5 mt-4 space-y-2">
-              <li>Chat asks a model and injects memories that meet match strictness. It needs a model key, from the server or from Settings → Advanced.</li>
-              <li>Search looks up memories and does not call a model. It works with no model key.</li>
+              <li>Chat asks a model and injects only memories that clear match strictness. Memories retrieved is a maximum, and the default is 4. An unrelated question can use zero memories. Hosted Gemini works with no pasted key when the server has one.</li>
+              <li>Search looks up memories with the same relevance rules and does not call a model. It works with no model key. Search results stay in the search pane.</li>
+              <li>Chat does not save the assistant's reply as a memory. A durable fact has to be in what you wrote.</li>
             </ul>
             <p className="mt-4">
-              Match strictness is a score from 0 to 1. The default is 0.40. A memory is used only when its relevance is at least that high. Raise it to keep fewer, closer memories.
+              Match strictness is a score from 0 to 1. The default is 0.40. A memory is used only when it shares words with the question or has a very high embedding match, and the combined score is at least that strict. A loose embedding alone is not enough. Raise strictness to keep fewer, closer memories.
             </p>
           </section>
 
