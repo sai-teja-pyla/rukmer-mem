@@ -14,6 +14,7 @@
     "storage-privacy": "tsx engine/storage-privacy-test.ts",
     "security-fixes": "tsx engine/security-fixes-test.ts",
     "playground-fixes": "tsx engine/playground-fixes-test.ts",
+    "paper": "tsx engine/paper-evolving-world-test.ts",
     "team-brain": "tsx engine/team-brain-test.ts",
     "graph-routes": "tsx engine/graph-routes-test.ts",
     "request-log": "tsx engine/request-log-test.ts",

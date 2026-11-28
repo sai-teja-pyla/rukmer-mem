@@ -83,6 +83,18 @@ export function normalizePredicate(raw: string) {
   return '';
 }
 
+export const STATE_PREDICATES = new Set([
+  'owned_by',
+  'owns',
+  'acquired',
+  'divested',
+  'merged_with',
+  'subsidiary_of',
+  'parent_of',
+  'sold',
+  'spun_off',
+]);
+
 const LONG_TERM = new Set([
   'name',
   'works_at',

@@ -1,7 +1,7 @@
 import { getState, sanitizeMeta, tokenize, type TemporalKind } from './core.js';
 import { isRetired } from './governance.js';
 import { isUsefulFact } from './quality.js';
-import { memoryFactKey, memoryTextKey, preferenceBoost, relevanceScore } from './relevance.js';
+import { memoryFactKey, memoryTextKey, needsMemory, preferenceBoost, relevanceScore } from './relevance.js';
 import { queryTimeIntent, timeMultiplier } from './temporal.js';
 
 export type MetaFilter = { all?: Record<string, string>; any?: Record<string, string> };
@@ -215,7 +215,7 @@ function rebuild() {
       embedding: t.embedding?.length ? unit(t.embedding) : undefined,
       len: Math.max(tokenize(text).length, 1),
     };
-    const retired = isRetired({ forgotten: false, gov: t.gov }) || t.isLatest === false && !!t.gov?.deletedAt;
+    const retired = isRetired({ forgotten: !!t.forgotten, gov: t.gov }) || (t.isLatest === false && !!t.gov?.deletedAt);
     rec.forgotten = retired;
     records.set(t.id, rec);
     if (rec.embedding && !retired && t.isLatest !== false) indexVector(t.containerTag, t.id, rec.embedding);
@@ -343,6 +343,20 @@ function vectorSearch(tag: string, qVec: Float32Array) {
   return out;
 }
 
+function anchorNames(tag: string, query: string) {
+  const table = entityIds.get(tag);
+  if (!table) return [] as string[];
+  const q = query.toLowerCase();
+  const names: string[] = [];
+  for (const name of table.keys()) {
+    const tokens = name.split(/\s+/).filter(Boolean);
+    if (tokens.length < 2 && name.length < 4) continue;
+    if (!q.includes(name)) continue;
+    names.push(name);
+  }
+  return names;
+}
+
 function entitySearch(tag: string, query: string) {
   const table = entityIds.get(tag);
   if (!table) return [];
@@ -419,7 +433,7 @@ function userNodes(tag: string) {
 
 /** Neighbors of matches that already passed strictness. Empty when nothing was kept. */
 export function relatedForMatches(
-  matches: { id: string; text?: string; subject?: string; predicate?: string; object?: string; containerTag?: string }[],
+  matches: { id: string; text?: string; subject?: string; predicate?: string; object?: string; containerTag?: string; entityAnchor?: boolean }[],
   opts: { visible?: (id: string) => boolean } = {}
 ): RelatedFact[] {
   if (!matches.length) return [];
@@ -442,6 +456,14 @@ export function relatedForMatches(
     }
   }
   if (!anchors.size) return [];
+  const priority = new Set<string>();
+  for (const match of matches) {
+    if (!match.entityAnchor) continue;
+    for (const name of [match.subject, match.object]) {
+      const key = entityKey(name);
+      if (key.length >= 2 && !self.has(key)) priority.add(key);
+    }
+  }
 
   const seenId = new Set<string>();
   const seenText = new Set<string>();
@@ -460,7 +482,14 @@ export function relatedForMatches(
   }
 
   const related: RelatedFact[] = [];
-  for (const rec of records.values()) {
+  const candidates = [...records.values()].filter((rec) => rec.kind === 'fact' && !rec.forgotten && rec.isLatest && tags.has(rec.tag));
+  if (priority.size) {
+    candidates.sort((a, b) => {
+      const rank = (rec: Rec) => (priority.has(entityKey(rec.subject)) || priority.has(entityKey(rec.object)) ? 0 : 1);
+      return rank(a) - rank(b);
+    });
+  }
+  for (const rec of candidates) {
     if (rec.kind !== 'fact' || rec.forgotten || !rec.isLatest || !tags.has(rec.tag)) continue;
     if (opts.visible && !opts.visible(rec.id)) continue;
     const subject = entityKey(rec.subject);
@@ -514,6 +543,27 @@ export function rankTagged(
   if (kwMap.size) lists.push([...kwMap].map(([id, score]) => ({ id, score })));
   if (entMap.size) lists.push([...entMap].map(([id, score]) => ({ id, score })));
   const fused = rrf(lists);
+  const namesByTag = new Map<string, string[]>();
+  const allowAnchor = useEnt && needsMemory(query);
+  if (allowAnchor) {
+    const seen = new Set(fused.map((row) => row.id));
+    for (const tag of tags) {
+      const names = anchorNames(tag, query);
+      namesByTag.set(tag, names);
+      if (!names.length) continue;
+      for (const id of idsByTag.get(tag) || []) {
+        if (seen.has(id)) continue;
+        const rec = records.get(id);
+        if (!rec || rec.kind !== 'fact') continue;
+        if (!rec.isLatest && intent !== 'past') continue;
+        const subject = entityKey(rec.subject);
+        const object = entityKey(rec.object);
+        if (!names.some((name) => name === subject || name === object)) continue;
+        fused.push({ id, score: 0 });
+        seen.add(id);
+      }
+    }
+  }
   const ranked = fused
     .map((row) => {
       const rec = records.get(row.id);
@@ -532,13 +582,21 @@ export function rankTagged(
         predicate: rec.predicate,
         object: rec.object,
       };
-      const relevance = Math.max(relevanceScore(query, hit), preferenceBoost(query, hit));
+      const names = namesByTag.get(rec.tag) || [];
+      const entityAnchor =
+        allowAnchor &&
+        rec.kind === 'fact' &&
+        (rec.isLatest || intent === 'past') &&
+        names.some((name) => name === entityKey(rec.subject) || name === entityKey(rec.object));
+      let relevance = Math.max(relevanceScore(query, hit), preferenceBoost(query, hit));
+      if (entityAnchor) relevance = Math.max(relevance, opts.strict);
       if (opts.strict > 0 && relevance < opts.strict) return null;
-      return { ...rec, score: Number(relevance.toFixed(4)), vectorScore };
+      return { ...rec, score: Number(relevance.toFixed(4)), vectorScore, entityAnchor };
     })
-    .filter((r): r is Rec & { score: number; vectorScore: number } => !!r)
+    .filter((r): r is Rec & { score: number; vectorScore: number; entityAnchor: boolean } => !!r)
     .sort(
       (a, b) =>
+        Number(!!b.entityAnchor) - Number(!!a.entityAnchor) ||
         b.score * timeMultiplier(intent, b.temporal, b.isLatest) - a.score * timeMultiplier(intent, a.temporal, a.isLatest) ||
         b.score - a.score
     )

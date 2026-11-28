@@ -135,7 +135,8 @@ export async function buildMemoryInjection(query: string, containerTag: string, 
   }));
   const chosen = selectMemories(asked, [...retrieved.matches, ...profileHits], { strictness, topK: cap, aboutUser });
   retrieved.matches = chosen.map((hit) => {
-    const prior = (retrieved.matches.find((match) => match.id === hit.id) || {}) as (typeof retrieved.matches)[number];
+    const prior = { ...((retrieved.matches.find((match) => match.id === hit.id) || {}) as (typeof retrieved.matches)[number] & { entityAnchor?: boolean }) };
+    delete prior.entityAnchor;
     return {
       ...prior,
       id: hit.id,
