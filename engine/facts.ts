@@ -15,7 +15,30 @@ export type IncomingFact = {
   occurredAt?: string | null;
   temporal?: TripleRec['temporal'];
   gov?: MemoryGov;
+  sourceDocId?: string;
 };
+
+const INVALIDATES: Record<string, { subjectIs: 'S' | 'O'; predicate: string; objectIs: 'S' | 'O' }[]> = {
+  divested: [
+    { subjectIs: 'O', predicate: 'owned_by', objectIs: 'S' },
+    { subjectIs: 'S', predicate: 'owns', objectIs: 'O' },
+    { subjectIs: 'S', predicate: 'acquired', objectIs: 'O' },
+  ],
+  sold: [
+    { subjectIs: 'O', predicate: 'owned_by', objectIs: 'S' },
+    { subjectIs: 'S', predicate: 'owns', objectIs: 'O' },
+    { subjectIs: 'S', predicate: 'acquired', objectIs: 'O' },
+  ],
+  spun_off: [
+    { subjectIs: 'O', predicate: 'owned_by', objectIs: 'S' },
+    { subjectIs: 'S', predicate: 'owns', objectIs: 'O' },
+    { subjectIs: 'S', predicate: 'acquired', objectIs: 'O' },
+  ],
+};
+
+function sameName(left: string, right: string) {
+  return left.trim().toLowerCase() === right.trim().toLowerCase();
+}
 
 function keyOf(tag: string, subject: string, predicate: string) {
   return `${tag}::${subject.trim().toLowerCase()}::${predicate.trim().toLowerCase()}`;
@@ -53,11 +76,26 @@ export function upsertFacts(tag: string, facts: IncomingFact[], evidence = '', g
       continue;
     }
 
+    const incomingFrom = raw.validFrom ? Date.parse(raw.validFrom) : NaN;
+    const latestFrom = latest ? Date.parse(latest.validFrom || '') : NaN;
+    const outOfOrder =
+      !!latest &&
+      !sameObject &&
+      !!raw.validFrom &&
+      Number.isFinite(incomingFrom) &&
+      Number.isFinite(latestFrom) &&
+      incomingFrom < latestFrom;
+    let historical = false;
     if (latest && !sameObject) {
-      latest.isLatest = false;
-      latest.validTo = now;
-      updates += 1;
-    } else {
+      if (outOfOrder) {
+        historical = true;
+        asserts += 1;
+      } else {
+        latest.isLatest = false;
+        latest.validTo = raw.validFrom || now;
+        updates += 1;
+      }
+    } else if (!latest) {
       asserts += 1;
     }
 
@@ -69,14 +107,15 @@ export function upsertFacts(tag: string, facts: IncomingFact[], evidence = '', g
       object,
       evidence: String(cleanEvidence || '').slice(0, 400),
       originalText: cleanOriginal || undefined,
-      isLatest: true,
+      isLatest: !historical,
       derived: raw.kind === 'derive',
       validFrom: raw.validFrom || now,
-      validTo: null,
+      validTo: historical && latest ? latest.validFrom : null,
       recordedAt: now,
       updatedAt: now,
-      kind: raw.kind || (latest ? 'update' : 'assert'),
+      kind: raw.kind || (historical || latest ? 'update' : 'assert'),
       horizon: horizonFor(predicate),
+      sourceDocId: raw.sourceDocId || undefined,
     };
     const when = inferTemporal(`${object} ${evidence}`, raw.validFrom || now);
     rec.occurredAt = raw.occurredAt ?? when.occurredAt;
@@ -86,6 +125,23 @@ export function upsertFacts(tag: string, facts: IncomingFact[], evidence = '', g
     const inherited = raw.gov || gov || latest?.gov;
     if (inherited) rec.gov = { ...inherited, deletedAt: null, archived: false };
     state.triples.push(rec);
+    if (rec.isLatest) {
+      const rules = INVALIDATES[predicate.toLowerCase()] || [];
+      const closedAt = rec.validFrom || now;
+      for (const rule of rules) {
+        const subjectName = rule.subjectIs === 'S' ? subject : object;
+        const objectName = rule.objectIs === 'S' ? subject : object;
+        const pred = rule.predicate.toLowerCase();
+        for (const row of state.triples) {
+          if (row.id === rec.id || row.containerTag !== tag || row.isLatest === false) continue;
+          const rowPred = (normalizePredicate(row.predicate) || row.predicate).toLowerCase();
+          if (rowPred !== pred) continue;
+          if (!sameName(row.subject, subjectName) || !sameName(row.object, objectName)) continue;
+          row.isLatest = false;
+          row.validTo = closedAt;
+        }
+      }
+    }
   }
 
   linkEntities(tag);

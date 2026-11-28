@@ -526,6 +526,7 @@ export function mountMemoryEngine(app: Express) {
           return true;
         });
       }
+      for (const match of out.matches || []) delete (match as { entityAnchor?: boolean }).entityAnchor;
       res.json(out);
     } catch (e: any) {
       fail(res, e);

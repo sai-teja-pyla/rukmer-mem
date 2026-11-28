@@ -13,6 +13,7 @@ import {
   encryptionAtRest,
   encryptionWarning,
   getState,
+  importanceOf,
   saveState,
   uid,
   type AuditRec,
@@ -357,6 +358,9 @@ export function eraseIds(ids: string[], actorId: string) {
     if (doc.fileId) deleteBlob(doc.fileId);
     for (const chunk of state.chunks) if (chunk.docId === doc.id) gone.add(chunk.id);
   }
+  for (const triple of state.triples) {
+    if (triple.sourceDocId && gone.has(triple.sourceDocId)) gone.add(triple.id);
+  }
   const wipe = <T extends GovCarrier>(list: T[]) => list.filter((row) => !gone.has(row.id));
   const removed = rows().filter((row) => gone.has(row.id)).length;
   state.documents = wipe(state.documents);
@@ -635,13 +639,57 @@ export function migrateGovernance() {
   return { stamped: changed };
 }
 
+function profileChunk(row: { source?: string; gov?: MemoryGov; metadata?: Record<string, string> }) {
+  if (row.source === 'profile') return true;
+  if (row.gov?.memoryKind === 'preference') return true;
+  return row.metadata?.kind === 'profile' || row.metadata?.profile === '1';
+}
+
+/** Archive episodic chunks whose paper importance has fallen below the threshold. Facts and profile rows stay. */
+export function pruneLowImportance(opts: { threshold?: number; dryRun?: boolean; tag?: string } = {}) {
+  const threshold = opts.threshold ?? 0.05;
+  const dryRun = opts.dryRun !== false;
+  const now = Date.now();
+  const hits = getState().chunks.filter((row) => {
+    if (row.forgotten || row.gov?.archived || row.gov?.deletedAt) return false;
+    if (opts.tag && row.containerTag !== opts.tag) return false;
+    if (profileChunk(row)) return false;
+    return importanceOf(row, now) < threshold;
+  });
+  if (dryRun) return { dryRun: true, count: hits.length, ids: hits.map((row) => row.id) };
+  const stamp = new Date(now).toISOString();
+  for (const row of hits) {
+    row.forgotten = true;
+    row.embedding = [];
+    row.text = '';
+    if (row.gov) {
+      row.gov.archived = true;
+      row.gov.deletedAt = stamp;
+    }
+  }
+  if (hits.length) {
+    audit({ actorId: 'system', action: 'retain', memoryId: '', tenantId: '', detail: `importance:${hits.length}` });
+    saveState();
+  }
+  return { dryRun: false, count: hits.length, ids: hits.map((row) => row.id) };
+}
+
+export function runRetentionSweep() {
+  const expiry = runExpiry('system');
+  if (process.env.RUKMER_IMPORTANCE_PRUNE === '1') {
+    const pruned = pruneLowImportance({ dryRun: false });
+    return { ...expiry, importance: pruned.count };
+  }
+  return expiry;
+}
+
 let retentionTimer: ReturnType<typeof setInterval> | null = null;
 
 export function startRetentionLoop() {
   if (retentionTimer) return;
   retentionTimer = setInterval(() => {
     try {
-      runExpiry('system');
+      runRetentionSweep();
     } catch (err) {
       console.warn('retention sweep skipped', (err as Error).message);
     }

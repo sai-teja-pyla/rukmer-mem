@@ -21,7 +21,7 @@ import { EMBED_MODEL, embedMany, embedQuery, extractGraph, generateText, hasLlm,
 import { deriveFacts, upsertFacts } from './facts.js';
 import { looksLikePdf, textFromPdf, textFromPdfBase64 } from './pdf.js';
 import { describeImage } from './vision.js';
-import { isChatter, isUsefulFact, looksLikeDurableFact, preferenceFromContext, sanitiseGraph } from './quality.js';
+import { isChatter, isUsefulFact, looksLikeDurableFact, normalizePredicate, preferenceFromContext, sanitiseGraph } from './quality.js';
 import { applyDecay } from './memory.js';
 import { buildMemoryInjection } from './inject.js';
 import { canAccessTag, homeTag, ownsTag, scopeFromTag, uidFromTag } from './tenancy.js';
@@ -134,7 +134,13 @@ async function extractInto(tag: string, text: string, gov?: DocRec['gov'], origi
     state.entities.push({ id: uid('ent'), containerTag: tag, name, type: e.type || 'topic' });
   }
   const stamped = gov ? { ...gov, sourceRef: gov.sourceRef || docId || undefined } : gov;
-  upsertFacts(tag, graph.triples || [], text.slice(0, 240), stamped, originalText || text);
+  upsertFacts(
+    tag,
+    (graph.triples || []).map((triple) => ({ ...triple, sourceDocId: docId || undefined })),
+    text.slice(0, 240),
+    stamped,
+    originalText || text
+  );
   deriveFacts(tag);
 }
 
@@ -781,6 +787,7 @@ export async function searchMemory(query: string, opts: SearchOpts = {}) {
     subject: r.subject,
     predicate: r.predicate,
     object: r.object,
+    entityAnchor: r.entityAnchor || undefined,
   }));
   const matches = selectMemories(qRaw || q, rankedMatches, { strictness: strict, topK }).map((match) => ({
     ...match,
@@ -801,6 +808,25 @@ export async function searchMemory(query: string, opts: SearchOpts = {}) {
     });
   }
   const related = opts.includeRelated === false || !matches.length ? [] : relatedForMatches(matches, { visible });
+  const seenAt = new Date().toISOString();
+  const touched = getState();
+  for (const match of matches) {
+    const chunk = touched.chunks.find((row) => row.id === match.id);
+    if (chunk) chunk.lastRetrievedAt = seenAt;
+    const fact = touched.triples.find((row) => row.id === match.id);
+    if (fact) fact.lastRetrievedAt = seenAt;
+  }
+  for (const row of related) {
+    const fact = touched.triples.find(
+      (item) =>
+        tags.includes(item.containerTag) &&
+        item.subject === row.subject &&
+        item.predicate === row.predicate &&
+        item.object === row.object &&
+        item.isLatest !== false
+    );
+    if (fact) fact.lastRetrievedAt = seenAt;
+  }
   const scores = matches.map((match) => Number(match.score) || 0);
   return {
     query: q,
@@ -859,6 +885,26 @@ async function otherSpaceHint(query: string, opts: SearchOpts): Promise<OtherSpa
   return spaceHint(space, activeIsTeam);
 }
 
+function stampSourceDoc(tag: string, triples: { subject?: string; predicate?: string; object?: string }[], docId?: string) {
+  if (!docId) return;
+  const state = getState();
+  let changed = false;
+  for (const triple of triples) {
+    const subject = String(triple.subject || '').trim().toLowerCase();
+    const object = String(triple.object || '').trim().toLowerCase();
+    const predicate = (normalizePredicate(String(triple.predicate || '')) || String(triple.predicate || '').trim()).toLowerCase();
+    if (!subject || !object || !predicate) continue;
+    for (const row of state.triples) {
+      if (row.containerTag !== tag || row.sourceDocId || row.isLatest === false) continue;
+      const rowPred = (normalizePredicate(row.predicate) || row.predicate).toLowerCase();
+      if (row.subject.trim().toLowerCase() !== subject || row.object.trim().toLowerCase() !== object || rowPred !== predicate) continue;
+      row.sourceDocId = docId;
+      changed = true;
+    }
+  }
+  if (changed) saveState();
+}
+
 export type ChatTurn = { role: 'user' | 'assistant' | 'system'; content: string };
 
 export async function commitImportantMemory(input: {
@@ -883,11 +929,7 @@ export async function commitImportantMemory(input: {
   }
   const quick = sanitiseGraph(heuristicExtract(raw));
   const graph = quick.triples.length ? quick : await extractGraph(raw).catch(() => quick);
-  if (quick.triples.length) {
-    void extractGraph(raw)
-      .then((rich) => upsertFacts(tag, rich.triples || [], raw.slice(0, 240), undefined, raw))
-      .catch(() => undefined);
-  }
+  const enrich = quick.triples.length ? extractGraph(raw).catch(() => quick) : null;
   const triples = (graph.triples || []).filter(isUsefulFact);
   const autoSave = AUTO_SAVE_SOURCES.has(String(input.source || ''));
   if (!triples.length) {
@@ -910,6 +952,12 @@ export async function commitImportantMemory(input: {
       metadata: input.metadata,
     });
     if (!autoSave) noteConversation(tag, raw);
+    if (enrich && doc.document?.id) {
+      const docId = doc.document.id;
+      void enrich
+        .then((rich) => upsertFacts(tag, (rich.triples || []).map((triple) => ({ ...triple, sourceDocId: docId })), raw.slice(0, 240), undefined, raw))
+        .catch(() => undefined);
+    }
     return { saved: true, skipped: false, type: 'raw', facts: 0, document: doc.document, chunks: doc.chunks };
   }
   const text = triples
@@ -963,6 +1011,13 @@ export async function commitImportantMemory(input: {
     metadata: input.metadata,
   });
   noteConversation(tag, raw);
+  stampSourceDoc(tag, triples, doc.document?.id);
+  if (enrich && doc.document?.id) {
+    const docId = doc.document.id;
+    void enrich
+      .then((rich) => upsertFacts(tag, (rich.triples || []).map((triple) => ({ ...triple, sourceDocId: docId })), raw.slice(0, 240), undefined, raw))
+      .catch(() => undefined);
+  }
   return { skipped: false, facts: triples.length, triples, saved, document: doc.document, chunks: doc.chunks };
 }
 
@@ -1499,16 +1554,20 @@ export function forgetMatching(query: string, containerTag?: string | null, dryR
       `${t.subject} ${t.predicate} ${t.object} ${t.evidence}`.toLowerCase().includes(q)
   );
   if (!dryRun) {
+    const now = new Date().toISOString();
     chunks.forEach((c) => {
       c.forgotten = true;
       c.embedding = [];
-      if (c.gov) c.gov.deletedAt = new Date().toISOString();
+      c.text = '';
+      if (c.gov) c.gov.deletedAt = now;
     });
-    const now = new Date().toISOString();
     for (const fact of facts) {
       fact.isLatest = false;
       fact.validTo = now;
+      fact.forgotten = true;
       fact.embedding = [];
+      fact.evidence = '';
+      fact.originalText = undefined;
       if (fact.gov) fact.gov.deletedAt = now;
     }
     saveState();

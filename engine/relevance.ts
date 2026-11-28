@@ -17,6 +17,7 @@ export type MemoryHit = {
   subject?: string;
   predicate?: string;
   object?: string;
+  entityAnchor?: boolean;
 };
 
 /** Whole-word tokens. "like" is a stop word, so it cannot match "likes" or "likely". */
@@ -33,11 +34,14 @@ export function contentTokens(text: string) {
 }
 
 const PREFER = new Set(['favourite', 'favorite', 'prefer', 'preferred']);
+const OWN = new Set(['own', 'owns', 'owned', 'owner', 'owning']);
 
 function stemToken(token: string) {
   if (!token || token.length < 3 || STOP.has(token)) return '';
+  if (OWN.has(token)) return 'own';
   const stemmed = token.length > 4 && token.endsWith('s') && !token.endsWith('ss') ? token.slice(0, -1) : token;
   if (stemmed.length < 3 || STOP.has(stemmed)) return '';
+  if (OWN.has(stemmed)) return 'own';
   if (PREFER.has(token) || PREFER.has(stemmed)) return 'prefer';
   return stemmed;
 }
@@ -159,6 +163,10 @@ export function selectMemories<T extends MemoryHit>(
       relevance = Math.max(relevance, pref);
       keep = true;
     }
+    if (item.entityAnchor) {
+      relevance = Math.max(relevance, strictness);
+      keep = true;
+    }
     if (aboutUser && item.source === 'profile') {
       relevance = Math.max(relevance, Math.max(strictness, WEAK_BEST));
       keep = true;
@@ -188,15 +196,27 @@ export function selectMemories<T extends MemoryHit>(
   const best = deduped[0].relevance;
   const lexicalKeeper = deduped[0].lexical >= LEXICAL_GATE && best >= strictness;
   const preferenceKeeper = deduped.some((row) => preferenceBoost(query, row.item) > 0);
-  if (best < WEAK_BEST && !lexicalKeeper && !preferenceKeeper && !(aboutUser && deduped[0].item.source === 'profile')) return [] as T[];
+  const anchorKeeper = deduped.some((row) => row.item.entityAnchor);
+  if (best < WEAK_BEST && !lexicalKeeper && !preferenceKeeper && !anchorKeeper && !(aboutUser && deduped[0].item.source === 'profile')) return [] as T[];
 
   const out: T[] = [];
-  for (const row of deduped) {
-    const close = best - row.relevance <= SCORE_GAP + 1e-9 && row.relevance + 1e-9 >= best * SCORE_RATIO;
+  const emit = (row: (typeof deduped)[number]) => {
+    out.push({ ...row.item, score: Number(row.relevance.toFixed(4)), vectorScore: row.item.vectorScore });
+  };
+  const ordered = [...deduped.filter((row) => row.item.entityAnchor), ...deduped.filter((row) => !row.item.entityAnchor)];
+  let halted = false;
+  for (const row of ordered) {
     const profileKeep = aboutUser && row.item.source === 'profile';
     const prefKeep = preferenceBoost(query, row.item) > 0;
-    if (!close && !profileKeep && !prefKeep) break;
-    out.push({ ...row.item, score: Number(row.relevance.toFixed(4)), vectorScore: row.item.vectorScore });
+    const anchorKeep = !!row.item.entityAnchor;
+    const close = best - row.relevance <= SCORE_GAP + 1e-9 && row.relevance + 1e-9 >= best * SCORE_RATIO;
+    if (anchorKeep) {
+      emit(row);
+    } else if (!halted && (close || profileKeep || prefKeep)) {
+      emit(row);
+    } else {
+      halted = true;
+    }
     if (out.length >= topK) break;
   }
   return out;

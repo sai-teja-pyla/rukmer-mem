@@ -1,6 +1,6 @@
 import { getState, saveState, type TripleRec } from './core.js';
 import { canRead } from './governance.js';
-import { horizonFor, isUsefulFact } from './quality.js';
+import { horizonFor, isUsefulFact, normalizePredicate, STATE_PREDICATES } from './quality.js';
 
 const SHORT_TTL_MS = 21 * 86400000;
 const SESSION_TTL_MS = 12 * 3600000;
@@ -26,6 +26,8 @@ export function applyDecay(tag?: string) {
   for (const t of state.triples) {
     if (tag && t.containerTag !== tag) continue;
     if (t.isLatest === false) continue;
+    const predicate = normalizePredicate(t.predicate) || t.predicate;
+    if (STATE_PREDICATES.has(predicate)) continue;
     const session = t.scope === 'session' || t.containerTag.includes('--ses--');
     const horizon = t.horizon || horizonFor(t.predicate);
     if (!session && horizon !== 'short') continue;

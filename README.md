@@ -1,5 +1,7 @@
 # React + Vite
 
+`npm run paper` reproduces the paper's Evolving World, divestment case study, deconfliction, and unlearning checks. LLM-answered baselines (naive long-context accuracy, recursive summarization) and the "Level 1 handles 90%" figure are not part of the suite.
+
 This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
 
 Currently, two official plugins are available:

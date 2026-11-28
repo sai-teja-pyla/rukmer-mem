@@ -58,6 +58,7 @@ export interface ChunkRec {
   metadata?: Record<string, string>;
   scope?: MemoryScope;
   gov?: MemoryGov;
+  lastRetrievedAt?: string;
 }
 
 export interface EntityRec {
@@ -90,6 +91,9 @@ export interface TripleRec {
   metadata?: Record<string, string>;
   scope?: MemoryScope;
   gov?: MemoryGov;
+  sourceDocId?: string;
+  forgotten?: boolean;
+  lastRetrievedAt?: string;
 }
 
 export interface LinkRec {
@@ -975,6 +979,25 @@ export function rrf(lists: { id: string; score: number }[][], k = 60) {
 export function decayWeight(createdAt: string, halfLifeDays = 90) {
   const age = (Date.now() - new Date(createdAt).getTime()) / 86400000;
   return Math.exp(-age / halfLifeDays);
+}
+
+/** Paper importance: InitialWeight · e^{-λΔt}, with λ = ln 2 / half-life. Distinct from decayWeight. */
+export function importanceOf(
+  row: { metadata?: { importance?: unknown }; lastRetrievedAt?: string; createdAt?: string; validFrom?: string },
+  now = Date.now(),
+  halfLifeDays = 90
+) {
+  const raw = row.metadata?.importance;
+  const numeric = typeof raw === 'number' ? raw : typeof raw === 'string' && raw.trim() ? Number(raw) : NaN;
+  const weight = Number.isFinite(numeric) ? numeric : 1;
+  const half = halfLifeDays > 0 ? halfLifeDays : 90;
+  const lambda = Math.log(2) / half;
+  const stamps = [row.lastRetrievedAt, row.createdAt, row.validFrom]
+    .map((value) => Date.parse(String(value || '')))
+    .filter((value) => Number.isFinite(value));
+  const basis = stamps.length ? Math.max(...stamps) : now;
+  const days = Math.max(0, (now - basis) / 86400000);
+  return weight * Math.exp(-lambda * days);
 }
 
 export function expandQuery(query: string) {
